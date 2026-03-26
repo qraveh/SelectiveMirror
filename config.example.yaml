@@ -1,0 +1,46 @@
+# SelectiveMirror configuration
+# Copy to ~/.selectivemirror/config.yaml and customize.
+
+projects:
+  - name: MyProject
+    local_path: C:\Projects\MyProject    # Local directory to watch
+    remote: "gdrive:backup/MyProject"    # rclone remote (any of 70+ backends)
+    debounce_sec: 5                       # Wait N seconds after last change before syncing
+    max_file_size_mb: 100                 # Skip files larger than this
+
+  # Add more projects:
+  # - name: AnotherProject
+  #   local_path: C:\Projects\Another
+  #   remote: "s3:my-bucket/another"
+
+# Patterns applied to ALL projects (in addition to per-project .syncignore)
+# Uses .gitignore syntax
+global_excludes:
+  - .git/
+  - __pycache__/
+  - "*.pyc"
+  - node_modules/
+  - venv/
+  - .venv/
+  - "*.log"
+  - "*.tar"
+  - "*.tar.gz"
+  - "*.zip"
+  - "*.sqlite"
+  - .env
+  - "~$*"          # Office temp files
+  - "*.tmp"
+  - ".~lock.*"     # LibreOffice lock files
+
+# State and log locations (default: ~/.selectivemirror/)
+# state_db: ~/.selectivemirror/state.db
+# log_file: ~/.selectivemirror/selectivemirror.log
+# log_level: info    # debug, info, warn, error
+
+# rclone settings
+# rclone_path: rclone           # Path to rclone binary
+# rclone_extra_flags: []        # Extra flags for every rclone call
+# bandwidth_limit: ""           # e.g. "10M" to cap at 10 MB/s
+
+# Service settings
+# heartbeat_interval_sec: 300   # Write heartbeat every N seconds
