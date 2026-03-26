@@ -199,3 +199,34 @@ Mirror `C:\ClaudeWork`, `C:\Orch`, `C:\HPL`, `C:\Zotero` → Google Drive `AI-hu
 - **rclone** (v1.73+): `winget install Rclone.Rclone`
 - **rclone remote**: Configure with `rclone config` (one-time)
 - **Go** (for building): `winget install GoLang.Go`
+
+---
+
+## Dependencies & Upgrade Policy
+
+### rclone (runtime, external process)
+
+SelectiveMirror uses rclone features: `copyto --checksum`, `deletefile`, `moveto`, `lsjson --recursive --hash`, `copy --filter-from`. These are stable rclone APIs that haven't changed across major versions.
+
+**Upgrade policy**:
+- **Safe to upgrade**: rclone follows semver. Minor/patch upgrades are safe.
+- **Before upgrading**: Run `smirror doctor` to verify rclone connectivity post-upgrade.
+- **Pinned minimum**: v1.73+ (for `--skip-links` flag support).
+- **Upgrade command**: `winget upgrade Rclone.Rclone` or `rclone selfupdate`
+- **Risk**: rclone backend-specific changes (e.g., Google Drive API v3 → v4) could change behavior. The `verify` command detects drift after such changes.
+
+### Go modules (compiled in)
+
+All dependencies are permissive-licensed (MIT, BSD, Apache 2.0). See CREDITS.md for full list.
+
+**Upgrade policy**:
+- `go get -u ./...` to update all dependencies.
+- Run `go test ./internal/...` and `test/run_tests.ps1` after any dependency update.
+- `modernc.org/sqlite` is the most sensitive dependency (pure-Go SQLite). Major upgrades should be tested carefully against the state database.
+
+### Licenses
+
+- **SelectiveMirror**: MIT-0 (no attribution required)
+- **All compiled dependencies**: MIT / BSD / Apache 2.0 (permissive, no copyleft)
+- **rclone**: MIT (runtime only, not compiled in)
+- **No license embedding required in binary** for current dependency set, but binary distributions should include a NOTICE file listing BSD 3-Clause dependencies per their license terms.

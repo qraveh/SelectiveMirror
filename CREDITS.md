@@ -4,5 +4,31 @@ Development assistance and technical sparring:
 - Anthropic Claude
 - OpenAI ChatGPT
 
+## Third-Party Dependencies
+
+### Compiled into binary (Go modules)
+
+| Package | License | URL |
+|---------|---------|-----|
+| fsnotify/fsnotify | BSD 3-Clause | https://github.com/fsnotify/fsnotify |
+| sabhiram/go-gitignore | MIT | https://github.com/sabhiram/go-gitignore |
+| gopkg.in/yaml.v3 | MIT + Apache 2.0 | https://github.com/go-yaml/yaml |
+| modernc.org/sqlite | BSD 3-Clause | https://gitlab.com/cznic/sqlite |
+| golang.org/x/sys | BSD 3-Clause | https://pkg.go.dev/golang.org/x/sys |
+
+### Runtime dependency (external process)
+
+| Tool | License | URL |
+|------|---------|-----|
+| rclone | MIT | https://rclone.org/licence/ |
+
+rclone is invoked as an external subprocess. It is not compiled into SelectiveMirror
+and must be installed separately by the user.
+
+All dependencies use permissive open-source licenses (MIT, BSD, Apache 2.0).
+No copyleft or viral licensing obligations apply.
+
+---
+
 Credit is appreciated but not required.
 No support, maintenance, or liability obligations are assumed.
