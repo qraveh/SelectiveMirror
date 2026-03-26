@@ -15,6 +15,15 @@ Development assistance and technical sparring:
 | gopkg.in/yaml.v3 | MIT + Apache 2.0 | https://github.com/go-yaml/yaml |
 | modernc.org/sqlite | BSD 3-Clause | https://gitlab.com/cznic/sqlite |
 | golang.org/x/sys | BSD 3-Clause | https://pkg.go.dev/golang.org/x/sys |
+| hashicorp/golang-lru/v2 | MPL 2.0 | https://github.com/hashicorp/golang-lru |
+| dustin/go-humanize | MIT | https://github.com/dustin/go-humanize |
+| google/uuid | BSD 3-Clause | https://github.com/google/uuid |
+| mattn/go-isatty | MIT | https://github.com/mattn/go-isatty |
+| ncruces/go-strftime | MIT | https://github.com/ncruces/go-strftime |
+| modernc.org/libc | BSD 3-Clause | https://gitlab.com/cznic/libc |
+| modernc.org/mathutil | BSD 3-Clause | https://gitlab.com/cznic/mathutil |
+| modernc.org/memory | BSD 3-Clause | https://gitlab.com/cznic/memory |
+| remyoudompheng/bigfft | BSD 3-Clause | https://github.com/remyoudompheng/bigfft |
 
 ### Runtime dependency (external process)
 
@@ -25,8 +34,11 @@ Development assistance and technical sparring:
 rclone is invoked as an external subprocess. It is not compiled into SelectiveMirror
 and must be installed separately by the user.
 
-All dependencies use permissive open-source licenses (MIT, BSD, Apache 2.0).
-No copyleft or viral licensing obligations apply.
+Most dependencies use permissive open-source licenses (MIT, BSD, Apache 2.0).
+One dependency (hashicorp/golang-lru/v2) uses MPL 2.0, a weak copyleft license.
+Under MPL 2.0 Section 3.3 (Larger Work), SelectiveMirror may combine MPL-covered
+files with MIT-0 code, but the MPL-covered source files must remain available
+if the binary is distributed. See THIRD-PARTY-LICENSES.txt for full texts.
 
 ---
 
