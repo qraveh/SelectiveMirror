@@ -42,5 +42,9 @@ global_excludes:
 # rclone_extra_flags: []        # Extra flags for every rclone call
 # bandwidth_limit: ""           # e.g. "10M" to cap at 10 MB/s
 
+# Delete policy: what happens when a local file is deleted
+# delete_policy: ignore         # ignore (default), mirror, or quarantine
+# quarantine_days: 30           # Days to keep quarantined files (only for quarantine mode)
+
 # Service settings
 # heartbeat_interval_sec: 300   # Write heartbeat every N seconds

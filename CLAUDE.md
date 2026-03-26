@@ -2,8 +2,8 @@
 
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (raveh@qodeh.com)
-**Status**: Phase 1 (core mirror) complete
-**License**: MIT
+**Status**: Phase 1.5 (core mirror + hardening)
+**License**: MIT-0
 **Language**: Go 1.26+
 
 ---
@@ -18,6 +18,9 @@ A Windows-first service that watches local directories for file changes and mirr
 - **Bandwidth-efficient**: MD5 checksum comparison, debouncing, rate limiting
 - **Single binary**: `smirror.exe` — zero runtime dependencies
 - **Backend-agnostic**: rclone handles all cloud/remote backends
+- **Single-instance**: File-based lock prevents duplicate instances
+- **Quiescence**: Files must be stable (size+mtime unchanged for 200ms, not locked) before sync
+- **Delete policy**: Configurable ignore/mirror/quarantine for local deletions
 
 ---
 
@@ -30,6 +33,9 @@ go build -o smirror.exe ./cmd/smirror/
 # Configure
 # Edit ~/.selectivemirror/config.yaml (see config.example.yaml)
 
+# Run diagnostics
+smirror doctor
+
 # Validate config + rclone connectivity
 smirror validate
 
@@ -41,6 +47,15 @@ smirror start
 
 # Immediate full sync
 smirror sync-now
+
+# Check status + metrics
+smirror status
+
+# Investigate a file
+smirror explain Orch CLAUDE.md
+
+# Detect drift between local and remote
+smirror verify
 ```
 
 ---
@@ -49,12 +64,15 @@ smirror sync-now
 
 | Command | What it does |
 |---------|-------------|
-| `smirror start` | Start foreground watcher |
+| `smirror start` | Start foreground watcher (single-instance locked) |
 | `smirror sync-now [project]` | Immediate full sync |
 | `smirror dry-run [project]` | Show what would sync |
-| `smirror status` | Show last sync times per project |
+| `smirror status` | Show sync status, metrics, instance state |
 | `smirror validate` | Check config + rclone connectivity |
 | `smirror list-filters [project]` | Show effective filter rules |
+| `smirror explain <project> <path>` | Show include/exclude status, matched rule, sync state |
+| `smirror doctor` | Run 12-point self-test diagnostics |
+| `smirror verify [project]` | Compare local vs remote, report drift |
 
 ---
 
@@ -65,20 +83,32 @@ File saved (any editor/tool)
   → fsnotify detects change (ReadDirectoryChangesW)
   → filter check (.syncignore + global excludes)
   → debounce (5s quiet window, per-project)
+  → quiescence check (200ms stability + shared read test)
   → rclone copyto --checksum (single file)
-  → SQLite state update
+  → SQLite state update + metrics
+
+Startup:
+  → single-instance lock (LockFileEx)
+  → batch rclone copy per project (not per-file)
+  → metrics collector initialized
+
+Delete event:
+  → policy check (ignore/mirror/quarantine)
+  → rclone deletefile or moveto .quarantine/
 ```
 
 ### Modules
 
 ```
-cmd/smirror/main.go          — CLI entry point
-internal/config/config.go    — YAML config + validation
-internal/watcher/watcher.go  — fsnotify + debounce goroutines
-internal/sync/sync.go        — rclone invocation + error handling
-internal/filter/filter.go    — .syncignore parser + rclone filter generation
-internal/state/state.go      — SQLite state store
-internal/logging/logging.go  — slog + rotating file handler
+cmd/smirror/main.go             — CLI entry point + all commands
+internal/config/config.go        — YAML config + validation + delete policy
+internal/watcher/watcher.go      — fsnotify + debounce + delete event routing
+internal/sync/sync.go            — rclone invocation + quiescence + delete handling
+internal/filter/filter.go        — .syncignore parser + rclone filter generation
+internal/state/state.go          — SQLite state store (WAL mode)
+internal/lock/lock.go            — Single-instance file lock (LockFileEx/flock)
+internal/metrics/metrics.go      — Thread-safe counters + status.json writer
+internal/logging/logging.go      — slog + rotating file handler
 ```
 
 ### Dependencies
@@ -88,6 +118,7 @@ github.com/fsnotify/fsnotify      — Filesystem monitoring
 github.com/sabhiram/go-gitignore  — .gitignore-style pattern matching
 gopkg.in/yaml.v3                  — Config parsing
 modernc.org/sqlite                — Pure Go SQLite (no CGo)
+golang.org/x/sys                  — Windows syscalls (LockFileEx, OpenProcess)
 ```
 
 ---
@@ -98,9 +129,35 @@ File: `~/.selectivemirror/config.yaml`
 
 - **projects**: List of watched directories with rclone remote destinations
 - **global_excludes**: Patterns applied to all projects (.gitignore syntax)
+- **delete_policy**: `ignore` (default), `mirror`, or `quarantine`
+- **quarantine_days**: Days to keep quarantined files (default 30)
 - **Per-project .syncignore**: Place a `.syncignore` file in the project root
 
 See `config.example.yaml` for full annotated example.
+
+---
+
+## Testing
+
+```bash
+# Run all unit tests (38 tests across 5 packages)
+go test ./internal/... -v
+
+# Packages with tests:
+# internal/config/    — 12 tests: parsing, validation, defaults, delete policy
+# internal/filter/    — 7 tests: patterns, negation, Unicode, rclone filter gen
+# internal/state/     — 11 tests: CRUD, hash, concurrent access, schema
+# internal/lock/      — 5 tests: acquire, release, double-acquire, reacquire
+# internal/metrics/   — 8 tests: counters, snapshot, status.json, human format
+```
+
+### Test tiers
+
+| Tier | Scope | How to run |
+|------|-------|-----------|
+| Unit | All packages, no I/O | `go test ./internal/...` |
+| Local integration | Real watcher + local rclone remote | `go test ./test/ -tags integration` |
+| Backend integration | Real Google Drive | `go test ./test/ -tags e2e` (manual) |
 
 ---
 
@@ -111,16 +168,20 @@ See `config.example.yaml` for full annotated example.
 | Go | Single binary, native Windows service (Phase 2), rclone is Go |
 | rclone subprocess | Clean error codes, zero coupling. Overhead negligible vs network I/O |
 | `modernc.org/sqlite` | Pure Go — no CGo, no gcc needed. Binary stays dependency-free |
-| `rclone copy` not `sync` | Never deletes remote files. One-way mirror safety |
+| `rclone copy` not `sync` | Never deletes remote files (unless delete_policy=mirror) |
 | MD5 hashing | Matches rclone's checksum for Google Drive / most backends |
 | Sequential sync worker | Prevents API rate limit exhaustion |
 | Per-project debounce | Changes in project A don't trigger sync of project B |
+| Batch on startup, incremental on steady state | Reconciliation: 1 rclone call per project, not per file |
+| Quiescence before sync | Prevents partial file sync on Windows (Office, long writes) |
+| File-based lock | Prevents dual-instance corruption; cross-platform |
 
 ---
 
 ## Phases
 
 - [x] **Phase 1**: Core mirror — config, filters, watcher, sync, state, CLI
+- [x] **Phase 1.5**: Hardening — lock, quiescence, metrics, explain/doctor/verify, delete policy, unit tests
 - [ ] **Phase 2**: Windows service — native via `golang.org/x/sys/windows/svc`
 - [ ] **Phase 3**: USN journal recovery — fast restart reconciliation
 - [ ] **Phase 4**: OSS release — README, CI, GoReleaser, winget manifest

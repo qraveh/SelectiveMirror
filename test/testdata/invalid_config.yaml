@@ -1,0 +1,4 @@
+# Missing required fields
+projects:
+  - local_path: C:\nonexistent
+    remote: "gdrive:test"

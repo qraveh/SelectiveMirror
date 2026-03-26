@@ -1,0 +1,3 @@
+This file has a Unicode filename for testing path handling.
+日本語テスト — Japanese test
+émojis: 🚀 📁 ✅

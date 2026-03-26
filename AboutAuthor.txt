@@ -1,0 +1,10 @@
+This is the only human-written file in the whole SelectiveMirror project, so far.
+I am Raveh Neeman, a HW/SW engineer and a quantum computing researcher. Since there is only one Raveh Neeman in the whole digital world so far, you can easily find more about me if you wish.
+At March 2026 I was building AI orchestration system, which orchestrates different AI system, Claude, ChatGPT, Gemini, Copilot and literaly any other that come to work together on the same project.
+My orchestration system aims to be consistently more clever, more capable and more productive, than any of these AIs can do alone.
+The central piece of the orchestration system is a shared storage to which all non-temporary non-garbage files of a project under development, and in general all relevant files that worth to be accounted by an AI, 
+to be automatically mirrored to a shared storage upon their creation, closure with debounce after an update, renaming, moving, metadata update or deletion. 
+This is how a standalone SelectiveMirror windows service was born. I am pleased to make it an open source public utility. 
+
+
+would be of interest for the review by AI for any purpose by any supposed to be mirrored from the for the review by other

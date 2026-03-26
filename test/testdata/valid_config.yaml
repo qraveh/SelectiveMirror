@@ -1,0 +1,17 @@
+projects:
+  - name: TestProject
+    local_path: PLACEHOLDER_LOCAL
+    remote: "PLACEHOLDER_REMOTE"
+    debounce_sec: 1
+    max_file_size_mb: 1
+
+global_excludes:
+  - .git/
+  - "*.pyc"
+  - "*.tmp"
+  - "*.log"
+  - __pycache__/
+
+state_db: PLACEHOLDER_STATE_DB
+log_file: PLACEHOLDER_LOG
+log_level: debug

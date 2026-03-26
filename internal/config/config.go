@@ -45,17 +45,28 @@ func (p Project) SyncIgnoreFile() string {
 	return filepath.Join(p.LocalPath, ".syncignore")
 }
 
+// DeletePolicy controls what happens when a local file is deleted.
+type DeletePolicy string
+
+const (
+	DeleteIgnore     DeletePolicy = "ignore"     // default: do nothing on remote
+	DeleteMirror     DeletePolicy = "mirror"     // delete remote file too
+	DeleteQuarantine DeletePolicy = "quarantine" // move remote to .quarantine/
+)
+
 // Global holds the complete application configuration.
 type Global struct {
-	Projects           []Project `yaml:"projects"`
-	GlobalExcludes     []string  `yaml:"global_excludes"`
-	StateDB            string    `yaml:"state_db"`
-	LogFile            string    `yaml:"log_file"`
-	LogLevel           string    `yaml:"log_level"`
-	RclonePath         string    `yaml:"rclone_path"`
-	RcloneExtraFlags   []string  `yaml:"rclone_extra_flags"`
-	BandwidthLimit     string    `yaml:"bandwidth_limit"`
-	HeartbeatIntervalS int       `yaml:"heartbeat_interval_sec"`
+	Projects           []Project    `yaml:"projects"`
+	GlobalExcludes     []string     `yaml:"global_excludes"`
+	StateDB            string       `yaml:"state_db"`
+	LogFile            string       `yaml:"log_file"`
+	LogLevel           string       `yaml:"log_level"`
+	RclonePath         string       `yaml:"rclone_path"`
+	RcloneExtraFlags   []string     `yaml:"rclone_extra_flags"`
+	BandwidthLimit     string       `yaml:"bandwidth_limit"`
+	HeartbeatIntervalS int          `yaml:"heartbeat_interval_sec"`
+	DeletePolicyStr    string       `yaml:"delete_policy"`    // "ignore", "mirror", "quarantine"
+	QuarantineDays     int          `yaml:"quarantine_days"`  // days to keep quarantined files (default 30)
 }
 
 // HeartbeatInterval returns the heartbeat interval as a time.Duration.
@@ -64,6 +75,26 @@ func (g Global) HeartbeatInterval() time.Duration {
 		return 5 * time.Minute
 	}
 	return time.Duration(g.HeartbeatIntervalS) * time.Second
+}
+
+// DeletePolicy returns the parsed delete policy (defaults to "ignore").
+func (g Global) DeletePolicy() DeletePolicy {
+	switch DeletePolicy(g.DeletePolicyStr) {
+	case DeleteMirror:
+		return DeleteMirror
+	case DeleteQuarantine:
+		return DeleteQuarantine
+	default:
+		return DeleteIgnore
+	}
+}
+
+// QuarantineRetention returns the quarantine retention in days (default 30).
+func (g Global) QuarantineRetention() int {
+	if g.QuarantineDays <= 0 {
+		return 30
+	}
+	return g.QuarantineDays
 }
 
 // DefaultDataDir returns the default data directory (~/.selectivemirror/).
