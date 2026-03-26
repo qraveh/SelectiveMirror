@@ -2,7 +2,7 @@
 THIRD-PARTY LICENSES FOR SELECTIVEMIRROR
 ================================================================================
 
-SelectiveMirror itself is licensed under MIT No Attribution (MIT-0).
+SelectiveMirror itself is licensed under the MIT License.
 See LICENSE file in the project root.
 
 This file lists all third-party software compiled into the SelectiveMirror

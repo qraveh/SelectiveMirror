@@ -37,7 +37,7 @@ and must be installed separately by the user.
 Most dependencies use permissive open-source licenses (MIT, BSD, Apache 2.0).
 One dependency (hashicorp/golang-lru/v2) uses MPL 2.0, a weak copyleft license.
 Under MPL 2.0 Section 3.3 (Larger Work), SelectiveMirror may combine MPL-covered
-files with MIT-0 code, but the MPL-covered source files must remain available
+files with MIT code, but the MPL-covered source files must remain available
 if the binary is distributed. See THIRD-PARTY-LICENSES.txt for full texts.
 
 ---

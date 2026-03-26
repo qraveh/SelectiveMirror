@@ -3,7 +3,7 @@
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (raveh@qodeh.com)
 **Status**: Phase 1.5 (core mirror + hardening)
-**License**: MIT-0
+**License**: MIT
 **Language**: Go 1.26+
 
 ---
@@ -226,7 +226,7 @@ All dependencies are permissive-licensed (MIT, BSD, Apache 2.0). See CREDITS.md 
 
 ### Licenses
 
-- **SelectiveMirror**: MIT-0 (no attribution required)
+- **SelectiveMirror**: MIT
 - **All compiled dependencies**: MIT / BSD / Apache 2.0 (permissive, no copyleft)
 - **rclone**: MIT (runtime only, not compiled in)
 - **No license embedding required in binary** for current dependency set, but binary distributions should include a NOTICE file listing BSD 3-Clause dependencies per their license terms.
