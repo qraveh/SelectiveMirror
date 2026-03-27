@@ -24,6 +24,7 @@ import (
 	"github.com/qraveh/SelectiveMirror/internal/logging"
 	"github.com/qraveh/SelectiveMirror/internal/metrics"
 	"github.com/qraveh/SelectiveMirror/internal/state"
+	"github.com/qraveh/SelectiveMirror/internal/rclone"
 	msync "github.com/qraveh/SelectiveMirror/internal/sync"
 	"github.com/qraveh/SelectiveMirror/internal/watcher"
 
@@ -431,6 +432,21 @@ func cmdValidate(configPath string) {
 		}
 	}
 
+	// rclone version check
+	info, err := rclone.Detect(cfg.RclonePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nrclone detection FAILED: %v\n", err)
+		os.Exit(1)
+	}
+	compat, msg := info.CompatCheck()
+	fmt.Printf("\nrclone: %s at %s\n", info.Version, info.Path)
+	if compat == rclone.CompatPartial {
+		fmt.Printf("  WARNING: %s\n", msg)
+	} else if compat == rclone.CompatNone {
+		fmt.Fprintf(os.Stderr, "  ERROR: %s\n", msg)
+		os.Exit(1)
+	}
+
 	fmt.Println()
 	if err := msync.Validate(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "\nValidation FAILED: %v\n", err)
@@ -624,15 +640,25 @@ func cmdDoctor(configPath string) {
 		return nil
 	})
 
-	// 4. rclone binary
+	// 4. rclone binary — version, path, compatibility
+	var rcloneInfo *rclone.Info
 	check("rclone binary found", func() error {
-		rp := cfg.RclonePath
-		if rp == "" {
-			rp = "rclone"
+		var err error
+		rcloneInfo, err = rclone.Detect(cfg.RclonePath)
+		if err != nil {
+			return err
 		}
-		cmd := exec.Command(rp, "version")
-		_, err := cmd.Output()
-		return err
+		fmt.Printf("\n    version: %s\n    path:    %s\n    os:      %s\n  %-45s ", rcloneInfo.Version, rcloneInfo.Path, rcloneInfo.OS, "rclone version compatibility")
+		compat, msg := rcloneInfo.CompatCheck()
+		switch compat {
+		case rclone.CompatNone:
+			return fmt.Errorf("%s", msg)
+		case rclone.CompatPartial:
+			fmt.Printf("WARN: %s\n  %-45s ", msg, "(continuing)")
+			return nil
+		default:
+			return nil
+		}
 	})
 
 	// 5. Remote connectivity
