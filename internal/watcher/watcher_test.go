@@ -105,7 +105,7 @@ func TestIsRelSubPath_ExactMatch(t *testing.T) {
 func TestFindProject_Match(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{
-		projects: []projectWatcher{
+		projects: []*projectWatcher{
 			{project: makeProject(dir, "proj-a")},
 		},
 	}
@@ -123,7 +123,7 @@ func TestFindProject_Match(t *testing.T) {
 func TestFindProject_NoMatch(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{
-		projects: []projectWatcher{
+		projects: []*projectWatcher{
 			{project: makeProject(dir, "proj-a")},
 		},
 	}

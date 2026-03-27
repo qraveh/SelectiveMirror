@@ -19,7 +19,7 @@ import (
 
 // Manager manages filesystem watchers for all projects.
 type Manager struct {
-	projects     []projectWatcher
+	projects     []*projectWatcher
 	fsw          *fsnotify.Watcher
 	deletePolicy config.DeletePolicy
 	log          *slog.Logger
@@ -61,7 +61,7 @@ func NewManager(projects []config.Project, filters map[string]*filter.Engine, sy
 
 	for _, proj := range projects {
 		fe := filters[proj.Name]
-		pw := projectWatcher{
+		pw := &projectWatcher{
 			project:  proj,
 			filter:   fe,
 			syncChan: syncChan,
@@ -77,7 +77,7 @@ func NewManager(projects []config.Project, filters map[string]*filter.Engine, sy
 func (m *Manager) Start(ctx context.Context) error {
 	// Add all project directories
 	for i := range m.projects {
-		pw := &m.projects[i]
+		pw := m.projects[i]
 		if supportsRecursiveWatch {
 			// On Windows: single recursive watch per project root.
 			// ReadDirectoryChangesW with bWatchSubtree=TRUE monitors the entire
@@ -106,7 +106,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Start debounce goroutines for each project (with panic recovery)
 	for i := range m.projects {
-		pw := &m.projects[i]
+		pw := m.projects[i]
 		name := fmt.Sprintf("debounceLoop[%s]", pw.project.Name)
 		go m.safeGo(name, func() { m.debounceLoop(ctx, pw) })
 	}
@@ -261,7 +261,7 @@ func (m *Manager) removeRecursive(dirPath string) int {
 // findProject returns the project watcher for a given file path.
 func (m *Manager) findProject(path string) *projectWatcher {
 	for i := range m.projects {
-		pw := &m.projects[i]
+		pw := m.projects[i]
 		if isSubPath(path, pw.project.LocalPath) {
 			return pw
 		}
