@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build
+        run: go build -v ./cmd/smirror/
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test -v ./internal/...
+
+      - name: Install rclone
+        run: |
+          choco install rclone -y
+          rclone version
+
+      - name: Verify smirror version
+        run: |
+          go build -o smirror.exe ./cmd/smirror/
+          .\smirror.exe version
+
+      - name: Verify smirror doctor
+        run: .\smirror.exe doctor
+        continue-on-error: true  # doctor may warn if no config
