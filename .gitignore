@@ -33,3 +33,12 @@ _testrun_*/
 heartbeat.txt
 status.json
 smirror.lock
+
+# Build artifacts
+bin/
+installer/bin/
+installer/obj/
+docs/*.pdf
+
+# Bug reports
+smirror-bug-report-*.txt

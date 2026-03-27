@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Include>
+  <!-- Product version — update for each release -->
+  <?define ProductVersion = "1.0.0" ?>
+
+  <!-- Stable GUIDs — DO NOT change after first release -->
+  <?define UpgradeCode = "7E3A9F12-4B5C-4D8E-A1F0-3C6B8D9E2F4A" ?>
+  <?define ProductCode = "*" ?>
+
+  <!-- Product info -->
+  <?define ProductName = "SelectiveMirror" ?>
+  <?define Manufacturer = "Raveh (qodeh.com)" ?>
+  <?define Description = "Real-time selective file synchronization engine for Windows" ?>
+
+  <!-- Install location -->
+  <?define InstallFolder = "SelectiveMirror" ?>
+</Include>
