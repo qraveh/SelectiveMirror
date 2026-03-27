@@ -36,6 +36,10 @@ type Task struct {
 	ForceDelete bool     // true for rename cleanup: always delete old remote path regardless of delete policy
 }
 
+// RcloneRunner executes an rclone command and returns the exit code.
+// The default implementation spawns a subprocess; tests inject a fake.
+type RcloneRunner func(ctx context.Context, args []string) int
+
 // Engine processes sync tasks using rclone.
 type Engine struct {
 	cfg      *config.Global
@@ -45,6 +49,9 @@ type Engine struct {
 	TaskChan chan Task
 	log      *slog.Logger
 
+	// RunRcloneFunc executes rclone. If nil, uses the default subprocess runner.
+	RunRcloneFunc RcloneRunner
+
 	// Per-file locks prevent two workers from syncing the same file simultaneously.
 	// Key: "project:relPath". Full-project syncs (relPath="") use project name as key.
 	fileLocks gosync.Map // map[string]*gosync.Mutex
@@ -52,7 +59,7 @@ type Engine struct {
 
 // NewEngine creates a sync engine.
 func NewEngine(cfg *config.Global, st *state.Store, filters map[string]*filter.Engine, m *metrics.Collector) *Engine {
-	return &Engine{
+	e := &Engine{
 		cfg:      cfg,
 		state:    st,
 		filters:  filters,
@@ -60,6 +67,8 @@ func NewEngine(cfg *config.Global, st *state.Store, filters map[string]*filter.E
 		TaskChan: make(chan Task, 1000),
 		log:      slog.Default().With("component", "sync"),
 	}
+	e.RunRcloneFunc = e.defaultRunRclone
+	return e
 }
 
 // Run spawns concurrent workers to process sync tasks until context is cancelled.
@@ -543,7 +552,13 @@ func (e *Engine) commonFlags() []string {
 	return flags
 }
 
+// runRclone delegates to RunRcloneFunc (injectable for testing).
 func (e *Engine) runRclone(ctx context.Context, args []string) int {
+	return e.RunRcloneFunc(ctx, args)
+}
+
+// defaultRunRclone is the production rclone runner that spawns a subprocess.
+func (e *Engine) defaultRunRclone(ctx context.Context, args []string) int {
 	rclonePath := e.cfg.RclonePath
 	if rclonePath == "" {
 		rclonePath = "rclone"
