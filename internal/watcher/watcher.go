@@ -75,15 +75,30 @@ func NewManager(projects []config.Project, filters map[string]*filter.Engine, sy
 
 // Start begins watching all project directories.
 func (m *Manager) Start(ctx context.Context) error {
-	// Add all project directories and subdirectories
+	// Add all project directories
 	for i := range m.projects {
 		pw := &m.projects[i]
-		count, err := m.addRecursive(pw.project.LocalPath, pw.filter)
-		if err != nil {
-			m.log.Error("failed to watch directory", "project", pw.project.Name, "path", pw.project.LocalPath, "error", err)
-			continue
+		if supportsRecursiveWatch {
+			// On Windows: single recursive watch per project root.
+			// ReadDirectoryChangesW with bWatchSubtree=TRUE monitors the entire
+			// subtree through ONE handle on the project root. Subdirectories have
+			// no open handles and can be freely renamed/moved/deleted in Explorer.
+			recursivePath := pw.project.LocalPath + string(os.PathSeparator) + "..."
+			if err := m.fsw.Add(recursivePath); err != nil {
+				m.log.Error("failed to watch directory (recursive)", "project", pw.project.Name, "path", pw.project.LocalPath, "error", err)
+				continue
+			}
+			m.log.Info("watching (recursive)", "project", pw.project.Name, "path", pw.project.LocalPath)
+		} else {
+			// On Linux/macOS: manually walk and add each subdirectory (inotify/kqueue
+			// don't support recursive watching).
+			count, err := m.addRecursive(pw.project.LocalPath, pw.filter)
+			if err != nil {
+				m.log.Error("failed to watch directory", "project", pw.project.Name, "path", pw.project.LocalPath, "error", err)
+				continue
+			}
+			m.log.Info("watching", "project", pw.project.Name, "path", pw.project.LocalPath, "dirs", count)
 		}
-		m.log.Info("watching", "project", pw.project.Name, "path", pw.project.LocalPath, "dirs", count)
 	}
 
 	// Start event processing goroutine (with panic recovery)
@@ -161,6 +176,11 @@ func (m *Manager) WatchCount() int {
 // projectRoot is the top-level project path used for computing relative paths for filter checks.
 // Symlink directories are NEVER followed — they could point anywhere (/, /etc, loops).
 func (m *Manager) addRecursive(walkRoot string, fe *filter.Engine, projectRoots ...string) (int, error) {
+	start := time.Now()
+	defer func() {
+		m.log.Debug("addRecursive complete", "path", walkRoot, "ms", time.Since(start).Milliseconds())
+	}()
+
 	// Use projectRoot for filter rel-path computation if provided, otherwise use walkRoot
 	filterRoot := walkRoot
 	if len(projectRoots) > 0 && projectRoots[0] != "" {
@@ -316,28 +336,31 @@ func (m *Manager) handleEvent(event fsnotify.Event) {
 	// and symlink-to-file to sync the target's content (data leak).
 	linfo, lerr := os.Lstat(event.Name)
 
-	// If a new directory was created, recursively add it and all subdirs to the watcher.
-	// This handles mkdir -p creating deep trees in one operation.
-	// Also handles directory rename (Create event for new name).
+	// If a new directory was created, handle watcher setup and trigger reconciliation.
 	if event.Has(fsnotify.Create) && lerr == nil {
-		// Reject symlinks — they could point outside the project boundary.
+		// Symlink-to-directory: do NOT follow (would watch arbitrary paths outside project).
+		// Symlink-to-file: allow — will be synced as a regular file (target content copied).
 		if linfo.Mode()&os.ModeSymlink != 0 {
-			m.log.Warn("ignoring symlink in project dir",
-				"path", event.Name,
-				"reason", "symlinks not mirrored (could escape project boundary)")
-			return
-		}
-		if linfo.IsDir() {
-			count, _ := m.addRecursive(event.Name, pw.filter, pw.project.LocalPath)
-			if count > 0 {
-				m.log.Debug("watching new dir tree", "path", event.Name, "dirs", count)
+			target, serr := os.Stat(event.Name) // follow the symlink
+			if serr != nil || target.IsDir() {
+				m.log.Debug("ignoring symlink to directory or broken symlink",
+					"path", event.Name)
+				return
 			}
-			// After watching a renamed/moved-in directory, trigger full project sync
-			// to pick up all files inside it (they don't get individual Create events).
-			pw.syncChan <- msync.Task{
-				Project: pw.project,
-				RelPath: "", // full project sync
+			// Symlink to file — fall through to debounce/sync as regular file
+		} else if linfo.IsDir() {
+			if !supportsRecursiveWatch {
+				// On Linux/macOS: manually add new subdirectories to the watcher.
+				// This handles mkdir -p creating deep trees in one operation.
+				count, _ := m.addRecursive(event.Name, pw.filter, pw.project.LocalPath)
+				if count > 0 {
+					m.log.Debug("watching new dir tree", "path", event.Name, "dirs", count)
+				}
 			}
+			// Walk the new/renamed/moved-in directory and queue individual file
+			// syncs. This is much faster and more deterministic than a full
+			// project sync (rclone copy of entire project tree).
+			m.queueFilesInDir(pw, event.Name)
 			return
 		}
 	}
@@ -358,18 +381,24 @@ func (m *Manager) handleEvent(event fsnotify.Event) {
 
 	// Use Lstat info to check the object itself (not symlink target)
 	if lerr == nil {
-		// Skip symlinks — never mirror symlinks to remote
+		// Symlinks to files: follow the target to get real size for limit check.
+		// Symlinks to directories were already rejected above.
+		checkInfo := linfo
 		if linfo.Mode()&os.ModeSymlink != 0 {
-			m.log.Debug("skipping symlink file", "path", event.Name)
-			return
+			target, serr := os.Stat(event.Name) // follow symlink
+			if serr != nil || !target.Mode().IsRegular() {
+				m.log.Debug("skipping broken or non-file symlink", "path", event.Name)
+				return
+			}
+			checkInfo = target
 		}
 		// Skip non-regular files (named pipes, sockets, device nodes)
-		if !linfo.Mode().IsRegular() {
-			m.log.Debug("skipping non-regular file", "path", event.Name, "mode", linfo.Mode().String())
+		if !checkInfo.Mode().IsRegular() {
+			m.log.Debug("skipping non-regular file", "path", event.Name, "mode", checkInfo.Mode().String())
 			return
 		}
 		// Skip files over size limit
-		if linfo.Size() > pw.project.MaxFileSize() {
+		if checkInfo.Size() > pw.project.MaxFileSize() {
 			return
 		}
 	}
@@ -394,11 +423,12 @@ func (m *Manager) handleRemove(event fsnotify.Event) {
 	relPath = filepath.ToSlash(relPath)
 
 	// Clean up stale watchers if a directory was removed.
-	// We can't os.Stat to check IsDir (path is gone), so try removing from watcher
-	// unconditionally — fsw.Remove on a non-watched path is a no-op.
-	removed := m.removeRecursive(event.Name)
-	if removed > 0 {
-		m.log.Debug("cleaned stale watchers", "path", event.Name, "removed", removed)
+	// Only needed on non-Windows — recursive watching handles this automatically.
+	if !supportsRecursiveWatch {
+		removed := m.removeRecursive(event.Name)
+		if removed > 0 {
+			m.log.Debug("cleaned stale watchers", "path", event.Name, "removed", removed)
+		}
 	}
 
 	// Clear any pending debounce entries for paths under removed directory
@@ -438,10 +468,13 @@ func (m *Manager) handleRename(event fsnotify.Event) {
 	}
 	relPath = filepath.ToSlash(relPath)
 
-	// Clean stale watchers (renamed directory no longer exists at old path)
-	removed := m.removeRecursive(event.Name)
-	if removed > 0 {
-		m.log.Debug("cleaned stale watchers after rename", "path", event.Name, "removed", removed)
+	// Clean stale watchers (renamed directory no longer exists at old path).
+	// Only needed on non-Windows — recursive watching handles this automatically.
+	if !supportsRecursiveWatch {
+		removed := m.removeRecursive(event.Name)
+		if removed > 0 {
+			m.log.Debug("cleaned stale watchers after rename", "path", event.Name, "removed", removed)
+		}
 	}
 
 	// Clear pending entries for old path
@@ -454,17 +487,72 @@ func (m *Manager) handleRename(event fsnotify.Event) {
 	}
 	pw.mu.Unlock()
 
-	// Queue delete for old remote path if policy allows (file was renamed away)
-	if m.deletePolicy != config.DeleteIgnore {
-		if pw.filter != nil && pw.filter.IsExcluded(relPath) {
-			return
+	// Always clean up old remote path on rename, regardless of delete policy.
+	// Rename is not a user-initiated deletion — it's a lifecycle transition.
+	// The old name is an orphan on the remote that must be removed.
+	// (Delete policy only governs Remove events — actual file deletions.)
+	if pw.filter != nil && pw.filter.IsExcluded(relPath) {
+		return
+	}
+	pw.syncChan <- msync.Task{
+		Project:     pw.project,
+		RelPath:     relPath,
+		Type:        msync.TaskDelete,
+		ForceDelete: true, // bypass delete_policy — rename cleanup is mandatory
+	}
+	m.log.Debug("queued cleanup for renamed-away path", "project", pw.project.Name, "path", relPath)
+}
+
+// queueFilesInDir walks a directory and queues individual file sync tasks for
+// every regular file inside it. Used when a directory is created, renamed, or
+// moved into the project — the files inside don't get individual Create events.
+func (m *Manager) queueFilesInDir(pw *projectWatcher, dirPath string) {
+	start := time.Now()
+	queued := 0
+	filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
 		}
+		if d.IsDir() {
+			relPath, _ := filepath.Rel(pw.project.LocalPath, path)
+			if relPath != "." && pw.filter != nil && pw.filter.IsExcluded(relPath+"/") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Skip symlinks and non-regular files
+		if d.Type()&os.ModeSymlink != 0 || !d.Type().IsRegular() {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(pw.project.LocalPath, path)
+		relPath = filepath.ToSlash(relPath)
+
+		if pw.filter != nil && pw.filter.IsExcluded(relPath) {
+			return nil
+		}
+
+		// Check file size
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if info.Size() > pw.project.MaxFileSize() {
+			return nil
+		}
+
+		// Queue directly (no debounce — the files already exist and are stable)
 		pw.syncChan <- msync.Task{
 			Project: pw.project,
 			RelPath: relPath,
-			Type:    msync.TaskDelete,
 		}
-		m.log.Debug("queued delete for renamed-away path", "project", pw.project.Name, "path", relPath)
+		queued++
+		return nil
+	})
+	elapsed := time.Since(start)
+	if queued > 0 {
+		m.log.Debug("queued files from new/renamed dir", "path", dirPath, "files", queued, "ms", elapsed.Milliseconds())
 	}
 }
 
@@ -488,6 +576,7 @@ func (m *Manager) isSyncIgnoreFile(pw *projectWatcher, absPath string) bool {
 
 // reloadFilter hot-reloads a project's .syncignore and triggers reconciliation if rules changed.
 func (m *Manager) reloadFilter(pw *projectWatcher) {
+	start := time.Now()
 	changed, err := pw.filter.Reload()
 	if err != nil {
 		m.log.Error("failed to reload .syncignore", "project", pw.project.Name, "error", err)
@@ -498,14 +587,20 @@ func (m *Manager) reloadFilter(pw *projectWatcher) {
 		return
 	}
 
-	m.log.Info(".syncignore changed, filters reloaded", "project", pw.project.Name)
+	m.log.Info(".syncignore changed, filters reloaded", "project", pw.project.Name, "ms", time.Since(start).Milliseconds())
 
 	// Trigger full project reconciliation so that:
 	// - Newly included files get synced
 	// - Rclone filter file reflects updated rules
-	pw.syncChan <- msync.Task{
+	// Non-blocking send: if channel is full, skip reconciliation rather than
+	// blocking the watcher event loop. Periodic reconciliation will catch it.
+	select {
+	case pw.syncChan <- msync.Task{
 		Project: pw.project,
 		RelPath: "", // empty = full project sync
+	}:
+	default:
+		m.log.Warn("sync channel full, skipping .syncignore reconciliation", "project", pw.project.Name)
 	}
 }
 
@@ -517,18 +612,32 @@ func (m *Manager) debounceLoop(ctx context.Context, pw *projectWatcher) {
 	for {
 		select {
 		case <-ticker.C:
+			// Collect matured tasks under the mutex, then send outside the lock.
+			// This prevents a deadlock where a full syncChan blocks the send
+			// while the mutex prevents new events from being enqueued.
+			var ready []msync.Task
 			pw.mu.Lock()
 			now := time.Now()
 			for relPath, lastEvent := range pw.pending {
 				if now.Sub(lastEvent) >= pw.project.DebounceDuration() {
-					pw.syncChan <- msync.Task{
+					ready = append(ready, msync.Task{
 						Project: pw.project,
 						RelPath: relPath,
-					}
+					})
 					delete(pw.pending, relPath)
 				}
 			}
 			pw.mu.Unlock()
+
+			// Send outside the lock — if channel is full, this blocks
+			// but won't prevent new events from entering the pending map.
+			for _, task := range ready {
+				select {
+				case pw.syncChan <- task:
+				case <-ctx.Done():
+					return
+				}
+			}
 		case <-ctx.Done():
 			return
 		}

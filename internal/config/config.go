@@ -65,6 +65,8 @@ type Global struct {
 	RcloneExtraFlags   []string     `yaml:"rclone_extra_flags"`
 	BandwidthLimit     string       `yaml:"bandwidth_limit"`
 	HeartbeatIntervalS int          `yaml:"heartbeat_interval_sec"`
+	ReconcileIntervalS int         `yaml:"reconcile_interval_sec"` // periodic full sync interval (default 300 = 5 min)
+	SyncWorkers        int          `yaml:"sync_workers"`          // concurrent sync workers (default 4)
 	DeletePolicyStr    string       `yaml:"delete_policy"`    // "ignore", "mirror", "quarantine"
 	QuarantineDays     int          `yaml:"quarantine_days"`  // days to keep quarantined files (default 30)
 }
@@ -75,6 +77,26 @@ func (g Global) HeartbeatInterval() time.Duration {
 		return 5 * time.Minute
 	}
 	return time.Duration(g.HeartbeatIntervalS) * time.Second
+}
+
+// ReconcileInterval returns the periodic reconciliation interval.
+// Default is 5 minutes. Catches changes invisible to fsnotify (WSL, external tools).
+func (g Global) ReconcileInterval() time.Duration {
+	if g.ReconcileIntervalS <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(g.ReconcileIntervalS) * time.Second
+}
+
+// Workers returns the number of concurrent sync workers (default 4).
+func (g Global) Workers() int {
+	if g.SyncWorkers <= 0 {
+		return 4
+	}
+	if g.SyncWorkers > 16 {
+		return 16 // cap to avoid API rate limiting
+	}
+	return g.SyncWorkers
 }
 
 // DeletePolicy returns the parsed delete policy (defaults to "ignore").

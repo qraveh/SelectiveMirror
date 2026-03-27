@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	gosync "sync"
 	"time"
 
 	"github.com/qraveh/SelectiveMirror/internal/config"
@@ -29,9 +30,10 @@ const (
 
 // Task represents a file to be synced or deleted.
 type Task struct {
-	Project config.Project
-	RelPath string   // empty means full project sync
-	Type    TaskType // TaskSync (default) or TaskDelete
+	Project     config.Project
+	RelPath     string   // empty means full project sync
+	Type        TaskType // TaskSync (default) or TaskDelete
+	ForceDelete bool     // true for rename cleanup: always delete old remote path regardless of delete policy
 }
 
 // Engine processes sync tasks using rclone.
@@ -42,6 +44,10 @@ type Engine struct {
 	metrics  *metrics.Collector
 	TaskChan chan Task
 	log      *slog.Logger
+
+	// Per-file locks prevent two workers from syncing the same file simultaneously.
+	// Key: "project:relPath". Full-project syncs (relPath="") use project name as key.
+	fileLocks gosync.Map // map[string]*gosync.Mutex
 }
 
 // NewEngine creates a sync engine.
@@ -56,26 +62,76 @@ func NewEngine(cfg *config.Global, st *state.Store, filters map[string]*filter.E
 	}
 }
 
-// Run processes sync tasks until context is cancelled.
-// Recovers from panics in individual task processing to prevent daemon crash.
+// Run spawns concurrent workers to process sync tasks until context is cancelled.
 func (e *Engine) Run(ctx context.Context) {
-	e.log.Info("sync engine started")
+	workers := e.cfg.Workers()
+	e.log.Info("sync engine started", "workers", workers)
+
+	var wg gosync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			e.runWorker(ctx, id)
+		}(i)
+	}
+
+	wg.Wait()
+	e.log.Info("sync engine stopped")
+}
+
+func (e *Engine) runWorker(ctx context.Context, id int) {
 	for {
 		select {
-		case task := <-e.TaskChan:
+		case task, ok := <-e.TaskChan:
+			if !ok {
+				return // channel closed, all tasks drained
+			}
 			if e.metrics != nil {
 				e.metrics.SetQueueDepth(int64(len(e.TaskChan)))
 			}
 			e.processTask(ctx, task)
 		case <-ctx.Done():
-			e.log.Info("sync engine stopping")
 			return
 		}
 	}
 }
 
-// processTask handles a single task with panic recovery.
+// lockKey returns the per-file lock key for a task.
+func (e *Engine) lockKey(task Task) string {
+	if task.RelPath == "" {
+		return task.Project.Name // full-project sync locks by project
+	}
+	return task.Project.Name + ":" + task.RelPath
+}
+
+// acquireFileLock gets or creates a mutex for the given task and locks it.
+// Mutexes are kept in the map permanently (not deleted after unlock) to prevent
+// a race where Delete-after-Unlock causes two goroutines to hold different
+// mutexes for the same key, breaking mutual exclusion.
+func (e *Engine) acquireFileLock(task Task) {
+	key := e.lockKey(task)
+	val, _ := e.fileLocks.LoadOrStore(key, &gosync.Mutex{})
+	mu := val.(*gosync.Mutex)
+	mu.Lock()
+}
+
+// releaseFileLock unlocks the per-file mutex.
+func (e *Engine) releaseFileLock(task Task) {
+	key := e.lockKey(task)
+	val, ok := e.fileLocks.Load(key)
+	if ok {
+		val.(*gosync.Mutex).Unlock()
+	}
+}
+
+// processTask handles a single task with per-file locking and panic recovery.
 func (e *Engine) processTask(ctx context.Context, task Task) {
+	// Per-file lock: prevent two workers from syncing the same file simultaneously.
+	e.acquireFileLock(task)
+	defer e.releaseFileLock(task)
+
+	taskStart := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
 			stack := string(debug.Stack())
@@ -86,11 +142,16 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 					fmt.Sprintf("panic processing %s: %v", task.RelPath, r))
 			}
 		}
+		elapsed := time.Since(taskStart)
+		if elapsed > 5*time.Second {
+			e.log.Warn("slow task", "project", task.Project.Name, "path", task.RelPath,
+				"type", task.Type, "ms", elapsed.Milliseconds())
+		}
 	}()
 
 	switch task.Type {
 	case TaskDelete:
-		e.deleteRemoteFile(ctx, task.Project, task.RelPath)
+		e.deleteRemoteFile(ctx, task.Project, task.RelPath, task.ForceDelete)
 	default:
 		if task.RelPath == "" {
 			e.syncFullProject(ctx, task.Project)
@@ -102,29 +163,48 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 
 // quiesceFile confirms a file is stable before syncing.
 // Returns the os.FileInfo if stable, or nil if the file is still changing or locked.
-// Defense-in-depth: rejects symlinks, non-regular files, and other exotic objects
-// even if they somehow bypassed the watcher's Lstat check.
+// For symlinks to files, follows the link and checks the target.
+// Rejects symlinks to directories, non-regular files, and broken symlinks.
 func (e *Engine) quiesceFile(localPath string) (os.FileInfo, error) {
-	// Lstat check: reject symlinks and non-regular files at the sync boundary.
-	// This is defense-in-depth — the watcher should already filter these out,
-	// but a race between file creation and event processing could let one through.
+	start := time.Now()
+	defer func() {
+		elapsed := time.Since(start)
+		if elapsed > 2*time.Second {
+			e.log.Warn("slow quiescence", "path", localPath, "ms", elapsed.Milliseconds())
+		}
+	}()
+
+	// Lstat to detect symlinks, then Stat to follow them.
+	// Symlinks to files are synced (target content uploaded at symlink's path).
+	// Symlinks to directories are rejected (would need recursive watching).
 	linfo, err := os.Lstat(localPath)
 	if err != nil {
 		return nil, err
 	}
+
+	var info1 os.FileInfo
 	if linfo.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("refusing to sync symlink: %s", localPath)
-	}
-	if !linfo.Mode().IsRegular() {
-		return nil, fmt.Errorf("not a regular file (mode %s): %s", linfo.Mode().String(), localPath)
+		// Follow symlink to get target info
+		target, serr := os.Stat(localPath)
+		if serr != nil {
+			return nil, fmt.Errorf("broken symlink: %s -> %v", localPath, serr)
+		}
+		if target.IsDir() {
+			return nil, fmt.Errorf("symlink to directory not synced: %s", localPath)
+		}
+		info1 = target
+	} else {
+		info1 = linfo
 	}
 
-	info1 := linfo // first stat (already done via Lstat which returns same size/mtime for regular files)
+	if !info1.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file (mode %s): %s", info1.Mode().String(), localPath)
+	}
 
-	// Wait 200ms and re-check
+	// Wait 200ms and re-check (use Stat to follow symlinks consistently)
 	time.Sleep(200 * time.Millisecond)
 
-	info2, err := os.Lstat(localPath)
+	info2, err := os.Stat(localPath)
 	if err != nil {
 		return nil, err
 	}
@@ -186,20 +266,39 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 	// Check if unchanged since last sync
 	existing, err := e.state.GetFileState(proj.Name, relPath)
 	if err == nil && existing != nil && existing.LocalHash == hash && existing.RcloneExit == 0 {
-		e.log.Debug("unchanged", "project", proj.Name, "path", relPath)
-		return // already synced with same hash
+		// Content is identical. Check whether mtime changed (metadata-only update).
+		currentMtimeNs := info.ModTime().UnixNano()
+
+		switch {
+		case existing.MtimeNs == 0:
+			// First observation after schema migration — record mtime silently, no remote call needed.
+			e.state.UpdateMtimeOnly(proj.Name, relPath, currentMtimeNs)
+			e.log.Debug("bootstrapped mtime tracking", "project", proj.Name, "path", relPath)
+
+		case existing.MtimeNs == currentMtimeNs:
+			// True no-op: hash and mtime both unchanged.
+			e.log.Debug("unchanged", "project", proj.Name, "path", relPath)
+
+		default:
+			// Hash unchanged but mtime differs — metadata-only update.
+			e.syncMtime(ctx, proj, relPath, info.ModTime(), hash, size, currentMtimeNs)
+		}
+		return
 	}
 
-	// Build rclone command
+	// Build rclone command for content sync
 	remotePath := proj.Remote + "/" + filepath.ToSlash(relPath)
-	args := []string{"copyto", localPath, remotePath, "--checksum"}
+	// No --checksum here: single-file sync is triggered by fsnotify, meaning
+	// the file was touched. Use rclone's default mtime comparison so that
+	// mtime-only changes (e.g. touch) propagate to remote.
+	args := []string{"copyto", localPath, remotePath}
 	args = append(args, e.commonFlags()...)
 
 	start := time.Now()
 	exitCode := e.runRclone(ctx, args)
 	elapsed := time.Since(start)
 
-	e.state.UpdateFileState(proj.Name, relPath, hash, size, exitCode)
+	e.state.UpdateFileState(proj.Name, relPath, hash, size, info.ModTime().UnixNano(), exitCode)
 
 	if exitCode == 0 {
 		e.log.Info("synced", "project", proj.Name, "path", relPath, "size", size, "ms", elapsed.Milliseconds())
@@ -213,6 +312,46 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		if e.metrics != nil {
 			e.metrics.RecordError(proj.Name, fmt.Sprintf("rclone exit %d for %s", exitCode, relPath))
 		}
+	}
+}
+
+// syncMtime updates the remote file's modification time without re-uploading content.
+// Called when content hash is unchanged but local mtime has changed.
+// Uses `rclone touch --timestamp` which is a lightweight metadata-only operation.
+// If the backend does not support mtime updates, the error is logged and the
+// mtime_ns is updated in the DB anyway to avoid continuous retries.
+func (e *Engine) syncMtime(ctx context.Context, proj config.Project, relPath string, mtime time.Time, hash string, size, mtimeNs int64) {
+	remotePath := proj.Remote + "/" + filepath.ToSlash(relPath)
+
+	// rclone touch accepts ISO 8601 timestamp (UTC, second precision is sufficient for all backends)
+	ts := mtime.UTC().Format("2006-01-02T15:04:05")
+	args := []string{"touch", "--timestamp", ts, "--no-create", remotePath}
+	args = append(args, e.commonFlags()...)
+
+	start := time.Now()
+	exitCode := e.runRclone(ctx, args)
+	elapsed := time.Since(start)
+
+	// Update DB regardless of exit code: record the new mtime so we don't retry
+	// on every subsequent event. The content hash is unchanged so the file is intact.
+	e.state.UpdateFileState(proj.Name, relPath, hash, size, mtimeNs, exitCode)
+
+	if exitCode == 0 {
+		e.log.Info("metadata synced", "project", proj.Name, "path", relPath,
+			"mtime", mtime.UTC().Format(time.RFC3339), "ms", elapsed.Milliseconds())
+		e.state.LogAction(proj.Name, relPath, "mtime_sync",
+			fmt.Sprintf("mtime=%s, %dms", mtime.UTC().Format(time.RFC3339), elapsed.Milliseconds()),
+			elapsed.Milliseconds())
+		if e.metrics != nil {
+			e.metrics.RecordMetadataSync(proj.Name)
+		}
+	} else {
+		// Exit code 3 = "directory not found", others may mean "not supported"
+		e.log.Warn("metadata sync failed (backend may not support mtime updates)",
+			"project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
+		e.state.LogAction(proj.Name, relPath, "mtime_sync_error",
+			fmt.Sprintf("rclone exit %d (backend may not support mtime updates)", exitCode),
+			elapsed.Milliseconds())
 	}
 }
 
@@ -234,7 +373,14 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 	}
 	defer os.Remove(filterFile)
 
-	args := []string{"copy", proj.LocalPath, proj.Remote, "--checksum", "--filter-from", filterFile}
+	// Use "sync" when delete_policy=mirror — makes remote match local exactly,
+	// including deleting remote-only files (orphans from WSL renames, etc.).
+	// Use "copy" otherwise — upload-only, safe default.
+	verb := "copy"
+	if e.cfg.DeletePolicy() == config.DeleteMirror {
+		verb = "sync"
+	}
+	args := []string{verb, proj.LocalPath, proj.Remote, "--checksum", "--filter-from", filterFile}
 	args = append(args, e.commonFlags()...)
 
 	exitCode := e.runRclone(ctx, args)
@@ -254,14 +400,43 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 }
 
 // deleteRemoteFile handles file deletion on remote based on delete policy.
-func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relPath string) {
+// If force is true, the delete is always executed as a mirror-delete regardless
+// of the configured policy. This is used for rename cleanup: when a file is
+// renamed, the old remote path is an orphan that must be removed.
+func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relPath string, force bool) {
 	policy := e.cfg.DeletePolicy()
+	if force {
+		policy = config.DeleteMirror
+	}
+
+	// Check if this path was ever synced as a file.
+	// If not, check if it's a directory with synced children underneath.
+	fileState, _ := e.state.GetFileState(proj.Name, relPath)
+	if fileState == nil {
+		// Not a synced file — might be a directory that was renamed/deleted.
+		files, _ := e.state.GetFilesUnderDir(proj.Name, relPath)
+		if len(files) > 0 {
+			// Directory with synced children — delete them individually.
+			e.deleteRemoteDir(ctx, proj, relPath, force)
+			return
+		}
+		// Never synced as file or directory — nothing to delete on remote.
+		e.log.Debug("skipping remote delete (never synced)", "project", proj.Name, "path", relPath)
+		return
+	}
+
+	if policy == config.DeleteIgnore {
+		e.log.Debug("local delete ignored (policy=ignore)", "project", proj.Name, "path", relPath)
+		e.state.LogAction(proj.Name, relPath, "delete_ignored", "policy=ignore", 0)
+		return
+	}
+
 	remotePath := proj.Remote + "/" + filepath.ToSlash(relPath)
 
 	switch policy {
 	case config.DeleteMirror:
 		args := []string{"deletefile", remotePath}
-		args = append(args, e.commonFlags()...)
+		args = append(args, e.deleteFlags()...)
 
 		start := time.Now()
 		exitCode := e.runRclone(ctx, args)
@@ -271,7 +446,7 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 			e.log.Info("remote deleted", "project", proj.Name, "path", relPath, "ms", elapsed.Milliseconds())
 			e.state.LogAction(proj.Name, relPath, "delete", "mirrored delete", elapsed.Milliseconds())
 		} else {
-			e.log.Warn("remote delete failed", "project", proj.Name, "path", relPath, "exit", exitCode)
+			e.log.Warn("remote delete failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
 			e.state.LogAction(proj.Name, relPath, "delete_error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
 		}
 
@@ -279,7 +454,7 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 		ts := time.Now().UTC().Format("20060102T150405Z")
 		quarantinePath := proj.Remote + "/.quarantine/" + filepath.ToSlash(relPath) + "." + ts
 		args := []string{"moveto", remotePath, quarantinePath}
-		args = append(args, e.commonFlags()...)
+		args = append(args, e.deleteFlags()...)
 
 		start := time.Now()
 		exitCode := e.runRclone(ctx, args)
@@ -289,15 +464,68 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 			e.log.Info("remote quarantined", "project", proj.Name, "path", relPath, "quarantine", quarantinePath, "ms", elapsed.Milliseconds())
 			e.state.LogAction(proj.Name, relPath, "quarantine", quarantinePath, elapsed.Milliseconds())
 		} else {
-			e.log.Warn("remote quarantine failed", "project", proj.Name, "path", relPath, "exit", exitCode)
+			e.log.Warn("remote quarantine failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
 			e.state.LogAction(proj.Name, relPath, "quarantine_error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
 		}
 
-	default:
-		// DeleteIgnore — do nothing
-		e.log.Debug("local delete ignored (policy=ignore)", "project", proj.Name, "path", relPath)
-		e.state.LogAction(proj.Name, relPath, "delete_ignored", "policy=ignore", 0)
 	}
+
+	// Clean state DB entry after successful remote delete
+	e.state.DeleteFileState(proj.Name, relPath)
+}
+
+// deleteFlags returns rclone flags for delete/quarantine operations.
+// Uses minimal retries (1 attempt, no retry sleep) to avoid blocking the sync
+// engine for 30+ seconds on transient failures. Deletes are best-effort;
+// orphaned files will be caught by the next 'verify' or reconciliation.
+func (e *Engine) deleteFlags() []string {
+	flags := []string{
+		"--retries", "1",
+		"--stats", "0",
+		"--log-level", "NOTICE",
+		"--skip-links",
+	}
+	if e.cfg.BandwidthLimit != "" {
+		flags = append(flags, "--bwlimit", e.cfg.BandwidthLimit)
+	}
+	flags = append(flags, e.cfg.RcloneExtraFlags...)
+	return flags
+}
+
+// deleteRemoteDir handles cleanup of a renamed/deleted directory on the remote.
+// Queries the state DB for all synced files under the directory prefix and deletes
+// each one individually. This avoids calling `rclone deletefile` on directory paths
+// (which fails and retries for 30s, blocking the sync engine).
+func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPath string, force bool) {
+	start := time.Now()
+	policy := e.cfg.DeletePolicy()
+	if force {
+		policy = config.DeleteMirror
+	}
+	if policy == config.DeleteIgnore {
+		e.log.Debug("dir delete ignored (policy=ignore)", "project", proj.Name, "path", dirPath)
+		return
+	}
+
+	// Find all files that were synced under this directory
+	files, err := e.state.GetFilesUnderDir(proj.Name, dirPath)
+	if err != nil {
+		e.log.Warn("failed to query files under dir", "project", proj.Name, "path", dirPath, "error", err)
+		return
+	}
+	if len(files) == 0 {
+		e.log.Debug("no synced files under dir (nothing to delete)", "project", proj.Name, "path", dirPath)
+		return
+	}
+
+	e.log.Info("cleaning remote dir", "project", proj.Name, "path", dirPath, "files", len(files))
+	for _, relPath := range files {
+		e.deleteRemoteFile(ctx, proj, relPath, force)
+		// Clean state DB entry so file doesn't appear as ghost later
+		e.state.DeleteFileState(proj.Name, relPath)
+	}
+	elapsed := time.Since(start)
+	e.log.Info("remote dir cleaned", "project", proj.Name, "path", dirPath, "files", len(files), "ms", elapsed.Milliseconds())
 }
 
 func (e *Engine) commonFlags() []string {
@@ -323,12 +551,22 @@ func (e *Engine) runRclone(ctx context.Context, args []string) int {
 
 	e.log.Debug("rclone", "cmd", rclonePath, "args", strings.Join(args, " "))
 
-	cmd := exec.CommandContext(ctx, rclonePath, args...)
+	// Apply a 5-minute timeout to prevent a single rclone operation from
+	// blocking a worker indefinitely. Full-project syncs with --checksum
+	// on large directories can be slow; 5 minutes is generous.
+	rcloneCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(rcloneCtx, rclonePath, args...)
 	cmd.Stdout = os.Stdout // Let rclone output flow through in foreground mode
 	cmd.Stderr = os.Stderr
 
 	err := cmd.Run()
 	if err != nil {
+		if rcloneCtx.Err() == context.DeadlineExceeded {
+			e.log.Error("rclone timed out after 5 minutes", "args", strings.Join(args, " "))
+			return -2
+		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return exitErr.ExitCode()
 		}
@@ -417,6 +655,7 @@ type RemoteFile struct {
 
 // ListRemote returns all files on the remote for a project using rclone lsjson.
 func ListRemote(cfg *config.Global, proj config.Project) ([]RemoteFile, error) {
+	start := time.Now()
 	rclonePath := cfg.RclonePath
 	if rclonePath == "" {
 		rclonePath = "rclone"
@@ -432,5 +671,6 @@ func ListRemote(cfg *config.Global, proj config.Project) ([]RemoteFile, error) {
 	if err := json.Unmarshal(out, &files); err != nil {
 		return nil, fmt.Errorf("parsing lsjson: %w", err)
 	}
+	slog.Debug("ListRemote", "project", proj.Name, "files", len(files), "ms", time.Since(start).Milliseconds())
 	return files, nil
 }

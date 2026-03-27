@@ -83,6 +83,8 @@ func main() {
 		cmdDoctor(configPath)
 	case "verify":
 		cmdVerify(configPath, cmdArgs)
+	case "stats":
+		cmdStats(configPath)
 	case "version":
 		fmt.Printf("smirror %s\n", version)
 	case "help", "--help", "-h":
@@ -110,6 +112,7 @@ Commands:
   explain <project> <path>  Explain why a file is included or excluded
   doctor                    Run comprehensive self-test diagnostics
   verify [project]          Compare local vs remote and report drift
+  stats                     Show file counts and line counts across all projects
   version                   Show version
 
 Options:
@@ -224,8 +227,8 @@ func cmdStart(configPath string, args []string) {
 	// Start sync engine (has internal panic recovery per task)
 	go syncEngine.Run(ctx)
 
-	// Start heartbeat (writes status.json + heartbeat to DB + health checks)
-	go heartbeatLoop(ctx, st, cfg, m, watchMgr)
+	// Start heartbeat (writes status.json + heartbeat to DB + health checks + periodic reconciliation)
+	go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine)
 
 	slog.Info("smirror running", "projects", cfg.ProjectNames())
 	fmt.Println("Press Ctrl+C to stop")
@@ -264,14 +267,11 @@ func cmdSyncNow(configPath string, args []string) {
 		}
 	}
 
-	// Process all queued tasks
-	go syncEngine.Run(ctx)
-
-	// Wait for queue to drain
-	for len(syncEngine.TaskChan) > 0 {
-		time.Sleep(100 * time.Millisecond)
-	}
-	time.Sleep(2 * time.Second) // Allow last task to complete
+	// Process all queued tasks synchronously: start workers, wait for them
+	// to finish processing everything. We close the channel after queueing
+	// so workers exit once all tasks are drained.
+	close(syncEngine.TaskChan)
+	syncEngine.Run(ctx) // blocks until all workers complete
 	fmt.Println("Sync complete")
 }
 
@@ -384,6 +384,35 @@ func cmdStatus(configPath string) {
 			fmt.Printf("  Pending retries: %d\n", len(pending))
 		}
 		fmt.Println()
+	}
+
+	// Ghost scan results
+	ghostResult, _ := st.GetMeta("ghost_scan_result")
+	ghostTime, _ := st.GetMeta("ghost_scan_time")
+	if ghostResult != "" {
+		fmt.Println("Ghost Scan:")
+		if ghostTime != "" {
+			if t, err := time.Parse(time.RFC3339, ghostTime); err == nil {
+				fmt.Printf("  Last scan: %s (%s ago)\n", ghostTime, time.Since(t).Round(time.Second))
+			}
+		}
+		if ghostResult == "clean" {
+			fmt.Println("  Result: clean (no orphans)")
+		} else {
+			fmt.Printf("  Result: %s\n", ghostResult)
+			ghostDetails, _ := st.GetMeta("ghost_scan_details")
+			if ghostDetails != "" {
+				for _, line := range strings.Split(ghostDetails, "\n") {
+					fmt.Printf("    %s\n", line)
+				}
+			}
+		}
+		fmt.Println()
+	}
+	// Health errors
+	lastHealthErr, _ := st.GetMeta("last_health_error")
+	if lastHealthErr != "" {
+		fmt.Printf("Last Health Error: %s\n\n", lastHealthErr)
 	}
 }
 
@@ -551,11 +580,12 @@ func cmdDoctor(configPath string) {
 
 	check := func(name string, fn func() error) {
 		fmt.Printf("  %-45s ", name)
+		start := time.Now()
 		if err := fn(); err != nil {
-			fmt.Printf("FAIL: %v\n", err)
+			fmt.Printf("FAIL: %v (%dms)\n", err, time.Since(start).Milliseconds())
 			failed++
 		} else {
-			fmt.Printf("OK\n")
+			fmt.Printf("OK (%dms)\n", time.Since(start).Milliseconds())
 			passed++
 		}
 	}
@@ -731,6 +761,7 @@ func cmdVerify(configPath string, args []string) {
 }
 
 func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) int {
+	start := time.Now()
 	fmt.Printf("=== Verify: %s ===\n", proj.Name)
 	fmt.Printf("Local:  %s\n", proj.LocalPath)
 	fmt.Printf("Remote: %s\n\n", proj.Remote)
@@ -763,6 +794,12 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 			if relPath != "." && fe != nil && fe.IsExcluded(relPath+"/") {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+
+		// Skip non-regular files: symlinks, WSL reparse points (ModeIrregular),
+		// named pipes, etc. These can't be synced to remote.
+		if !d.Type().IsRegular() {
 			return nil
 		}
 
@@ -815,14 +852,235 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 		}
 	}
 
+	elapsed := time.Since(start)
 	if drift == 0 {
-		fmt.Printf("  No drift detected (%d local files, %d remote files)\n", len(localFiles), len(remoteMap))
+		fmt.Printf("  No drift detected (%d local files, %d remote files, %dms)\n", len(localFiles), len(remoteMap), elapsed.Milliseconds())
 	} else {
-		fmt.Printf("  %d drift issues found\n", drift)
+		fmt.Printf("  %d drift issues found (%dms)\n", drift, elapsed.Milliseconds())
 	}
 	fmt.Println()
 
 	return drift
+}
+
+func cmdStats(configPath string) {
+	cfg := loadConfig(configPath)
+	logging.Setup(cfg.LogLevel, "", true)
+	filters := buildFilters(cfg)
+
+	type category struct {
+		label string
+		exts  []string
+	}
+
+	categories := []category{
+		{"Go", []string{".go"}},
+		{"PowerShell", []string{".ps1", ".psm1", ".psd1"}},
+		{"Python", []string{".py"}},
+		{"Shell", []string{".sh", ".bash"}},
+		{"YAML/JSON", []string{".yaml", ".yml", ".json"}},
+		{"XML", []string{".xml"}},
+		{"Docs/Text", []string{".md", ".txt", ".rst"}},
+		{"VBScript", []string{".vbs"}},
+		{"Batch/Cmd", []string{".cmd", ".bat"}},
+	}
+
+	// Per-project stats: catKey -> files, lines
+	type catCount struct {
+		files int
+		lines int
+	}
+	type projectStats struct {
+		name     string
+		total    catCount
+		ignored  int
+		bytes    int64
+		byCat    map[string]catCount
+		other    catCount
+	}
+
+	fmt.Printf("smirror stats\n")
+	fmt.Printf("=============\n")
+
+	var allStats []projectStats
+	grandTotal := catCount{}
+	grandBytes := int64(0)
+	grandIgnored := 0
+	grandByCat := make(map[string]catCount)
+	grandOther := catCount{}
+
+	for _, proj := range cfg.Projects {
+		fe := filters[proj.Name]
+		ps := projectStats{
+			name:  proj.Name,
+			byCat: make(map[string]catCount),
+		}
+
+		filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				relPath, _ := filepath.Rel(proj.LocalPath, path)
+				if relPath != "." && fe != nil && fe.IsExcluded(relPath+"/") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			relPath, _ := filepath.Rel(proj.LocalPath, path)
+			relPath = filepath.ToSlash(relPath)
+
+			if fe != nil && fe.IsExcluded(relPath) {
+				ps.ignored++
+				return nil
+			}
+
+			info, err := d.Info()
+			if err != nil {
+				return nil
+			}
+
+			lines := countLines(path)
+			ps.total.files++
+			ps.total.lines += lines
+			ps.bytes += info.Size()
+
+			ext := strings.ToLower(filepath.Ext(path))
+			matched := false
+			for _, cat := range categories {
+				for _, e := range cat.exts {
+					if ext == e {
+						c := ps.byCat[cat.label]
+						c.files++
+						c.lines += lines
+						ps.byCat[cat.label] = c
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+			if !matched {
+				ps.other.files++
+				ps.other.lines += lines
+			}
+
+			return nil
+		})
+
+		allStats = append(allStats, ps)
+		grandTotal.files += ps.total.files
+		grandTotal.lines += ps.total.lines
+		grandBytes += ps.bytes
+		grandIgnored += ps.ignored
+		for k, v := range ps.byCat {
+			c := grandByCat[k]
+			c.files += v.files
+			c.lines += v.lines
+			grandByCat[k] = c
+		}
+		grandOther.files += ps.other.files
+		grandOther.lines += ps.other.lines
+	}
+
+	// Print per-project breakdown
+	for _, ps := range allStats {
+		fmt.Printf("\n%s  (%d files, %d lines, %s, %d ignored)\n",
+			ps.name, ps.total.files, ps.total.lines, humanBytes(ps.bytes), ps.ignored)
+		for _, cat := range categories {
+			if c, ok := ps.byCat[cat.label]; ok && c.files > 0 {
+				fmt.Printf("  %-14s %4d files  %6d lines\n", cat.label, c.files, c.lines)
+			}
+		}
+		if ps.other.files > 0 {
+			fmt.Printf("  %-14s %4d files  %6d lines\n", "Other", ps.other.files, ps.other.lines)
+		}
+	}
+
+	// Grand totals
+	fmt.Printf("\nTOTAL  (%d files, %d lines, %s, %d ignored)\n",
+		grandTotal.files, grandTotal.lines, humanBytes(grandBytes), grandIgnored)
+	for _, cat := range categories {
+		if c, ok := grandByCat[cat.label]; ok && c.files > 0 {
+			fmt.Printf("  %-14s %4d files  %6d lines\n", cat.label, c.files, c.lines)
+		}
+	}
+	if grandOther.files > 0 {
+		fmt.Printf("  %-14s %4d files  %6d lines\n", "Other", grandOther.files, grandOther.lines)
+	}
+}
+
+// countLines counts lines in a file. Returns 0 for binary or unreadable files.
+func countLines(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	// Read up to 8KB to detect binary content
+	buf := make([]byte, 8192)
+	n, err := f.Read(buf)
+	if n == 0 {
+		return 0
+	}
+	// Check for null bytes (binary file indicator)
+	for i := 0; i < n; i++ {
+		if buf[i] == 0 {
+			return 0 // binary file
+		}
+	}
+
+	// Count lines in the sample
+	lines := 0
+	for i := 0; i < n; i++ {
+		if buf[i] == '\n' {
+			lines++
+		}
+	}
+
+	// If file is larger than 8KB, read the rest
+	if err == nil {
+		scanner := make([]byte, 32*1024)
+		for {
+			n, err := f.Read(scanner)
+			for i := 0; i < n; i++ {
+				if scanner[i] == '\n' {
+					lines++
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+	}
+
+	// Account for last line without trailing newline
+	if n > 0 && buf[n-1] != '\n' {
+		// Check if file ended without newline
+		info, serr := os.Stat(path)
+		if serr == nil && info.Size() <= int64(n) {
+			lines++ // small file, last line has no newline
+		}
+		// For large files we already counted via scanner above
+	}
+
+	return lines
+}
+
+// humanBytes formats bytes into a human-readable string.
+func humanBytes(b int64) string {
+	switch {
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 // hashFile computes the MD5 hash of a file (local helper, mirrors state.HashFile).
@@ -841,7 +1099,8 @@ func hashFile(path string) (string, int64, error) {
 	return hex.EncodeToString(h.Sum(nil)), size, nil
 }
 
-// reconcileAll uses batch rclone copy per project (fast) instead of per-file sync.
+// reconcileAll uses batch rclone copy per project (fast) instead of per-file sync,
+// then scans for ghost files on the remote that don't exist locally.
 func reconcileAll(ctx context.Context, cfg *config.Global, st *state.Store, filters map[string]*filter.Engine, syncEngine *msync.Engine) {
 	for _, proj := range cfg.Projects {
 		slog.Info("reconciling", "project", proj.Name)
@@ -849,17 +1108,128 @@ func reconcileAll(ctx context.Context, cfg *config.Global, st *state.Store, filt
 		// Much faster than individual file syncs (1 rclone call vs N).
 		syncEngine.TaskChan <- msync.Task{Project: proj, RelPath: ""}
 	}
+
+	// Ghost scan: detect orphaned files on remote that no longer exist locally.
+	// Runs after reconciliation so that rclone copy has finished uploading.
+	// This catches rename orphans, stale files from previous bugs, etc.
+	go func() {
+		// Wait for reconciliation to finish (rclone copy tasks are queued above)
+		time.Sleep(30 * time.Second)
+		scanForGhosts(ctx, cfg, st, filters)
+	}()
 }
 
-func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *metrics.Collector, watchMgr *watcher.Manager) {
+// scanForGhosts compares remote state against local filesystem and logs orphans.
+// This is a diagnostic scan — it logs warnings but does NOT auto-delete, because
+// some orphans are intentional (delete_policy=ignore means remote copies are preserved).
+// Cleanup recommendations are written to the state DB for `smirror status` to report.
+func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, filters map[string]*filter.Engine) {
+	start := time.Now()
+	totalGhosts := 0
+	var ghostDetails []string
+
+	for _, proj := range cfg.Projects {
+		fe := filters[proj.Name]
+
+		remoteFiles, err := msync.ListRemote(cfg, proj)
+		if err != nil {
+			slog.Warn("ghost scan: failed to list remote", "project", proj.Name, "error", err)
+			continue
+		}
+
+		// Build set of local files (non-excluded, non-dir)
+		localFiles := make(map[string]bool)
+		filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if d.IsDir() {
+				relPath, _ := filepath.Rel(proj.LocalPath, path)
+				if relPath != "." && fe != nil && fe.IsExcluded(relPath+"/") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			relPath, _ := filepath.Rel(proj.LocalPath, path)
+			relPath = filepath.ToSlash(relPath)
+			if fe != nil && fe.IsExcluded(relPath) {
+				return nil
+			}
+			localFiles[relPath] = true
+			return nil
+		})
+
+		// Check each remote file
+		for _, rf := range remoteFiles {
+			if rf.IsDir {
+				continue
+			}
+			remotePath := filepath.ToSlash(rf.Path)
+			if strings.HasPrefix(remotePath, ".quarantine/") {
+				continue
+			}
+			if !localFiles[remotePath] {
+				kind := "ORPHAN"
+				if fe != nil && fe.IsExcluded(remotePath) {
+					kind = "LEAK" // excluded file still on remote
+				}
+				slog.Warn("ghost file on remote",
+					"project", proj.Name,
+					"path", remotePath,
+					"kind", kind,
+					"size", rf.Size)
+				ghostDetails = append(ghostDetails, fmt.Sprintf("[%s] %s: %s (%d bytes)",
+					kind, proj.Name, remotePath, rf.Size))
+				totalGhosts++
+			}
+		}
+	}
+
+	if totalGhosts > 0 {
+		summary := fmt.Sprintf("%d ghost files detected on remote. Run 'smirror verify' for details.", totalGhosts)
+		slog.Warn(summary)
+		st.SetMeta("ghost_scan_result", summary)
+		st.SetMeta("ghost_scan_time", time.Now().UTC().Format(time.RFC3339))
+		// Store detailed list (truncated to first 50)
+		details := strings.Join(ghostDetails, "\n")
+		if len(ghostDetails) > 50 {
+			details = strings.Join(ghostDetails[:50], "\n") + fmt.Sprintf("\n... and %d more", len(ghostDetails)-50)
+		}
+		st.SetMeta("ghost_scan_details", details)
+	} else {
+		st.SetMeta("ghost_scan_result", "clean")
+		st.SetMeta("ghost_scan_time", time.Now().UTC().Format(time.RFC3339))
+		slog.Info("ghost scan: no orphans detected on remote")
+	}
+	slog.Info("ghost scan complete", "ghosts", totalGhosts, "ms", time.Since(start).Milliseconds())
+}
+
+func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *metrics.Collector, watchMgr *watcher.Manager, syncEngine *msync.Engine) {
 	interval := cfg.HeartbeatInterval()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	reconcileInterval := cfg.ReconcileInterval()
+	reconcileTicker := time.NewTicker(reconcileInterval)
+	defer reconcileTicker.Stop()
 
 	dd := dataDir(cfg)
 
 	for {
 		select {
+		case <-reconcileTicker.C:
+			// Periodic reconciliation: catch changes invisible to fsnotify
+			// (WSL operations, network drive edits, external tools).
+			if syncEngine != nil {
+				slog.Info("periodic reconciliation")
+				for _, proj := range cfg.Projects {
+					select {
+					case syncEngine.TaskChan <- msync.Task{Project: proj, RelPath: ""}:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
 		case <-ticker.C:
 			ts := time.Now().UTC().Format(time.RFC3339)
 			st.SetMeta("last_heartbeat", ts)
@@ -894,6 +1264,7 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 						latest.Time.Format(time.RFC3339), latest.Source, latest.Message))
 				}
 			}
+
 		case <-ctx.Done():
 			return
 		}

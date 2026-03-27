@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = "1"
+const schemaVersion = "2"
 
 const createSchema = `
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS sync_state (
     rel_path    TEXT NOT NULL,
     local_hash  TEXT,
     file_size   INTEGER,
+    mtime_ns    INTEGER NOT NULL DEFAULT 0,
     synced_at   TEXT NOT NULL,
     rclone_exit INTEGER,
     PRIMARY KEY (project, rel_path)
@@ -54,6 +55,7 @@ type FileState struct {
 	RelPath    string
 	LocalHash  string
 	FileSize   int64
+	MtimeNs    int64     // local file mtime at last successful sync (nanoseconds since epoch); 0 = not yet recorded
 	SyncedAt   time.Time
 	RcloneExit int
 }
@@ -75,6 +77,9 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
 
+	// Migration: add mtime_ns column to existing databases (idempotent — error means column exists).
+	_, _ = db.Exec(`ALTER TABLE sync_state ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`)
+
 	s := &Store{db: db}
 
 	// Set schema version if not present
@@ -92,13 +97,13 @@ func (s *Store) Close() error {
 // GetFileState retrieves the sync state for a file.
 func (s *Store) GetFileState(project, relPath string) (*FileState, error) {
 	row := s.db.QueryRow(
-		"SELECT project, rel_path, local_hash, file_size, synced_at, rclone_exit FROM sync_state WHERE project = ? AND rel_path = ?",
+		"SELECT project, rel_path, local_hash, file_size, mtime_ns, synced_at, rclone_exit FROM sync_state WHERE project = ? AND rel_path = ?",
 		project, relPath,
 	)
 
 	fs := &FileState{}
 	var syncedAt string
-	err := row.Scan(&fs.Project, &fs.RelPath, &fs.LocalHash, &fs.FileSize, &syncedAt, &fs.RcloneExit)
+	err := row.Scan(&fs.Project, &fs.RelPath, &fs.LocalHash, &fs.FileSize, &fs.MtimeNs, &syncedAt, &fs.RcloneExit)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -110,16 +115,27 @@ func (s *Store) GetFileState(project, relPath string) (*FileState, error) {
 }
 
 // UpdateFileState inserts or updates the sync state for a file.
-func (s *Store) UpdateFileState(project, relPath, localHash string, fileSize int64, rcloneExit int) error {
+func (s *Store) UpdateFileState(project, relPath, localHash string, fileSize, mtimeNs int64, rcloneExit int) error {
 	_, err := s.db.Exec(
-		`INSERT INTO sync_state (project, rel_path, local_hash, file_size, synced_at, rclone_exit)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO sync_state (project, rel_path, local_hash, file_size, mtime_ns, synced_at, rclone_exit)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(project, rel_path) DO UPDATE SET
-		   local_hash = excluded.local_hash,
-		   file_size = excluded.file_size,
-		   synced_at = excluded.synced_at,
-		   rclone_exit = excluded.rclone_exit`,
-		project, relPath, localHash, fileSize, time.Now().UTC().Format(time.RFC3339), rcloneExit,
+		   local_hash    = excluded.local_hash,
+		   file_size     = excluded.file_size,
+		   mtime_ns      = excluded.mtime_ns,
+		   synced_at     = excluded.synced_at,
+		   rclone_exit   = excluded.rclone_exit`,
+		project, relPath, localHash, fileSize, mtimeNs, time.Now().UTC().Format(time.RFC3339), rcloneExit,
+	)
+	return err
+}
+
+// UpdateMtimeOnly updates just the mtime_ns for a file whose content was already
+// successfully synced. Used when bootstrapping mtime tracking on existing DB rows.
+func (s *Store) UpdateMtimeOnly(project, relPath string, mtimeNs int64) error {
+	_, err := s.db.Exec(
+		`UPDATE sync_state SET mtime_ns = ? WHERE project = ? AND rel_path = ?`,
+		mtimeNs, project, relPath,
 	)
 	return err
 }
@@ -136,7 +152,7 @@ func (s *Store) LogAction(project, relPath, action, detail string, durationMs in
 // GetAllSyncedPaths returns all synced paths for a project.
 func (s *Store) GetAllSyncedPaths(project string) (map[string]*FileState, error) {
 	rows, err := s.db.Query(
-		"SELECT project, rel_path, local_hash, file_size, synced_at, rclone_exit FROM sync_state WHERE project = ?",
+		"SELECT project, rel_path, local_hash, file_size, mtime_ns, synced_at, rclone_exit FROM sync_state WHERE project = ?",
 		project,
 	)
 	if err != nil {
@@ -148,13 +164,49 @@ func (s *Store) GetAllSyncedPaths(project string) (map[string]*FileState, error)
 	for rows.Next() {
 		fs := &FileState{}
 		var syncedAt string
-		if err := rows.Scan(&fs.Project, &fs.RelPath, &fs.LocalHash, &fs.FileSize, &syncedAt, &fs.RcloneExit); err != nil {
+		if err := rows.Scan(&fs.Project, &fs.RelPath, &fs.LocalHash, &fs.FileSize, &fs.MtimeNs, &syncedAt, &fs.RcloneExit); err != nil {
 			return nil, err
 		}
 		fs.SyncedAt, _ = time.Parse(time.RFC3339, syncedAt)
 		result[fs.RelPath] = fs
 	}
 	return result, rows.Err()
+}
+
+// GetFilesUnderDir returns all synced file paths under a directory prefix.
+// Used for directory rename/delete cleanup: when a directory is renamed,
+// we need to delete individual files from the old remote path.
+func (s *Store) GetFilesUnderDir(project, dirPrefix string) ([]string, error) {
+	// Match "dir/" prefix to find all files under that directory
+	prefix := dirPrefix + "/"
+	rows, err := s.db.Query(
+		"SELECT rel_path FROM sync_state WHERE project = ? AND (rel_path = ? OR rel_path LIKE ?)",
+		project, dirPrefix, prefix+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var paths []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		paths = append(paths, p)
+	}
+	return paths, rows.Err()
+}
+
+// DeleteFileState removes the sync state entry for a file.
+// Used after remote delete to keep state DB consistent.
+func (s *Store) DeleteFileState(project, relPath string) error {
+	_, err := s.db.Exec(
+		"DELETE FROM sync_state WHERE project = ? AND rel_path = ?",
+		project, relPath,
+	)
+	return err
 }
 
 // GetPendingFiles returns files with non-zero rclone exit (failed syncs).

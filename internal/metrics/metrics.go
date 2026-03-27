@@ -14,10 +14,11 @@ import (
 // Collector tracks operational metrics with thread-safe counters.
 type Collector struct {
 	// Atomic counters (since process start)
-	filesSynced   atomic.Int64
-	bytesUploaded atomic.Int64
-	syncErrors    atomic.Int64
-	totalLatencyMs atomic.Int64 // sum of all sync durations for average calculation
+	filesSynced      atomic.Int64
+	bytesUploaded    atomic.Int64
+	syncErrors       atomic.Int64
+	totalLatencyMs   atomic.Int64 // sum of all sync durations for average calculation
+	metadataSynced   atomic.Int64 // mtime-only updates (no content re-upload)
 
 	// Per-project state (protected by mu)
 	mu              sync.RWMutex
@@ -31,17 +32,18 @@ type Collector struct {
 
 // Status is the JSON-serializable metrics snapshot.
 type Status struct {
-	Version        string                  `json:"version"`
-	Uptime         string                  `json:"uptime"`
-	StartTime      string                  `json:"start_time"`
-	LastScanTime   string                  `json:"last_scan_time,omitempty"`
-	QueueDepth     int64                   `json:"queue_depth"`
-	FilesSynced    int64                   `json:"files_synced"`
-	BytesUploaded  int64                   `json:"bytes_uploaded"`
-	SyncErrors     int64                   `json:"sync_errors"`
-	AvgLatencyMs   int64                   `json:"avg_sync_latency_ms"`
-	Projects       map[string]ProjectStatus `json:"projects"`
-	GeneratedAt    string                  `json:"generated_at"`
+	Version         string                   `json:"version"`
+	Uptime          string                   `json:"uptime"`
+	StartTime       string                   `json:"start_time"`
+	LastScanTime    string                   `json:"last_scan_time,omitempty"`
+	QueueDepth      int64                    `json:"queue_depth"`
+	FilesSynced     int64                    `json:"files_synced"`
+	MetadataSynced  int64                    `json:"metadata_synced"`
+	BytesUploaded   int64                    `json:"bytes_uploaded"`
+	SyncErrors      int64                    `json:"sync_errors"`
+	AvgLatencyMs    int64                    `json:"avg_sync_latency_ms"`
+	Projects        map[string]ProjectStatus `json:"projects"`
+	GeneratedAt     string                   `json:"generated_at"`
 }
 
 // ProjectStatus holds per-project metrics.
@@ -79,6 +81,15 @@ func (c *Collector) RecordError(project string, errMsg string) {
 	c.mu.Lock()
 	c.lastError[project] = errMsg
 	c.lastErrorTime[project] = time.Now()
+	c.mu.Unlock()
+}
+
+// RecordMetadataSync records a successful mtime-only metadata sync.
+func (c *Collector) RecordMetadataSync(project string) {
+	c.metadataSynced.Add(1)
+
+	c.mu.Lock()
+	c.lastSync[project] = time.Now()
 	c.mu.Unlock()
 }
 
@@ -130,16 +141,17 @@ func (c *Collector) Snapshot(version string) Status {
 	}
 
 	s := Status{
-		Version:       version,
-		Uptime:        time.Since(c.startTime).Round(time.Second).String(),
-		StartTime:     c.startTime.UTC().Format(time.RFC3339),
-		QueueDepth:    c.queueDepth.Load(),
-		FilesSynced:   synced,
-		BytesUploaded: c.bytesUploaded.Load(),
-		SyncErrors:    c.syncErrors.Load(),
-		AvgLatencyMs:  avgLatency,
-		Projects:      projects,
-		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
+		Version:        version,
+		Uptime:         time.Since(c.startTime).Round(time.Second).String(),
+		StartTime:      c.startTime.UTC().Format(time.RFC3339),
+		QueueDepth:     c.queueDepth.Load(),
+		FilesSynced:    synced,
+		MetadataSynced: c.metadataSynced.Load(),
+		BytesUploaded:  c.bytesUploaded.Load(),
+		SyncErrors:     c.syncErrors.Load(),
+		AvgLatencyMs:   avgLatency,
+		Projects:       projects,
+		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 	if !c.lastScanTime.IsZero() {
 		s.LastScanTime = c.lastScanTime.UTC().Format(time.RFC3339)
@@ -196,9 +208,10 @@ func (c *Collector) FormatHuman() string {
 		bytesStr = fmt.Sprintf("%d B", bytes)
 	}
 
-	return fmt.Sprintf("Uptime: %s | Files synced: %d | Uploaded: %s | Errors: %d | Avg latency: %dms | Queue: %d",
+	return fmt.Sprintf("Uptime: %s | Files synced: %d | Metadata synced: %d | Uploaded: %s | Errors: %d | Avg latency: %dms | Queue: %d",
 		time.Since(c.startTime).Round(time.Second),
 		synced,
+		c.metadataSynced.Load(),
 		bytesStr,
 		c.syncErrors.Load(),
 		avgLatency,

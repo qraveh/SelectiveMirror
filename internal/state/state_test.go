@@ -27,15 +27,15 @@ func TestOpenAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
-	if v != "1" {
-		t.Errorf("expected schema version 1, got %s", v)
+	if v != "2" {
+		t.Errorf("expected schema version 2, got %s", v)
 	}
 }
 
 func TestUpdateAndGetFileState(t *testing.T) {
 	st := tempStore(t)
 
-	err := st.UpdateFileState("TestProj", "src/main.go", "abc123", 1024, 0)
+	err := st.UpdateFileState("TestProj", "src/main.go", "abc123", 1024, time.Now().UnixNano(), 0)
 	if err != nil {
 		t.Fatalf("UpdateFileState failed: %v", err)
 	}
@@ -62,9 +62,9 @@ func TestUpsertFileState(t *testing.T) {
 	st := tempStore(t)
 
 	// Insert
-	st.UpdateFileState("P", "f.txt", "hash1", 100, 0)
+	st.UpdateFileState("P", "f.txt", "hash1", 100, time.Now().UnixNano(), 0)
 	// Update
-	st.UpdateFileState("P", "f.txt", "hash2", 200, 0)
+	st.UpdateFileState("P", "f.txt", "hash2", 200, time.Now().UnixNano(), 0)
 
 	fs, _ := st.GetFileState("P", "f.txt")
 	if fs.LocalHash != "hash2" {
@@ -106,9 +106,9 @@ func TestLogAction(t *testing.T) {
 func TestGetAllSyncedPaths(t *testing.T) {
 	st := tempStore(t)
 
-	st.UpdateFileState("P", "a.txt", "h1", 10, 0)
-	st.UpdateFileState("P", "b.txt", "h2", 20, 0)
-	st.UpdateFileState("Q", "c.txt", "h3", 30, 0)
+	st.UpdateFileState("P", "a.txt", "h1", 10, time.Now().UnixNano(), 0)
+	st.UpdateFileState("P", "b.txt", "h2", 20, time.Now().UnixNano(), 0)
+	st.UpdateFileState("Q", "c.txt", "h3", 30, time.Now().UnixNano(), 0)
 
 	paths, err := st.GetAllSyncedPaths("P")
 	if err != nil {
@@ -122,9 +122,9 @@ func TestGetAllSyncedPaths(t *testing.T) {
 func TestGetPendingFiles(t *testing.T) {
 	st := tempStore(t)
 
-	st.UpdateFileState("P", "ok.txt", "h1", 10, 0)
-	st.UpdateFileState("P", "fail.txt", "h2", 20, 2)
-	st.UpdateFileState("P", "fail2.txt", "h3", 30, 7)
+	st.UpdateFileState("P", "ok.txt", "h1", 10, time.Now().UnixNano(), 0)
+	st.UpdateFileState("P", "fail.txt", "h2", 20, time.Now().UnixNano(), 2)
+	st.UpdateFileState("P", "fail2.txt", "h3", 30, time.Now().UnixNano(), 7)
 
 	pending, err := st.GetPendingFiles("P")
 	if err != nil {
@@ -144,9 +144,9 @@ func TestGetLastSyncTime(t *testing.T) {
 		t.Error("expected zero time for no syncs")
 	}
 
-	st.UpdateFileState("P", "a.txt", "h1", 10, 0)
+	st.UpdateFileState("P", "a.txt", "h1", 10, time.Now().UnixNano(), 0)
 	time.Sleep(10 * time.Millisecond)
-	st.UpdateFileState("P", "b.txt", "h2", 20, 0)
+	st.UpdateFileState("P", "b.txt", "h2", 20, time.Now().UnixNano(), 0)
 
 	ts, err := st.GetLastSyncTime("P")
 	if err != nil {
