@@ -1,0 +1,9 @@
+# SelectiveMirror .syncignore
+_testrun_*/
+*.exe
+*.db
+*.db-wal
+*.db-shm
+heartbeat.txt
+status.json
+smirror.lock

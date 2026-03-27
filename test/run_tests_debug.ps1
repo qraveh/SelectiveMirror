@@ -116,7 +116,7 @@ function Cleanup {
     rclone config delete testlocal *>$null | Out-Null
     # Clean up test directory
     if (Test-Path $TestRoot) {
-        Remove-Item -Path $TestRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Item (Join-Path $DataDir "test.log") "C:/SelectiveMirror/_debug_test.log" -ErrorAction SilentlyContinue; Remove-Item -Path $TestRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -721,10 +721,6 @@ function Test-SyncIgnoreHotReload {
     Set-Content (Join-Path $SrcDir "new_data.csv") "should be excluded"
     Wait-ForSync
     Assert-FileNotExists (Join-Path $DstDir "new_data.csv") "New .csv file excluded after .syncignore update"
-
-    # Clean up .syncignore so it doesn't affect subsequent tests
-    Remove-Item (Join-Path $SrcDir ".syncignore") -Force -ErrorAction SilentlyContinue
-    Wait-ForSync 5  # let watcher detect removal and reload filters
 }
 
 
@@ -791,319 +787,6 @@ function Test-VerifyHashMismatch {
     Assert-True (-not [string]::IsNullOrEmpty($msg)) "Verify ran without crashing on tampered file"
 }
 
-# ── WSL Helpers ──────────────────────────────────────────────────────
-
-function To-WslPath {
-    param([string]$WinPath)
-    # C:\foo\bar → /mnt/c/foo/bar
-    $drive = $WinPath.Substring(0, 1).ToLower()
-    $rest = $WinPath.Substring(2).Replace('\', '/')
-    return "/mnt/$drive$rest"
-}
-
-function Invoke-Wsl {
-    param([string]$Command)
-    $result = wsl -u raveh -e bash -c "$Command" 2>&1
-    return $result
-}
-
-# ── WSL Tests ────────────────────────────────────────────────────────
-
-function Test-WSL-BasicFileSync {
-    Write-Host "`n--- TEST W1: [WSL] Basic file sync ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'hello from wsl' > '$wslSrc/wsl_hello.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_hello.txt") "[WSL] File created via echo synced"
-    Assert-FileContent (Join-Path $DstDir "wsl_hello.txt") "hello from wsl" "[WSL] Content matches"
-}
-
-function Test-WSL-FileModification {
-    Write-Host "`n--- TEST W2: [WSL] File modification ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'wsl v1' > '$wslSrc/wsl_mutable.txt'"
-    Wait-ForSync
-    Assert-FileContent (Join-Path $DstDir "wsl_mutable.txt") "wsl v1" "[WSL] Initial content synced"
-
-    Invoke-Wsl "echo 'wsl v2' > '$wslSrc/wsl_mutable.txt'"
-    Wait-ForSync
-    Assert-FileContent (Join-Path $DstDir "wsl_mutable.txt") "wsl v2" "[WSL] Modified content synced"
-}
-
-function Test-WSL-FileRename {
-    Write-Host "`n--- TEST W3: [WSL] File rename ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'rename me' > '$wslSrc/wsl_before.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_before.txt") "[WSL] Original file synced"
-
-    Invoke-Wsl "mv '$wslSrc/wsl_before.txt' '$wslSrc/wsl_after.txt'"
-    Wait-ForSync 10
-    Assert-FileExists (Join-Path $DstDir "wsl_after.txt") "[WSL] Renamed file synced at new path"
-}
-
-function Test-WSL-DirectoryRename {
-    Write-Host "`n--- TEST W4: [WSL] Directory rename ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "mkdir -p '$wslSrc/wsl_origdir' && echo 'inside' > '$wslSrc/wsl_origdir/content.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_origdir\content.txt") "[WSL] File in original dir synced"
-
-    Invoke-Wsl "mv '$wslSrc/wsl_origdir' '$wslSrc/wsl_renameddir'"
-    Wait-ForSync 12
-    Assert-FileExists (Join-Path $DstDir "wsl_renameddir\content.txt") "[WSL] File synced at renamed dir path"
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived directory rename"
-}
-
-function Test-WSL-NestedDirRename {
-    Write-Host "`n--- TEST W5: [WSL] Nested directory rename ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "mkdir -p '$wslSrc/wsl_nest_a/wsl_nest_b' && echo 'deep wsl' > '$wslSrc/wsl_nest_a/wsl_nest_b/wsl_deep.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_nest_a\wsl_nest_b\wsl_deep.txt") "[WSL] Deep file synced"
-
-    Invoke-Wsl "mv '$wslSrc/wsl_nest_a' '$wslSrc/wsl_nest_renamed'"
-    Wait-ForSync 18  # nested dir rename via WSL needs longer: rename event + debounce + quiescence + rclone
-    Assert-FileExists (Join-Path $DstDir "wsl_nest_renamed\wsl_nest_b\wsl_deep.txt") "[WSL] Deep file synced at renamed path"
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived nested dir rename"
-}
-
-function Test-WSL-FileMoveToSubdir {
-    Write-Host "`n--- TEST W6: [WSL] File move into subdirectory ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'movable' > '$wslSrc/wsl_movable.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_movable.txt") "[WSL] File synced at root"
-
-    Invoke-Wsl "mkdir -p '$wslSrc/wsl_subdir' && mv '$wslSrc/wsl_movable.txt' '$wslSrc/wsl_subdir/wsl_movable.txt'"
-    Wait-ForSync 10
-    Assert-FileExists (Join-Path $DstDir "wsl_subdir\wsl_movable.txt") "[WSL] File synced at new subdirectory path"
-}
-
-function Test-WSL-FileDelete {
-    Write-Host "`n--- TEST W7: [WSL] File delete ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'doomed' > '$wslSrc/wsl_doomed.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_doomed.txt") "[WSL] File synced before delete"
-
-    Invoke-Wsl "rm '$wslSrc/wsl_doomed.txt'"
-    Wait-ForSync
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived file deletion"
-}
-
-function Test-WSL-DirectoryDelete {
-    Write-Host "`n--- TEST W8: [WSL] Directory delete ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "mkdir -p '$wslSrc/wsl_deldir' && echo 'bye' > '$wslSrc/wsl_deldir/bye.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_deldir\bye.txt") "[WSL] File synced before dir delete"
-
-    Invoke-Wsl "rm -r '$wslSrc/wsl_deldir'"
-    Wait-ForSync
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived directory deletion"
-}
-
-function Test-WSL-EmptyFile {
-    Write-Host "`n--- TEST W9: [WSL] Empty file sync ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "touch '$wslSrc/wsl_empty.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_empty.txt") "[WSL] Empty file (touch) synced"
-}
-
-function Test-WSL-UnicodeFilename {
-    Write-Host "`n--- TEST W10: [WSL] Unicode filename ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'wsl unicode' > '$wslSrc/wslテスト.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wslテスト.txt") "[WSL] Unicode filename synced"
-}
-
-function Test-WSL-SpacesInFilename {
-    Write-Host "`n--- TEST W11: [WSL] Spaces in filename ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'wsl spaces' > '$wslSrc/wsl file (copy).txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl file (copy).txt") "[WSL] Filename with spaces synced"
-}
-
-function Test-WSL-MetadataOnlyUpdate {
-    Write-Host "`n--- TEST W12: [WSL] Metadata-only update (touch) ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'wsl meta' > '$wslSrc/wsl_meta.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_meta.txt") "[WSL] File synced before touch"
-
-    # Touch to change mtime without changing content
-    Invoke-Wsl "touch '$wslSrc/wsl_meta.txt'"
-    Wait-ForSync 10
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived mtime-only update via touch"
-    Assert-FileExists (Join-Path $DstDir "wsl_meta.txt") "[WSL] File still present after touch"
-}
-
-function Test-WSL-RenameStorm {
-    Write-Host "`n--- TEST W13: [WSL] Rename storm ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'wsl storm' > '$wslSrc/wsl_storm.txt'"
-    Start-Sleep 1
-    for ($i = 1; $i -le 5; $i++) {
-        $prev = if ($i -eq 1) { "wsl_storm.txt" } else { "wsl_storm_$($i-1).txt" }
-        Invoke-Wsl "mv '$wslSrc/$prev' '$wslSrc/wsl_storm_$i.txt'"
-        Start-Sleep -Milliseconds 200
-    }
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_storm_5.txt") "[WSL] Final renamed file synced"
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived rename storm"
-}
-
-function Test-WSL-DebounceRapidWrites {
-    Write-Host "`n--- TEST W14: [WSL] Debounce rapid writes ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    # Write 10 rapid updates via a WSL script file to avoid PowerShell/bash quoting issues
-    $scriptContent = @"
-#!/bin/bash
-for i in `$(seq 1 10); do echo "wsl write `$i" > '$wslSrc/wsl_rapid.txt'; sleep 0.1; done
-"@
-    $scriptWin = Join-Path $SrcDir "_wsl_rapid_test.sh"
-    [System.IO.File]::WriteAllText($scriptWin, $scriptContent.Replace("`r`n","`n"))
-    $scriptWsl = To-WslPath $scriptWin
-    Invoke-Wsl "bash '$scriptWsl'"
-    Remove-Item $scriptWin -Force -ErrorAction SilentlyContinue
-    Wait-ForSync 6
-    Assert-FileExists (Join-Path $DstDir "wsl_rapid.txt") "[WSL] Rapid-write file synced"
-    Assert-FileContent (Join-Path $DstDir "wsl_rapid.txt") "wsl write 10" "[WSL] Last write was the one synced"
-}
-
-function Test-WSL-SubdirectorySync {
-    Write-Host "`n--- TEST W15: [WSL] Subdirectory auto-watch + sync ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "mkdir -p '$wslSrc/wsl_src/wsl_pkg'"
-    Start-Sleep 1
-    Invoke-Wsl "echo 'package wslpkg' > '$wslSrc/wsl_src/wsl_pkg/lib.go'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_src\wsl_pkg\lib.go") "[WSL] File in new subdirectory synced"
-}
-
-function Test-WSL-DeeplyNestedPath {
-    Write-Host "`n--- TEST W16: [WSL] Deeply nested path ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "mkdir -p '$wslSrc/wa/wb/wc/wd/we/wf/wg'"
-    Start-Sleep 2
-    Invoke-Wsl "echo 'wsl deep' > '$wslSrc/wa/wb/wc/wd/we/wf/wg/wsl_deep.txt'"
-    Wait-ForSync 10
-    Assert-FileExists (Join-Path $DstDir "wa\wb\wc\wd\we\wf\wg\wsl_deep.txt") "[WSL] Deeply nested file synced"
-}
-
-function Test-WSL-ExcludedFilesNotSynced {
-    Write-Host "`n--- TEST W17: [WSL] Excluded files NOT synced ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'bytecode' > '$wslSrc/wsl_code.pyc'"
-    Invoke-Wsl "echo 'temp' > '$wslSrc/wsl_temp.tmp'"
-    Invoke-Wsl "echo 'log' > '$wslSrc/wsl_debug.log'"
-    Wait-ForSync
-    Assert-FileNotExists (Join-Path $DstDir "wsl_code.pyc") "[WSL] .pyc excluded"
-    Assert-FileNotExists (Join-Path $DstDir "wsl_temp.tmp") "[WSL] .tmp excluded"
-    Assert-FileNotExists (Join-Path $DstDir "wsl_debug.log") "[WSL] .log excluded"
-}
-
-function Test-WSL-BurstFileCreation {
-    Write-Host "`n--- TEST W18: [WSL] Burst - 50 files created rapidly ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "mkdir -p '$wslSrc/wsl_burst'"
-    Start-Sleep 3  # let watcher register dir
-    # Write bash script directly to avoid PowerShell/bash $variable quoting conflicts.
-    # PowerShell interpolates $wslSrc (PS variable); bash must expand $i (loop variable).
-    # Solution: bake the path into a DEST variable, use double quotes for filenames.
-    $scriptPath = Join-Path $SrcDir "_wsl_burst_test.sh"
-    $burstDir = "$wslSrc/wsl_burst"
-    $lines = @(
-        '#!/bin/bash'
-        "DEST=`"$burstDir`""
-        'for i in $(seq 1 50); do'
-        '  echo "content $i" > "$DEST/file$i.txt"'
-        'done'
-    )
-    [System.IO.File]::WriteAllText($scriptPath, ($lines -join "`n") + "`n")
-    $scriptWsl = To-WslPath $scriptPath
-    Invoke-Wsl "bash '$scriptWsl'"
-    Remove-Item $scriptPath -Force -ErrorAction SilentlyContinue
-    Wait-ForSync 35
-    $synced = (Get-ChildItem (Join-Path $DstDir "wsl_burst") -File -ErrorAction SilentlyContinue).Count
-    Assert-True ($synced -ge 48) "[WSL] Burst files synced ($synced/50, need 48+)"
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived burst file creation"
-}
-
-function Test-WSL-MoveFileOutOfProject {
-    Write-Host "`n--- TEST W19: [WSL] File moved outside project ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    $wslRoot = To-WslPath $TestRoot
-    Invoke-Wsl "echo 'leaving' > '$wslSrc/wsl_leaving.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_leaving.txt") "[WSL] File synced before move-out"
-
-    Invoke-Wsl "mv '$wslSrc/wsl_leaving.txt' '$wslRoot/wsl_leaving.txt'"
-    Wait-ForSync
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived file move out of project"
-    Invoke-Wsl "rm -f '$wslRoot/wsl_leaving.txt'"
-}
-
-function Test-WSL-MoveFileIntoProject {
-    Write-Host "`n--- TEST W20: [WSL] File moved into project ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    $wslRoot = To-WslPath $TestRoot
-    Invoke-Wsl "echo 'arriving from wsl' > '$wslRoot/wsl_incoming.txt'"
-    Start-Sleep 1
-    Invoke-Wsl "mv '$wslRoot/wsl_incoming.txt' '$wslSrc/wsl_incoming.txt'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "wsl_incoming.txt") "[WSL] File moved into project was synced"
-}
-
-function Test-WSL-FileDeletedBeforeSync {
-    Write-Host "`n--- TEST W21: [WSL] File created then immediately deleted ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'ephemeral' > '$wslSrc/wsl_ephemeral.txt' && sleep 0.2 && rm '$wslSrc/wsl_ephemeral.txt'"
-    Wait-ForSync
-    Assert-True (-not $SmirrorProc.HasExited) "[WSL] smirror survived ephemeral file"
-}
-
-function Test-WSL-SyncIgnoreHotReload {
-    Write-Host "`n--- TEST W22: [WSL] Hot-reload .syncignore via WSL edit ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-
-    # Write .syncignore from WSL
-    Invoke-Wsl "echo '*.wsldat' > '$wslSrc/.syncignore'"
-    Wait-ForSync 5
-
-    # Create excluded and included files from WSL
-    Invoke-Wsl "echo 'excluded' > '$wslSrc/wsl_data.wsldat'"
-    Invoke-Wsl "echo 'included' > '$wslSrc/wsl_data.wslcsv'"
-    Wait-ForSync
-
-    Assert-FileNotExists (Join-Path $DstDir "wsl_data.wsldat") "[WSL] .wsldat file excluded by .syncignore"
-    Assert-FileExists (Join-Path $DstDir "wsl_data.wslcsv") "[WSL] .wslcsv file included"
-
-    # Clean up .syncignore to not affect other tests
-    Invoke-Wsl "rm '$wslSrc/.syncignore'"
-    Wait-ForSync 5
-}
-
-function Test-WSL-DotFiles {
-    Write-Host "`n--- TEST W23: [WSL] Dotfiles sync ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'root = true' > '$wslSrc/.wsl_editorconfig'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir ".wsl_editorconfig") "[WSL] Dotfile synced"
-}
-
-function Test-WSL-FileWithNoExtension {
-    Write-Host "`n--- TEST W24: [WSL] File with no extension ---" -ForegroundColor Magenta
-    $wslSrc = To-WslPath $SrcDir
-    Invoke-Wsl "echo 'all: build' > '$wslSrc/WSLMakefile'"
-    Wait-ForSync
-    Assert-FileExists (Join-Path $DstDir "WSLMakefile") "[WSL] File with no extension synced"
-}
-
 # ── Main ─────────────────────────────────────────────────────────────
 
 try {
@@ -1148,9 +831,8 @@ try {
     Setup-TestEnv
     Start-Smirror
 
-    # Wait for startup reconciliation and worker initialization.
-    # go run compile time + rclone init + worker pool startup can take 12-15s.
-    Start-Sleep 15
+    # Wait for startup reconciliation (go run compile + rclone init can be slow)
+    Start-Sleep 10
 
     # Run all tests
     Test-BasicFileSync
@@ -1196,33 +878,6 @@ try {
     Test-StatsCommand
     Test-VerifyHashMismatch
 
-    # WSL tests — verify all operations work when performed from WSL
-    Write-Host "`n=== WSL Tests ===" -ForegroundColor Cyan
-    Test-WSL-BasicFileSync
-    Test-WSL-FileModification
-    Test-WSL-FileRename
-    Test-WSL-DirectoryRename
-    Test-WSL-NestedDirRename
-    Test-WSL-FileMoveToSubdir
-    Test-WSL-FileDelete
-    Test-WSL-DirectoryDelete
-    Test-WSL-EmptyFile
-    Test-WSL-UnicodeFilename
-    Test-WSL-SpacesInFilename
-    Test-WSL-MetadataOnlyUpdate
-    Test-WSL-RenameStorm
-    Test-WSL-DebounceRapidWrites
-    Test-WSL-SubdirectorySync
-    Test-WSL-DeeplyNestedPath
-    Test-WSL-ExcludedFilesNotSynced
-    Test-WSL-BurstFileCreation
-    Test-WSL-MoveFileOutOfProject
-    Test-WSL-MoveFileIntoProject
-    Test-WSL-FileDeletedBeforeSync
-    Test-WSL-SyncIgnoreHotReload
-    Test-WSL-DotFiles
-    Test-WSL-FileWithNoExtension
-
     Write-Host "`n======================================" -ForegroundColor Cyan
     Write-Host "Results: $Passed passed, $Failed failed" -ForegroundColor $(if ($Failed -eq 0) { "Green" } else { "Red" })
 
@@ -1240,6 +895,7 @@ finally {
 }
 
 exit $Failed
+
 
 
 

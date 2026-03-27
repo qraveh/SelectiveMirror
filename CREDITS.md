@@ -42,5 +42,4 @@ if the binary is distributed. See THIRD-PARTY-LICENSES.txt for full texts.
 
 ---
 
-Credit is appreciated but not required.
 No support, maintenance, or liability obligations are assumed.
