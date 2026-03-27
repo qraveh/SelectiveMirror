@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -86,6 +87,8 @@ func main() {
 		cmdVerify(configPath, cmdArgs)
 	case "stats":
 		cmdStats(configPath)
+	case "report-bug":
+		cmdReportBug(configPath, cmdArgs)
 	case "version":
 		fmt.Printf("smirror %s\n", version)
 	case "help", "--help", "-h":
@@ -114,6 +117,7 @@ Commands:
   doctor                    Run comprehensive self-test diagnostics
   verify [project]          Compare local vs remote and report drift
   stats                     Show file counts and line counts across all projects
+  report-bug [--stdout]     Generate diagnostic report for bug filing
   version                   Show version
 
 Options:
@@ -887,6 +891,125 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 	fmt.Println()
 
 	return drift
+}
+
+func cmdReportBug(configPath string, args []string) {
+	toStdout := false
+	openBrowser := false
+	for _, a := range args {
+		switch a {
+		case "--stdout":
+			toStdout = true
+		case "--open":
+			openBrowser = true
+		}
+	}
+
+	var b strings.Builder
+	tz := time.Now().Format("-07:00")
+	now := time.Now().Format("2006-01-02T15:04:05") + tz
+
+	b.WriteString(fmt.Sprintf("smirror bug report — generated %s\n", now))
+	b.WriteString(fmt.Sprintf("smirror version: %s\n", version))
+	b.WriteString(fmt.Sprintf("platform: %s/%s\n", runtime.GOOS, runtime.GOARCH))
+	b.WriteString(fmt.Sprintf("go version: %s\n", runtime.Version()))
+
+	// rclone info
+	rcloneInfo, err := rclone.Detect("")
+	if err != nil {
+		b.WriteString(fmt.Sprintf("rclone: NOT FOUND (%v)\n", err))
+	} else {
+		compat, msg := rcloneInfo.CompatCheck()
+		b.WriteString(fmt.Sprintf("rclone version: %s\n", rcloneInfo.Version))
+		b.WriteString(fmt.Sprintf("rclone path: %s\n", rcloneInfo.Path))
+		b.WriteString(fmt.Sprintf("rclone os: %s\n", rcloneInfo.OS))
+		_ = compat
+		b.WriteString(fmt.Sprintf("rclone compat: %s\n", msg))
+	}
+
+	// Config summary (sanitized)
+	b.WriteString("\n--- Config ---\n")
+	cfg, cfgErr := config.Load(configPath)
+	if cfgErr != nil {
+		b.WriteString(fmt.Sprintf("config error: %v\n", cfgErr))
+	} else {
+		b.WriteString(fmt.Sprintf("config path: %s\n", configPath))
+		b.WriteString(fmt.Sprintf("projects: %d\n", len(cfg.Projects)))
+		b.WriteString(fmt.Sprintf("delete_policy: %s\n", cfg.DeletePolicy()))
+		b.WriteString(fmt.Sprintf("sync_workers: %d\n", cfg.Workers()))
+		b.WriteString(fmt.Sprintf("reconcile_interval: %s\n", cfg.ReconcileInterval()))
+		b.WriteString(fmt.Sprintf("bandwidth_limit: %s\n", cfg.BandwidthLimit))
+		for _, p := range cfg.Projects {
+			b.WriteString(fmt.Sprintf("  project: %s (%s)\n", p.Name, p.LocalPath))
+			// Redact remote path — only show remote name
+			parts := strings.SplitN(p.Remote, ":", 2)
+			if len(parts) >= 2 {
+				b.WriteString(fmt.Sprintf("    remote: %s:<REDACTED>\n", parts[0]))
+			}
+		}
+
+		// State DB summary
+		b.WriteString("\n--- State ---\n")
+		st, stErr := state.Open(cfg.StateDB)
+		if stErr != nil {
+			b.WriteString(fmt.Sprintf("state db error: %v\n", stErr))
+		} else {
+			defer st.Close()
+			for _, p := range cfg.Projects {
+				count := st.CountFiles(p.Name)
+				b.WriteString(fmt.Sprintf("  %s: %d synced files\n", p.Name, count))
+			}
+			if hb, err := st.GetMeta("heartbeat"); err == nil && hb != "" {
+				b.WriteString(fmt.Sprintf("  last heartbeat: %s\n", hb))
+			}
+		}
+
+		// Recent log lines (sanitized)
+		b.WriteString("\n--- Recent Logs (last 30 lines) ---\n")
+		logData, logErr := os.ReadFile(cfg.LogFile)
+		if logErr != nil {
+			b.WriteString(fmt.Sprintf("log error: %v\n", logErr))
+		} else {
+			lines := strings.Split(string(logData), "\n")
+			start := 0
+			if len(lines) > 30 {
+				start = len(lines) - 30
+			}
+			home, _ := os.UserHomeDir()
+			for _, line := range lines[start:] {
+				// Redact user paths
+				if home != "" {
+					line = strings.ReplaceAll(line, home, "<USER_HOME>")
+				}
+				b.WriteString(line + "\n")
+			}
+		}
+	}
+
+	report := b.String()
+
+	if toStdout {
+		fmt.Print(report)
+		return
+	}
+
+	if openBrowser {
+		fmt.Print(report)
+		fmt.Println("\n--- Opening browser ---")
+		url := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
+		exec.Command("cmd", "/c", "start", url).Start()
+		return
+	}
+
+	// Write to file
+	ts := time.Now().Format("20060102-150405")
+	filename := fmt.Sprintf("smirror-bug-report-%s.txt", ts)
+	if err := os.WriteFile(filename, []byte(report), 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write report: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Bug report written to: %s\n", filename)
+	fmt.Println("Paste into a GitHub issue at: https://github.com/qraveh/SelectiveMirror/issues/new")
 }
 
 func cmdStats(configPath string) {

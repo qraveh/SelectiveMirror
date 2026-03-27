@@ -257,6 +257,16 @@ func (s *Store) SetMeta(key, value string) error {
 	return err
 }
 
+// CountFiles returns the number of synced files for a project.
+func (s *Store) CountFiles(project string) int {
+	row := s.db.QueryRow("SELECT COUNT(*) FROM sync_state WHERE project = ?", project)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return 0
+	}
+	return count
+}
+
 // GetMeta retrieves a value from the meta table.
 func (s *Store) GetMeta(key string) (string, error) {
 	row := s.db.QueryRow("SELECT value FROM meta WHERE key = ?", key)
