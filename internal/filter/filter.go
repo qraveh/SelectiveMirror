@@ -17,12 +17,17 @@ type Engine struct {
 
 	globalIgnore  *ignore.GitIgnore
 	projectIgnore *ignore.GitIgnore
+	mergedIgnore  *ignore.GitIgnore // global + project rules merged for correct negation
 	globalRules   []string
 	projectRules  []string
 
 	// Stored for Reload()
 	globalExcludes []string
 	syncIgnorePath string
+
+	// Generation counter: incremented on each successful Reload that changes rules.
+	// Used by sync engine to detect stale filter files (SM-044).
+	generation uint64
 }
 
 // New creates a filter engine with global excludes and an optional project .syncignore.
@@ -41,7 +46,23 @@ func New(globalExcludes []string, syncIgnorePath string) (*Engine, error) {
 		return nil, err
 	}
 
+	e.rebuildMerged()
 	return e, nil
+}
+
+// rebuildMerged creates a single GitIgnore from global rules first, then project rules.
+// This preserves gitignore last-match-wins semantics so that project negation patterns
+// (e.g., !important.log) correctly override global exclusions (e.g., *.log).
+// Caller must hold e.mu for write (or be in constructor before sharing).
+func (e *Engine) rebuildMerged() {
+	var all []string
+	all = append(all, e.globalRules...)
+	all = append(all, e.projectRules...)
+	if len(all) > 0 {
+		e.mergedIgnore = ignore.CompileIgnoreLines(all...)
+	} else {
+		e.mergedIgnore = nil
+	}
 }
 
 // loadProjectIgnore reads and compiles the project .syncignore file.
@@ -97,13 +118,16 @@ func (e *Engine) Reload() (changed bool, err error) {
 	if err := e.loadProjectIgnore(); err != nil {
 		return false, err
 	}
+	e.rebuildMerged()
 
 	// Detect if rules actually changed
 	if len(oldRules) != len(e.projectRules) {
+		e.generation++
 		return true, nil
 	}
 	for i := range oldRules {
 		if oldRules[i] != e.projectRules[i] {
+			e.generation++
 			return true, nil
 		}
 	}
@@ -115,8 +139,20 @@ func (e *Engine) SyncIgnorePath() string {
 	return e.syncIgnorePath
 }
 
+// Generation returns the filter's generation counter (incremented on each rule change).
+// Used by the sync engine to detect if a filter was hot-reloaded between task
+// enqueue and execution (SM-044).
+func (e *Engine) Generation() uint64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.generation
+}
+
 // IsExcluded returns true if the relative path should be excluded from sync.
 // relPath should use forward slashes. Safe for concurrent use.
+// Uses a merged ignore instance (global rules first, project rules after) so
+// that project negation patterns (e.g., !important.log) correctly override
+// global exclusions (e.g., *.log) via gitignore last-match-wins semantics.
 func (e *Engine) IsExcluded(relPath string) bool {
 	// Normalize to forward slashes for consistent matching
 	relPath = filepath.ToSlash(relPath)
@@ -124,20 +160,9 @@ func (e *Engine) IsExcluded(relPath string) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	// Project-specific rules take precedence (may negate global rules)
-	if e.projectIgnore != nil {
-		if e.projectIgnore.MatchesPath(relPath) {
-			return true
-		}
+	if e.mergedIgnore != nil {
+		return e.mergedIgnore.MatchesPath(relPath)
 	}
-
-	// Global excludes
-	if e.globalIgnore != nil {
-		if e.globalIgnore.MatchesPath(relPath) {
-			return true
-		}
-	}
-
 	return false
 }
 
@@ -160,18 +185,24 @@ func (e *Engine) EffectiveRules() []string {
 
 // GenerateRcloneFilterFile creates a temporary file with rclone filter rules.
 // Returns the path to the temp file. Caller must remove it after use. Safe for concurrent use.
+//
+// Gitignore uses last-match-wins; rclone uses first-match-wins. The merged
+// gitignore order is [global..., project...] so the last project rule has
+// highest priority. Reversing this combined order gives correct rclone
+// semantics: the highest-priority rule (last in gitignore) becomes the
+// first match in rclone (SM-037).
 func (e *Engine) GenerateRcloneFilterFile() (string, error) {
 	e.mu.RLock()
+
+	// Build combined rules in gitignore order (global first, project second)
+	var combined []string
+	combined = append(combined, e.globalRules...)
+	combined = append(combined, e.projectRules...)
+
+	// Reverse so last-match-wins becomes first-match-wins
 	var lines []string
-
-	// Project-specific rules first (negations must come before exclusions in rclone)
-	for _, rule := range e.projectRules {
-		lines = append(lines, toRcloneFilter(rule))
-	}
-
-	// Global excludes
-	for _, rule := range e.globalRules {
-		lines = append(lines, toRcloneFilter(rule))
+	for i := len(combined) - 1; i >= 0; i-- {
+		lines = append(lines, toRcloneFilter(combined[i]))
 	}
 	e.mu.RUnlock()
 

@@ -22,9 +22,14 @@ type Project struct {
 }
 
 // DebounceDuration returns the debounce interval as a time.Duration.
+// Returns 0 when DebounceSec <= 0, which signals dynamic debounce mode:
+// events fire immediately unless rapid repeated writes are detected,
+// in which case a short debounce timer activates automatically.
+// A positive value enables static debounce: every event is delayed by
+// this duration, with the timer resetting on each new event.
 func (p Project) DebounceDuration() time.Duration {
 	if p.DebounceSec <= 0 {
-		return 5 * time.Second
+		return 0 // dynamic debounce
 	}
 	return time.Duration(p.DebounceSec) * time.Second
 }
@@ -69,6 +74,8 @@ type Global struct {
 	SyncWorkers        int          `yaml:"sync_workers"`          // concurrent sync workers (default 4)
 	DeletePolicyStr    string       `yaml:"delete_policy"`    // "ignore", "mirror", "quarantine"
 	QuarantineDays     int          `yaml:"quarantine_days"`  // days to keep quarantined files (default 30)
+	VerifyIntervalS    int          `yaml:"verify_interval_sec"`  // periodic verify interval (default 21600 = 6h, 0 = disabled)
+	NotifyEnabled      *bool        `yaml:"notify_enabled"`       // Windows toast notifications (default true)
 }
 
 // HeartbeatInterval returns the heartbeat interval as a time.Duration.
@@ -117,6 +124,25 @@ func (g Global) QuarantineRetention() int {
 		return 30
 	}
 	return g.QuarantineDays
+}
+
+// VerifyInterval returns the periodic verify interval (default 6 hours, 0 = disabled).
+func (g Global) VerifyInterval() time.Duration {
+	if g.VerifyIntervalS < 0 {
+		return 0 // disabled
+	}
+	if g.VerifyIntervalS == 0 {
+		return 6 * time.Hour
+	}
+	return time.Duration(g.VerifyIntervalS) * time.Second
+}
+
+// NotifyEnabled returns whether Windows toast notifications are enabled (default true).
+func (g Global) IsNotifyEnabled() bool {
+	if g.NotifyEnabled == nil {
+		return true
+	}
+	return *g.NotifyEnabled
 }
 
 // DefaultDataDir returns the default data directory (~/.selectivemirror/).
@@ -206,10 +232,7 @@ func (g *Global) Validate() error {
 			return fmt.Errorf("project %q: local_path %q is not a directory", p.Name, p.LocalPath)
 		}
 
-		// Apply defaults
-		if p.DebounceSec <= 0 {
-			g.Projects[i].DebounceSec = 5
-		}
+		// Apply defaults (DebounceSec 0 = dynamic debounce, don't override)
 		if p.MaxFileSizeMB <= 0 {
 			g.Projects[i].MaxFileSizeMB = 100
 		}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -67,18 +68,33 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating state dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("opening state db: %w", err)
 	}
+
+	// Serialize all DB access through a single connection. SQLite supports
+	// only one writer at a time; with multiple connections from database/sql's
+	// pool, concurrent writers get SQLITE_BUSY even with busy_timeout because
+	// each connection holds its own lock state. A single connection + WAL mode
+	// gives safe concurrent goroutine access via database/sql's internal mutex (SM-047).
+	db.SetMaxOpenConns(1)
 
 	if _, err := db.Exec(createSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
 
-	// Migration: add mtime_ns column to existing databases (idempotent — error means column exists).
-	_, _ = db.Exec(`ALTER TABLE sync_state ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`)
+	// Migration: add mtime_ns column to existing databases.
+	// "duplicate column name" means column already exists — expected and safe to ignore.
+	// Any other error (I/O, corruption, lock) must be surfaced.
+	if _, err := db.Exec(`ALTER TABLE sync_state ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`); err != nil {
+		errMsg := err.Error()
+		if !strings.Contains(errMsg, "duplicate column name") && !strings.Contains(errMsg, "already exists") {
+			db.Close()
+			return nil, fmt.Errorf("migration (add mtime_ns): %w", err)
+		}
+	}
 
 	s := &Store{db: db}
 
@@ -173,14 +189,25 @@ func (s *Store) GetAllSyncedPaths(project string) (map[string]*FileState, error)
 	return result, rows.Err()
 }
 
+// escapeLIKE escapes SQL LIKE wildcard characters (%, _, \) in s so that
+// they are matched literally when used with ESCAPE '\'.
+func escapeLIKE(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
 // GetFilesUnderDir returns all synced file paths under a directory prefix.
 // Used for directory rename/delete cleanup: when a directory is renamed,
 // we need to delete individual files from the old remote path.
 func (s *Store) GetFilesUnderDir(project, dirPrefix string) ([]string, error) {
-	// Match "dir/" prefix to find all files under that directory
-	prefix := dirPrefix + "/"
+	// Match "dir/" prefix to find all files under that directory.
+	// Escape LIKE wildcards (%, _, \) in the directory name so that
+	// characters like _ and % are matched literally (SM-046).
+	prefix := escapeLIKE(dirPrefix) + "/"
 	rows, err := s.db.Query(
-		"SELECT rel_path FROM sync_state WHERE project = ? AND (rel_path = ? OR rel_path LIKE ?)",
+		`SELECT rel_path FROM sync_state WHERE project = ? AND (rel_path = ? OR rel_path LIKE ? ESCAPE '\')`,
 		project, dirPrefix, prefix+"%",
 	)
 	if err != nil {

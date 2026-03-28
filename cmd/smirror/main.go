@@ -24,8 +24,10 @@ import (
 	"github.com/qraveh/SelectiveMirror/internal/lock"
 	"github.com/qraveh/SelectiveMirror/internal/logging"
 	"github.com/qraveh/SelectiveMirror/internal/metrics"
-	"github.com/qraveh/SelectiveMirror/internal/state"
+	"github.com/qraveh/SelectiveMirror/internal/notify"
 	"github.com/qraveh/SelectiveMirror/internal/rclone"
+	"github.com/qraveh/SelectiveMirror/internal/service"
+	"github.com/qraveh/SelectiveMirror/internal/state"
 	msync "github.com/qraveh/SelectiveMirror/internal/sync"
 	"github.com/qraveh/SelectiveMirror/internal/watcher"
 
@@ -35,6 +37,13 @@ import (
 var version = "dev"
 
 func main() {
+	// If running as a Windows Service, the SCM invokes us with no args.
+	// Detect this and enter service mode immediately.
+	if service.IsWindowsService() {
+		serviceMain()
+		return
+	}
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -89,6 +98,8 @@ func main() {
 		cmdStats(configPath)
 	case "report-bug":
 		cmdReportBug(configPath, cmdArgs)
+	case "service":
+		cmdService(configPath, cmdArgs)
 	case "version":
 		fmt.Printf("smirror %s\n", version)
 	case "help", "--help", "-h":
@@ -118,6 +129,7 @@ Commands:
   verify [project]          Compare local vs remote and report drift
   stats                     Show file counts and line counts across all projects
   report-bug [--stdout]     Generate diagnostic report for bug filing
+  service <action>          Windows Service: install, uninstall, start, stop
   version                   Show version
 
 Options:
@@ -153,8 +165,99 @@ func dataDir(cfg *config.Global) string {
 	return filepath.Dir(cfg.StateDB)
 }
 
+// preflight checks that all project local paths exist and rclone is usable.
+// Returns a list of error strings; empty means all checks passed.
+// Warnings are printed to stderr but do not cause failure.
+func preflight(cfg *config.Global) []string {
+	var errs []string
+
+	for _, proj := range cfg.Projects {
+		errs = append(errs, preflightPath(proj)...)
+	}
+
+	// Check rclone binary
+	info, err := rclone.Detect(cfg.RclonePath)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("rclone: %v", err))
+	} else {
+		compat, msg := info.CompatCheck()
+		if compat == rclone.CompatNone {
+			errs = append(errs, fmt.Sprintf("rclone: %s", msg))
+		} else if compat == rclone.CompatPartial {
+			fmt.Fprintf(os.Stderr, "Warning: %s\n", msg)
+		}
+	}
+
+	return errs
+}
+
+// preflightPath validates a single project's local_path, detecting symlinks,
+// junctions, reparse points, named pipes, sockets, devices, and broken links.
+func preflightPath(proj config.Project) []string {
+	var errs []string
+	tag := fmt.Sprintf("project %q", proj.Name)
+
+	// Phase 1: Lstat (does not follow symlinks/junctions)
+	linfo, lerr := os.Lstat(proj.LocalPath)
+	if lerr != nil {
+		errs = append(errs, fmt.Sprintf("%s: local_path %q does not exist", tag, proj.LocalPath))
+		return errs
+	}
+
+	// Phase 2: if Lstat reveals a symlink or reparse point, resolve it
+	isLink := linfo.Mode()&os.ModeSymlink != 0
+	if isLink {
+		resolved, err := filepath.EvalSymlinks(proj.LocalPath)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: local_path %q is a broken symlink: %v", tag, proj.LocalPath, err))
+			return errs
+		}
+		fmt.Fprintf(os.Stderr, "Warning: %s: local_path %q is a symlink → %q (rclone will sync the target)\n", tag, proj.LocalPath, resolved)
+	}
+
+	// Phase 3: Stat (follows symlinks) — check what the final target is
+	info, err := os.Stat(proj.LocalPath)
+	if err != nil {
+		// Lstat succeeded but Stat failed → broken symlink to non-existent target
+		errs = append(errs, fmt.Sprintf("%s: local_path %q resolves to a non-existent target: %v", tag, proj.LocalPath, err))
+		return errs
+	}
+
+	mode := info.Mode()
+	switch {
+	case mode.IsDir():
+		// Good — this is what we want
+	case mode&os.ModeNamedPipe != 0:
+		errs = append(errs, fmt.Sprintf("%s: local_path %q is a named pipe (FIFO), not a directory", tag, proj.LocalPath))
+	case mode&os.ModeSocket != 0:
+		errs = append(errs, fmt.Sprintf("%s: local_path %q is a Unix socket, not a directory", tag, proj.LocalPath))
+	case mode&os.ModeDevice != 0:
+		errs = append(errs, fmt.Sprintf("%s: local_path %q is a device node, not a directory", tag, proj.LocalPath))
+	case mode&os.ModeCharDevice != 0:
+		errs = append(errs, fmt.Sprintf("%s: local_path %q is a character device, not a directory", tag, proj.LocalPath))
+	case mode&os.ModeIrregular != 0:
+		errs = append(errs, fmt.Sprintf("%s: local_path %q is an irregular file (mode %s), not a directory", tag, proj.LocalPath, mode))
+	case mode.IsRegular():
+		errs = append(errs, fmt.Sprintf("%s: local_path %q is a regular file, not a directory", tag, proj.LocalPath))
+	default:
+		errs = append(errs, fmt.Sprintf("%s: local_path %q has unexpected file mode %s", tag, proj.LocalPath, mode))
+	}
+
+	return errs
+}
+
 func cmdStart(configPath string, args []string) {
 	cfg := loadConfig(configPath)
+
+	// Pre-flight checks: verify local paths exist and rclone is available
+	// before acquiring lock or starting any services.
+	if errs := preflight(cfg); len(errs) > 0 {
+		fmt.Fprintln(os.Stderr, "Pre-flight checks failed:")
+		for _, e := range errs {
+			fmt.Fprintf(os.Stderr, "  • %s\n", e)
+		}
+		os.Exit(1)
+	}
 
 	// Acquire single-instance lock (in same dir as state DB)
 	lk, err := lock.Acquire(dataDir(cfg))
@@ -192,8 +295,9 @@ func cmdStart(configPath string, args []string) {
 	// Build filter engines
 	filters := buildFilters(cfg)
 
-	// Create metrics collector
+	// Create metrics collector and notifier
 	m := metrics.New()
+	notifier := notify.New(cfg.IsNotifyEnabled())
 
 	// Create sync engine (with metrics)
 	syncEngine := msync.NewEngine(cfg, st, filters, m)
@@ -232,11 +336,13 @@ func cmdStart(configPath string, args []string) {
 	// Start sync engine (has internal panic recovery per task)
 	go syncEngine.Run(ctx)
 
-	// Start heartbeat (writes status.json + heartbeat to DB + health checks + periodic reconciliation)
-	go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine)
+	// Start heartbeat (writes status.json + heartbeat to DB + health checks + periodic reconciliation + auto-verify)
+	go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine, filters, notifier)
 
 	slog.Info("smirror running", "projects", cfg.ProjectNames())
-	fmt.Println("Press Ctrl+C to stop")
+	if !service.IsWindowsService() {
+		fmt.Println("Press Ctrl+C to stop")
+	}
 
 	// Block until context is cancelled
 	<-ctx.Done()
@@ -893,6 +999,90 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 	return drift
 }
 
+// verifyProjectQuiet runs drift detection without any stdout output.
+// Used by auto-verify in the heartbeat loop. Returns drift count.
+func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engine) int {
+	start := time.Now()
+
+	remoteFiles, err := msync.ListRemote(cfg, proj)
+	if err != nil {
+		slog.Warn("auto-verify: failed to list remote", "project", proj.Name, "error", err)
+		return 0
+	}
+
+	remoteMap := make(map[string]msync.RemoteFile)
+	for _, rf := range remoteFiles {
+		if !rf.IsDir {
+			remoteMap[filepath.ToSlash(rf.Path)] = rf
+		}
+	}
+
+	localFiles := make(map[string]bool)
+	drift := 0
+
+	filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			relPath, _ := filepath.Rel(proj.LocalPath, path)
+			if relPath != "." && fe != nil && fe.IsExcluded(relPath+"/") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(proj.LocalPath, path)
+		relPath = filepath.ToSlash(relPath)
+
+		if fe != nil && fe.IsExcluded(relPath) {
+			if _, onRemote := remoteMap[relPath]; onRemote {
+				slog.Warn("auto-verify: filter leak", "project", proj.Name, "path", relPath)
+				drift++
+			}
+			return nil
+		}
+
+		localFiles[relPath] = true
+
+		rf, onRemote := remoteMap[relPath]
+		if !onRemote {
+			slog.Debug("auto-verify: missing remote", "project", proj.Name, "path", relPath)
+			drift++
+			return nil
+		}
+
+		if md5Hash, ok := rf.Hashes["md5"]; ok {
+			localHash, _, err := hashFile(path)
+			if err == nil && localHash != strings.ToLower(md5Hash) {
+				slog.Debug("auto-verify: hash mismatch", "project", proj.Name, "path", relPath)
+				drift++
+			}
+		}
+
+		return nil
+	})
+
+	for remotePath := range remoteMap {
+		if strings.HasPrefix(remotePath, ".quarantine/") {
+			continue
+		}
+		if !localFiles[remotePath] {
+			slog.Debug("auto-verify: orphan remote", "project", proj.Name, "path", remotePath)
+			drift++
+		}
+	}
+
+	elapsed := time.Since(start)
+	slog.Info("auto-verify complete", "project", proj.Name, "drift", drift,
+		"local", len(localFiles), "remote", len(remoteMap), "ms", elapsed.Milliseconds())
+
+	return drift
+}
+
 func cmdReportBug(configPath string, args []string) {
 	toStdout := false
 	openBrowser := false
@@ -1353,7 +1543,7 @@ func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, fil
 	slog.Info("ghost scan complete", "ghosts", totalGhosts, "ms", time.Since(start).Milliseconds())
 }
 
-func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *metrics.Collector, watchMgr *watcher.Manager, syncEngine *msync.Engine) {
+func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *metrics.Collector, watchMgr *watcher.Manager, syncEngine *msync.Engine, filters map[string]*filter.Engine, notifier *notify.Notifier) {
 	interval := cfg.HeartbeatInterval()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -1361,6 +1551,17 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 	reconcileInterval := cfg.ReconcileInterval()
 	reconcileTicker := time.NewTicker(reconcileInterval)
 	defer reconcileTicker.Stop()
+
+	// Auto-verify ticker (default 6h; 0 = disabled)
+	verifyInterval := cfg.VerifyInterval()
+	var verifyTicker *time.Ticker
+	var verifyChan <-chan time.Time
+	if verifyInterval > 0 {
+		verifyTicker = time.NewTicker(verifyInterval)
+		verifyChan = verifyTicker.C
+		defer verifyTicker.Stop()
+		slog.Info("auto-verify enabled", "interval", verifyInterval)
+	}
 
 	dd := dataDir(cfg)
 
@@ -1379,6 +1580,37 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 					}
 				}
 			}
+
+		case <-verifyChan:
+			// Periodic verify: compare local vs remote and log drift.
+			slog.Info("auto-verify starting")
+			totalDrift := 0
+			for _, proj := range cfg.Projects {
+				// Check if project path still exists (may have been unmounted)
+				if _, err := os.Stat(proj.LocalPath); err != nil {
+					slog.Error("auto-verify: project path gone", "project", proj.Name, "path", proj.LocalPath)
+					if notifier != nil {
+						notifier.PathGone(proj.Name, proj.LocalPath)
+					}
+					continue
+				}
+
+				drift := verifyProjectQuiet(cfg, proj, filters[proj.Name])
+				totalDrift += drift
+				if drift > 0 {
+					slog.Warn("auto-verify: drift detected", "project", proj.Name, "drift", drift)
+					st.SetMeta("last_verify_drift_"+proj.Name,
+						fmt.Sprintf("%d files at %s", drift, time.Now().UTC().Format(time.RFC3339)))
+					if notifier != nil {
+						notifier.VerifyDrift(proj.Name, drift)
+					}
+				}
+			}
+			if totalDrift == 0 {
+				slog.Info("auto-verify: no drift")
+			}
+			st.SetMeta("last_auto_verify", time.Now().UTC().Format(time.RFC3339))
+
 		case <-ticker.C:
 			ts := time.Now().UTC().Format(time.RFC3339)
 			st.SetMeta("last_heartbeat", ts)
@@ -1414,8 +1646,159 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 				}
 			}
 
+			// Check project paths still exist
+			for _, proj := range cfg.Projects {
+				if _, err := os.Stat(proj.LocalPath); err != nil {
+					slog.Error("project path missing", "project", proj.Name, "path", proj.LocalPath)
+					if notifier != nil {
+						notifier.PathGone(proj.Name, proj.LocalPath)
+					}
+				}
+			}
+
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+// serviceMain runs smirror as a Windows Service.
+// Called from main() when IsWindowsService() returns true.
+func serviceMain() {
+	// When the SCM starts the service, args come from the service config.
+	// Parse --config from os.Args (the SCM passes the configured arguments).
+	configPath := config.DefaultConfigPath()
+	for i, arg := range os.Args {
+		if arg == "--config" && i+1 < len(os.Args) {
+			configPath = os.Args[i+1]
+			break
+		}
+		if strings.HasPrefix(arg, "--config=") {
+			configPath = strings.TrimPrefix(arg, "--config=")
+			break
+		}
+	}
+
+	var cancel context.CancelFunc
+
+	startFunc := func() {
+		// Re-use cmdStart logic but with context from service handler
+		cfg := loadConfig(configPath)
+
+		if errs := preflight(cfg); len(errs) > 0 {
+			for _, e := range errs {
+				slog.Error("pre-flight failed", "error", e)
+			}
+			return
+		}
+
+		lk, err := lock.Acquire(dataDir(cfg))
+		if err != nil {
+			slog.Error("lock acquire failed", "error", err)
+			return
+		}
+		defer lk.Release()
+
+		rw, err := logging.Setup(cfg.LogLevel, cfg.LogFile, false)
+		if err != nil {
+			return
+		}
+		if rw != nil {
+			defer rw.Close()
+		}
+
+		slog.Info("smirror service starting", "version", version, "config", configPath)
+
+		st, err := state.Open(cfg.StateDB)
+		if err != nil {
+			slog.Error("state db open failed", "error", err)
+			return
+		}
+		defer st.Close()
+
+		filters := buildFilters(cfg)
+		m := metrics.New()
+		notifier := notify.New(cfg.IsNotifyEnabled())
+		syncEngine := msync.NewEngine(cfg, st, filters, m)
+
+		watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.TaskChan, cfg.DeletePolicy())
+		if err != nil {
+			slog.Error("watcher creation failed", "error", err)
+			return
+		}
+
+		var ctx context.Context
+		ctx, cancel = context.WithCancel(context.Background())
+		defer cancel()
+
+		reconcileAll(ctx, cfg, st, filters, syncEngine)
+		m.RecordScanComplete()
+
+		if err := watchMgr.Start(ctx); err != nil {
+			slog.Error("watcher start failed", "error", err)
+			return
+		}
+		defer watchMgr.Stop()
+
+		go syncEngine.Run(ctx)
+		go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine, filters, notifier)
+
+		slog.Info("smirror service running", "projects", cfg.ProjectNames())
+		<-ctx.Done()
+		slog.Info("smirror service stopped")
+	}
+
+	stopFunc := func() {
+		if cancel != nil {
+			cancel()
+		}
+	}
+
+	if err := service.Run(startFunc, stopFunc); err != nil {
+		slog.Error("service run failed", "error", err)
+		os.Exit(1)
+	}
+}
+
+// cmdService handles the `smirror service` subcommand for Windows Service management.
+func cmdService(configPath string, args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: smirror service <install|uninstall|start|stop>")
+		os.Exit(1)
+	}
+
+	switch args[0] {
+	case "install":
+		if err := service.Install(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Service 'smirror' installed successfully.")
+		fmt.Printf("Config: %s\n", configPath)
+		fmt.Println("Start with: smirror service start")
+		fmt.Println("Or: net start smirror")
+
+	case "uninstall":
+		if err := service.Uninstall(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Service 'smirror' uninstalled successfully.")
+
+	case "start":
+		if err := service.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+	case "stop":
+		if err := service.Stop(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown service action: %s\nUse: install, uninstall, start, stop\n", args[0])
+		os.Exit(1)
 	}
 }

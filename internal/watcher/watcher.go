@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"strings"
 	gosync "sync"
 	"time"
 
@@ -42,8 +44,20 @@ type projectWatcher struct {
 	project  config.Project
 	filter   *filter.Engine
 	syncChan chan<- msync.Task
-	pending  map[string]time.Time
+	pending  map[string]*time.Timer // per-file debounce timers (event-driven, no polling)
 	mu       gosync.Mutex
+
+	// Dynamic debounce: tracks when each file was last emitted to the sync
+	// channel. If a new event arrives within dynamicDebounceDetect of the last
+	// emission, the file is "hot" and a short debounce timer activates.
+	// Only used when DebounceDuration() == 0 (dynamic mode).
+	lastSynced map[string]time.Time
+
+	// Burst-delete detection: count deletes within a rolling window.
+	// When threshold is reached, schedule an accelerated reconciliation
+	// to catch any fsnotify events dropped under burst load (SM-050).
+	deleteCount     int
+	deleteWindowEnd time.Time
 }
 
 // NewManager creates a watcher manager for all configured projects.
@@ -62,10 +76,11 @@ func NewManager(projects []config.Project, filters map[string]*filter.Engine, sy
 	for _, proj := range projects {
 		fe := filters[proj.Name]
 		pw := &projectWatcher{
-			project:  proj,
-			filter:   fe,
-			syncChan: syncChan,
-			pending:  make(map[string]time.Time),
+			project:    proj,
+			filter:     fe,
+			syncChan:   syncChan,
+			pending:    make(map[string]*time.Timer),
+			lastSynced: make(map[string]time.Time),
 		}
 		m.projects = append(m.projects, pw)
 	}
@@ -403,9 +418,69 @@ func (m *Manager) handleEvent(event fsnotify.Event) {
 		}
 	}
 
-	// Add to debounce pending map
+	// Debounce: two modes based on project configuration.
+	//
+	// Static (debounce_sec > 0): every event starts/resets a timer of the
+	// configured duration. Good for projects with chatty build tools.
+	//
+	// Dynamic (debounce_sec = 0, default): fire immediately on first/isolated
+	// events. Only activate a short debounce when rapid repeated writes to the
+	// same file are detected (editor save dances, chunked writes). This gives
+	// near-instant sync for normal saves while still coalescing bursts.
+	debounceDur := pw.project.DebounceDuration()
+
 	pw.mu.Lock()
-	pw.pending[relPath] = time.Now()
+	if debounceDur > 0 {
+		// --- Static debounce ---
+		if t, ok := pw.pending[relPath]; ok {
+			t.Reset(debounceDur)
+		} else {
+			rp := relPath
+			pw.pending[relPath] = time.AfterFunc(debounceDur, func() {
+				pw.mu.Lock()
+				delete(pw.pending, rp)
+				pw.mu.Unlock()
+				select {
+				case pw.syncChan <- msync.Task{Project: pw.project, RelPath: rp}:
+				default:
+					m.log.Warn("sync channel full, dropping debounced event",
+						"project", pw.project.Name, "path", rp)
+				}
+			})
+		}
+	} else {
+		// --- Dynamic debounce ---
+		if t, ok := pw.pending[relPath]; ok {
+			// Already debouncing this file — reset the timer
+			t.Reset(dynamicDebounceDuration)
+		} else if last, ok := pw.lastSynced[relPath]; ok && time.Since(last) < dynamicDebounceDetect {
+			// Rapid repeat event for a recently-synced file — activate debounce
+			rp := relPath
+			pw.pending[relPath] = time.AfterFunc(dynamicDebounceDuration, func() {
+				pw.mu.Lock()
+				delete(pw.pending, rp)
+				pw.lastSynced[rp] = time.Now()
+				pw.mu.Unlock()
+				select {
+				case pw.syncChan <- msync.Task{Project: pw.project, RelPath: rp}:
+				default:
+					m.log.Warn("sync channel full, dropping debounced event",
+						"project", pw.project.Name, "path", rp)
+				}
+			})
+		} else {
+			// First or isolated event — fire immediately, no delay
+			pw.lastSynced[relPath] = time.Now()
+			pw.mu.Unlock()
+			select {
+			case pw.syncChan <- msync.Task{Project: pw.project, RelPath: relPath}:
+			default:
+				m.log.Warn("sync channel full, dropping event",
+					"project", pw.project.Name, "path", relPath)
+			}
+			return
+		}
+	}
 	pw.mu.Unlock()
 }
 
@@ -431,10 +506,11 @@ func (m *Manager) handleRemove(event fsnotify.Event) {
 		}
 	}
 
-	// Clear any pending debounce entries for paths under removed directory
+	// Cancel and clear any pending debounce timers for paths under removed directory
 	pw.mu.Lock()
-	for pendingPath := range pw.pending {
+	for pendingPath, timer := range pw.pending {
 		if pendingPath == relPath || isRelSubPath(pendingPath, relPath) {
+			timer.Stop()
 			delete(pw.pending, pendingPath)
 		}
 	}
@@ -451,9 +527,65 @@ func (m *Manager) handleRemove(event fsnotify.Event) {
 			Type:    msync.TaskDelete,
 		}
 	}
+
+	// Burst-delete detection (SM-050): when many deletes arrive within a short
+	// window, fsnotify may silently drop some events (finite buffer). Schedule
+	// an accelerated full-project reconciliation to catch dropped deletes.
+	m.trackDeleteBurst(pw)
 }
 
 // handleRename processes Rename events (the old path is gone).
+const (
+	burstDeleteThreshold = 10              // deletes within window to trigger reconciliation
+	burstDeleteWindow    = 5 * time.Second // rolling window for burst detection
+	burstReconcileDelay  = 30 * time.Second // delay before accelerated reconciliation
+
+	// Dynamic debounce constants (used when debounce_sec is 0).
+	// dynamicDebounceDetect: if a second event for the same file arrives within
+	// this window of the previous sync, the file is considered "hot" and a
+	// debounce timer activates instead of firing immediately.
+	dynamicDebounceDetect = 500 * time.Millisecond
+
+	// dynamicDebounceDuration: how long to wait before syncing a "hot" file.
+	// Covers typical editor save patterns (write-rename, write-truncate-write).
+	dynamicDebounceDuration = 500 * time.Millisecond
+)
+
+// trackDeleteBurst detects burst deletes and schedules accelerated reconciliation.
+// fsnotify can silently drop events when its buffer overflows under rapid deletions.
+// When we see N+ deletes within a short window, we schedule a full project sync
+// shortly after to catch any dropped events (SM-050).
+func (m *Manager) trackDeleteBurst(pw *projectWatcher) {
+	pw.mu.Lock()
+	now := time.Now()
+	if now.After(pw.deleteWindowEnd) {
+		// Start a new window
+		pw.deleteCount = 1
+		pw.deleteWindowEnd = now.Add(burstDeleteWindow)
+	} else {
+		pw.deleteCount++
+	}
+	count := pw.deleteCount
+	pw.mu.Unlock()
+
+	if count == burstDeleteThreshold {
+		m.log.Info("burst delete detected, scheduling accelerated reconciliation",
+			"project", pw.project.Name, "deletes", count,
+			"delay", burstReconcileDelay)
+		go func() {
+			time.Sleep(burstReconcileDelay)
+			select {
+			case pw.syncChan <- msync.Task{Project: pw.project, RelPath: ""}:
+				m.log.Info("accelerated reconciliation triggered",
+					"project", pw.project.Name)
+			default:
+				m.log.Warn("sync channel full, skipping accelerated reconciliation",
+					"project", pw.project.Name)
+			}
+		}()
+	}
+}
+
 // On Windows, Rename fires for the old name; Create fires separately for the new name.
 // We treat Rename as a removal of the old path.
 func (m *Manager) handleRename(event fsnotify.Event) {
@@ -477,11 +609,15 @@ func (m *Manager) handleRename(event fsnotify.Event) {
 		}
 	}
 
-	// Clear pending entries for old path
+	// Cancel and clear pending timers for old path
 	pw.mu.Lock()
-	delete(pw.pending, relPath)
-	for pendingPath := range pw.pending {
+	if t, ok := pw.pending[relPath]; ok {
+		t.Stop()
+		delete(pw.pending, relPath)
+	}
+	for pendingPath, timer := range pw.pending {
 		if isRelSubPath(pendingPath, relPath) {
+			timer.Stop()
 			delete(pw.pending, pendingPath)
 		}
 	}
@@ -604,44 +740,17 @@ func (m *Manager) reloadFilter(pw *projectWatcher) {
 	}
 }
 
-// debounceLoop periodically emits matured pending files to the sync channel.
+// debounceLoop waits for context cancellation and cleans up pending timers.
+// Debounce is now event-driven via per-file time.AfterFunc timers — no polling.
 func (m *Manager) debounceLoop(ctx context.Context, pw *projectWatcher) {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			// Collect matured tasks under the mutex, then send outside the lock.
-			// This prevents a deadlock where a full syncChan blocks the send
-			// while the mutex prevents new events from being enqueued.
-			var ready []msync.Task
-			pw.mu.Lock()
-			now := time.Now()
-			for relPath, lastEvent := range pw.pending {
-				if now.Sub(lastEvent) >= pw.project.DebounceDuration() {
-					ready = append(ready, msync.Task{
-						Project: pw.project,
-						RelPath: relPath,
-					})
-					delete(pw.pending, relPath)
-				}
-			}
-			pw.mu.Unlock()
-
-			// Send outside the lock — if channel is full, this blocks
-			// but won't prevent new events from entering the pending map.
-			for _, task := range ready {
-				select {
-				case pw.syncChan <- task:
-				case <-ctx.Done():
-					return
-				}
-			}
-		case <-ctx.Done():
-			return
-		}
+	<-ctx.Done()
+	// Stop all pending timers on shutdown
+	pw.mu.Lock()
+	for path, timer := range pw.pending {
+		timer.Stop()
+		delete(pw.pending, path)
 	}
+	pw.mu.Unlock()
 }
 
 // healthMonitor runs periodic self-checks on the watcher subsystem.
@@ -674,6 +783,7 @@ func (m *Manager) healthMonitor(ctx context.Context) {
 }
 
 // isSubPath checks if child is under parent directory.
+// On Windows, comparison is case-insensitive (NTFS/FAT are case-insensitive).
 func isSubPath(child, parent string) bool {
 	childAbs, err := filepath.Abs(child)
 	if err != nil {
@@ -686,6 +796,12 @@ func isSubPath(child, parent string) bool {
 	// Normalize separators
 	childAbs = filepath.Clean(childAbs)
 	parentAbs = filepath.Clean(parentAbs)
+
+	// On Windows, paths are case-insensitive (NTFS, FAT32, exFAT).
+	if runtime.GOOS == "windows" {
+		childAbs = strings.ToLower(childAbs)
+		parentAbs = strings.ToLower(parentAbs)
+	}
 
 	return childAbs == parentAbs || len(childAbs) > len(parentAbs) &&
 		childAbs[:len(parentAbs)] == parentAbs &&

@@ -239,6 +239,13 @@ func (e *Engine) quiesceFile(localPath string) (os.FileInfo, error) {
 }
 
 func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPath string) {
+	// Re-check filter: the file may have been accepted by the watcher before
+	// a .syncignore hot-reload excluded it (SM-045).
+	if fe, ok := e.filters[proj.Name]; ok && fe != nil && fe.IsExcluded(relPath) {
+		e.log.Debug("excluded after filter reload", "project", proj.Name, "path", relPath)
+		return
+	}
+
 	localPath := filepath.Join(proj.LocalPath, relPath)
 
 	// Quiescence check: confirm file is stable and not locked
@@ -343,7 +350,11 @@ func (e *Engine) syncMtime(ctx context.Context, proj config.Project, relPath str
 
 	// Update DB regardless of exit code: record the new mtime so we don't retry
 	// on every subsequent event. The content hash is unchanged so the file is intact.
-	e.state.UpdateFileState(proj.Name, relPath, hash, size, mtimeNs, exitCode)
+	// SM-048: Always record rclone_exit=0 here. The content was already synced
+	// successfully (that's how we reached syncMtime). Recording a non-zero exit
+	// from the touch command would cause the next sync to see "failed sync" and
+	// trigger a full re-upload instead of just retrying the mtime touch.
+	e.state.UpdateFileState(proj.Name, relPath, hash, size, mtimeNs, 0)
 
 	if exitCode == 0 {
 		e.log.Info("metadata synced", "project", proj.Name, "path", relPath,
@@ -375,12 +386,26 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 		return
 	}
 
+	// Capture filter generation before generating the rclone filter file.
+	// If the filter is hot-reloaded between now and rclone execution, a new
+	// full sync will be queued by reloadFilter — so we can safely skip this
+	// stale one (SM-044).
+	genBefore := fe.Generation()
+
 	filterFile, err := fe.GenerateRcloneFilterFile()
 	if err != nil {
 		e.log.Error("filter file generation failed", "project", proj.Name, "error", err)
 		return
 	}
 	defer os.Remove(filterFile)
+
+	// Check if filter was reloaded between task dequeue and filter file generation.
+	// If so, this full sync would use stale rules. Skip it — a fresh full sync
+	// is already queued by reloadFilter with the updated rules.
+	if fe.Generation() != genBefore {
+		e.log.Info("filter changed during full sync setup, skipping stale sync", "project", proj.Name)
+		return
+	}
 
 	// Use "sync" when delete_policy=mirror — makes remote match local exactly,
 	// including deleting remote-only files (orphans from WSL renames, etc.).
@@ -454,6 +479,7 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 		if exitCode == 0 {
 			e.log.Info("remote deleted", "project", proj.Name, "path", relPath, "ms", elapsed.Milliseconds())
 			e.state.LogAction(proj.Name, relPath, "delete", "mirrored delete", elapsed.Milliseconds())
+			e.state.DeleteFileState(proj.Name, relPath)
 		} else {
 			e.log.Warn("remote delete failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
 			e.state.LogAction(proj.Name, relPath, "delete_error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
@@ -472,15 +498,13 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 		if exitCode == 0 {
 			e.log.Info("remote quarantined", "project", proj.Name, "path", relPath, "quarantine", quarantinePath, "ms", elapsed.Milliseconds())
 			e.state.LogAction(proj.Name, relPath, "quarantine", quarantinePath, elapsed.Milliseconds())
+			e.state.DeleteFileState(proj.Name, relPath)
 		} else {
 			e.log.Warn("remote quarantine failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
 			e.state.LogAction(proj.Name, relPath, "quarantine_error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
 		}
 
 	}
-
-	// Clean state DB entry after successful remote delete
-	e.state.DeleteFileState(proj.Name, relPath)
 }
 
 // deleteFlags returns rclone flags for delete/quarantine operations.
@@ -529,9 +553,8 @@ func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPa
 
 	e.log.Info("cleaning remote dir", "project", proj.Name, "path", dirPath, "files", len(files))
 	for _, relPath := range files {
+		// deleteRemoteFile handles state cleanup internally on success
 		e.deleteRemoteFile(ctx, proj, relPath, force)
-		// Clean state DB entry so file doesn't appear as ghost later
-		e.state.DeleteFileState(proj.Name, relPath)
 	}
 	elapsed := time.Since(start)
 	e.log.Info("remote dir cleaned", "project", proj.Name, "path", dirPath, "files", len(files), "ms", elapsed.Milliseconds())

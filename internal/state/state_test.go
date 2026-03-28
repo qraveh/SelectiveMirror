@@ -1,8 +1,10 @@
 package state
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	gosync "sync"
 	"testing"
 	"time"
 )
@@ -205,5 +207,329 @@ func TestHashFileNotFound(t *testing.T) {
 	_, _, err := HashFile("/nonexistent/file.txt")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
+	}
+}
+
+// --- SM-039: Migration error handling ---
+
+func TestOpenIdempotentMigration(t *testing.T) {
+	// Opening the same DB twice should work — the ALTER TABLE migration
+	// should detect that mtime_ns already exists and skip it.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	st1, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+	st1.Close()
+
+	st2, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("second Open should succeed (idempotent migration): %v", err)
+	}
+	st2.Close()
+}
+
+func TestOpenMigrationOnExistingDB(t *testing.T) {
+	// Simulate an old DB without mtime_ns, then re-open.
+	// The migration should add the column without error.
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// Insert a row and verify mtime_ns defaults to 0
+	st.UpdateFileState("proj", "file.txt", "abc", 100, 0, 0)
+	fs, err := st.GetFileState("proj", "file.txt")
+	if err != nil {
+		t.Fatalf("GetFileState: %v", err)
+	}
+	if fs.MtimeNs != 0 {
+		t.Errorf("expected MtimeNs=0, got %d", fs.MtimeNs)
+	}
+	st.Close()
+}
+
+// =============================================================================
+// Bug-hunting tests: SQL LIKE wildcards, concurrency, boundary conditions
+// =============================================================================
+
+// BUG HUNT: GetFilesUnderDir uses SQL LIKE with unescaped user input.
+// Directory names containing SQL wildcard chars (_ or %) produce wrong results.
+func TestGetFilesUnderDir_UnderscoreInDirName(t *testing.T) {
+	st := tempStore(t)
+
+	// Create files under "test_dir/" — note the underscore
+	st.UpdateFileState("P", "test_dir/a.txt", "h1", 10, time.Now().UnixNano(), 0)
+	st.UpdateFileState("P", "test_dir/b.txt", "h2", 20, time.Now().UnixNano(), 0)
+
+	// Create a file under "testXdir/" — should NOT match "test_dir/"
+	st.UpdateFileState("P", "testXdir/c.txt", "h3", 30, time.Now().UnixNano(), 0)
+
+	files, err := st.GetFilesUnderDir("P", "test_dir")
+	if err != nil {
+		t.Fatalf("GetFilesUnderDir: %v", err)
+	}
+
+	// Should find exactly 2 files (test_dir/a.txt and test_dir/b.txt)
+	// BUG: SQL LIKE treats _ as single-char wildcard, so "test_dir/%" also
+	// matches "testXdir/%" — we'd get 3 files instead of 2.
+	if len(files) != 2 {
+		t.Errorf("expected 2 files under test_dir/, got %d: %v", len(files), files)
+	}
+	for _, f := range files {
+		if f == "testXdir/c.txt" {
+			t.Errorf("LIKE wildcard leak: testXdir/c.txt matched test_dir/ query")
+		}
+	}
+}
+
+func TestGetFilesUnderDir_PercentInDirName(t *testing.T) {
+	st := tempStore(t)
+
+	// Create files under "100%done/"
+	st.UpdateFileState("P", "100%done/file.txt", "h1", 10, time.Now().UnixNano(), 0)
+
+	// Create unrelated files
+	st.UpdateFileState("P", "100/other.txt", "h2", 20, time.Now().UnixNano(), 0)
+	st.UpdateFileState("P", "100xyz/other.txt", "h3", 30, time.Now().UnixNano(), 0)
+
+	files, err := st.GetFilesUnderDir("P", "100%done")
+	if err != nil {
+		t.Fatalf("GetFilesUnderDir: %v", err)
+	}
+
+	// Should find exactly 1 file
+	// BUG: SQL LIKE treats % as multi-char wildcard
+	if len(files) != 1 {
+		t.Errorf("expected 1 file under 100%%done/, got %d: %v", len(files), files)
+	}
+}
+
+func TestGetFilesUnderDir_ExactMatch(t *testing.T) {
+	st := tempStore(t)
+
+	// A file that IS the dirPrefix (not under it)
+	st.UpdateFileState("P", "mydir", "h1", 10, time.Now().UnixNano(), 0)
+	st.UpdateFileState("P", "mydir/child.txt", "h2", 20, time.Now().UnixNano(), 0)
+
+	files, err := st.GetFilesUnderDir("P", "mydir")
+	if err != nil {
+		t.Fatalf("GetFilesUnderDir: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 results (exact + child), got %d: %v", len(files), files)
+	}
+}
+
+func TestGetFilesUnderDir_SimilarPrefix(t *testing.T) {
+	st := tempStore(t)
+
+	st.UpdateFileState("P", "src/main.go", "h1", 10, time.Now().UnixNano(), 0)
+	st.UpdateFileState("P", "src2/main.go", "h2", 20, time.Now().UnixNano(), 0)
+	st.UpdateFileState("P", "srclib/main.go", "h3", 30, time.Now().UnixNano(), 0)
+
+	files, err := st.GetFilesUnderDir("P", "src")
+	if err != nil {
+		t.Fatalf("GetFilesUnderDir: %v", err)
+	}
+
+	// Should match "src/main.go" and the exact "src" if it existed.
+	// Should NOT match "src2/main.go" or "srclib/main.go"
+	for _, f := range files {
+		if f == "src2/main.go" || f == "srclib/main.go" {
+			t.Errorf("prefix leak: %s matched 'src' query", f)
+		}
+	}
+}
+
+func TestGetFilesUnderDir_EmptyResult(t *testing.T) {
+	st := tempStore(t)
+	files, err := st.GetFilesUnderDir("P", "nonexistent")
+	if err != nil {
+		t.Fatalf("GetFilesUnderDir: %v", err)
+	}
+	if len(files) != 0 {
+		t.Errorf("expected 0 files, got %d", len(files))
+	}
+}
+
+// Concurrency: multiple goroutines writing to the same DB simultaneously.
+func TestConcurrentWrites_NoCorruption(t *testing.T) {
+	st := tempStore(t)
+
+	var wg gosync.WaitGroup
+	goroutines := 8
+	filesPerGoroutine := 50
+
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for i := 0; i < filesPerGoroutine; i++ {
+				path := fmt.Sprintf("g%d/file%d.txt", id, i)
+				hash := fmt.Sprintf("hash_%d_%d", id, i)
+				err := st.UpdateFileState("P", path, hash, int64(i*100), time.Now().UnixNano(), 0)
+				if err != nil {
+					t.Errorf("concurrent write failed: %v", err)
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+
+	// Verify all writes persisted
+	paths, err := st.GetAllSyncedPaths("P")
+	if err != nil {
+		t.Fatalf("GetAllSyncedPaths: %v", err)
+	}
+	expected := goroutines * filesPerGoroutine
+	if len(paths) != expected {
+		t.Errorf("expected %d files, got %d (data lost under concurrency)", expected, len(paths))
+	}
+}
+
+// Concurrent reads and writes: readers shouldn't see corrupt state.
+func TestConcurrentReadWrite_NoCorruption(t *testing.T) {
+	st := tempStore(t)
+
+	// Seed some data
+	for i := 0; i < 10; i++ {
+		st.UpdateFileState("P", fmt.Sprintf("file%d.txt", i), "initial", 100, time.Now().UnixNano(), 0)
+	}
+
+	ctx := make(chan struct{})
+	var wg gosync.WaitGroup
+
+	// Writer goroutine
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 200; i++ {
+			path := fmt.Sprintf("file%d.txt", i%10)
+			st.UpdateFileState("P", path, fmt.Sprintf("v%d", i), int64(i), time.Now().UnixNano(), 0)
+		}
+		close(ctx)
+	}()
+
+	// Reader goroutines
+	for r := 0; r < 4; r++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx:
+					return
+				default:
+					st.GetAllSyncedPaths("P")
+					st.GetFileState("P", "file0.txt")
+					st.CountFiles("P")
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+}
+
+// CountFiles: verify accuracy
+func TestCountFiles_Correct(t *testing.T) {
+	st := tempStore(t)
+
+	if st.CountFiles("P") != 0 {
+		t.Error("expected 0 for empty project")
+	}
+
+	st.UpdateFileState("P", "a.txt", "h1", 10, time.Now().UnixNano(), 0)
+	st.UpdateFileState("P", "b.txt", "h2", 20, time.Now().UnixNano(), 0)
+	st.UpdateFileState("Q", "c.txt", "h3", 30, time.Now().UnixNano(), 0)
+
+	if st.CountFiles("P") != 2 {
+		t.Errorf("expected 2 for P, got %d", st.CountFiles("P"))
+	}
+	if st.CountFiles("Q") != 1 {
+		t.Errorf("expected 1 for Q, got %d", st.CountFiles("Q"))
+	}
+	if st.CountFiles("X") != 0 {
+		t.Errorf("expected 0 for nonexistent project, got %d", st.CountFiles("X"))
+	}
+}
+
+// UpdateMtimeOnly: verify it updates ONLY mtime, not hash/size/exit
+func TestUpdateMtimeOnly_PreservesOtherFields(t *testing.T) {
+	st := tempStore(t)
+
+	originalMtime := int64(1000000)
+	st.UpdateFileState("P", "f.txt", "originalhash", 999, originalMtime, 0)
+
+	newMtime := int64(2000000)
+	st.UpdateMtimeOnly("P", "f.txt", newMtime)
+
+	fs, err := st.GetFileState("P", "f.txt")
+	if err != nil {
+		t.Fatalf("GetFileState: %v", err)
+	}
+
+	if fs.MtimeNs != newMtime {
+		t.Errorf("mtime not updated: got %d, want %d", fs.MtimeNs, newMtime)
+	}
+	if fs.LocalHash != "originalhash" {
+		t.Errorf("hash was corrupted: got %s", fs.LocalHash)
+	}
+	if fs.FileSize != 999 {
+		t.Errorf("size was corrupted: got %d", fs.FileSize)
+	}
+	if fs.RcloneExit != 0 {
+		t.Errorf("exit code was corrupted: got %d", fs.RcloneExit)
+	}
+}
+
+// DeleteFileState followed by GetFileState: should return nil, not stale data
+func TestDeleteFileState_ThenGet(t *testing.T) {
+	st := tempStore(t)
+
+	st.UpdateFileState("P", "f.txt", "h", 10, time.Now().UnixNano(), 0)
+	st.DeleteFileState("P", "f.txt")
+
+	fs, err := st.GetFileState("P", "f.txt")
+	if err != nil {
+		t.Fatalf("GetFileState after delete: %v", err)
+	}
+	if fs != nil {
+		t.Error("expected nil after DeleteFileState")
+	}
+}
+
+// DeleteFileState for nonexistent file: should not error
+func TestDeleteFileState_Nonexistent(t *testing.T) {
+	st := tempStore(t)
+
+	err := st.DeleteFileState("P", "ghost.txt")
+	if err != nil {
+		t.Errorf("DeleteFileState for nonexistent should not error: %v", err)
+	}
+}
+
+// GetPendingFiles: verify negative exit codes also count as pending
+func TestGetPendingFiles_NegativeExitCode(t *testing.T) {
+	st := tempStore(t)
+
+	st.UpdateFileState("P", "timeout.txt", "h1", 10, time.Now().UnixNano(), -2) // timeout
+	st.UpdateFileState("P", "execfail.txt", "h2", 20, time.Now().UnixNano(), -1) // exec failure
+	st.UpdateFileState("P", "ok.txt", "h3", 30, time.Now().UnixNano(), 0)
+
+	pending, err := st.GetPendingFiles("P")
+	if err != nil {
+		t.Fatalf("GetPendingFiles: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Errorf("expected 2 pending (negative exit codes), got %d: %v", len(pending), pending)
 	}
 }

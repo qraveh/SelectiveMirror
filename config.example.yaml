@@ -48,3 +48,5 @@ global_excludes:
 
 # Service settings
 # heartbeat_interval_sec: 300   # Write heartbeat every N seconds
+# verify_interval_sec: 21600    # Auto-verify every 6h (0 = default 6h, -1 = disabled)
+# notify_enabled: true          # Windows toast notifications on drift/failure

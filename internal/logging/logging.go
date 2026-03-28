@@ -2,6 +2,7 @@
 package logging
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -58,7 +59,9 @@ func (w *rotatingWriter) Write(p []byte) (n int, err error) {
 	defer w.mu.Unlock()
 
 	if w.currentSize+int64(len(p)) > w.maxBytes {
-		w.rotate()
+		if err := w.rotate(); err != nil {
+			return 0, err
+		}
 	}
 
 	n, err = w.file.Write(p)
@@ -66,19 +69,22 @@ func (w *rotatingWriter) Write(p []byte) (n int, err error) {
 	return n, err
 }
 
-func (w *rotatingWriter) rotate() {
+func (w *rotatingWriter) rotate() error {
 	w.file.Close()
 
 	// Shift backups: .4 -> .5, .3 -> .4, etc.
 	for i := w.maxBackups - 1; i >= 1; i-- {
-		src := w.path + "." + string(rune('0'+i))
-		dst := w.path + "." + string(rune('0'+i+1))
-		os.Rename(src, dst)
+		src := w.path + "." + fmt.Sprintf("%d", i)
+		dst := w.path + "." + fmt.Sprintf("%d", i+1)
+		os.Rename(src, dst) // ignore: source may not exist yet
 	}
-	os.Rename(w.path, w.path+".1")
+	os.Rename(w.path, w.path+".1") // ignore: best-effort
 
-	// Open fresh file
-	w.openFile()
+	// Open fresh file — must check error to avoid nil w.file
+	if err := w.openFile(); err != nil {
+		return fmt.Errorf("rotate: failed to open new log file: %w", err)
+	}
+	return nil
 }
 
 func (w *rotatingWriter) Close() error {
