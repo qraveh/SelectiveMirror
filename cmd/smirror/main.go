@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.3-dev"
+var version = "0.2.4-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -132,7 +132,7 @@ Commands:
   explain <mirror> <path>   Explain why a file is included or excluded
   project-stats             Show file counts and line counts across all mirrors
   report-bug [--stdout]     Generate diagnostic report for bug filing
-  service <action>          Windows Service: install, uninstall, start, stop
+  service <action>          Windows Service (background): install, uninstall, start, stop
   version                   Show version
 
 Options:
