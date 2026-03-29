@@ -1,0 +1,73 @@
+# Changelog
+
+All notable changes to SelectiveMirror are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [semver](https://semver.org/).
+
+## [0.2.25-dev] — 2026-03-29
+
+### Bugs fixed
+
+- **State DB and log written to wrong directory when running as Windows service** (0.2.8)
+  `DefaultDataDir()` used `os.UserHomeDir()` which resolves to SYSTEM's home (`C:\Windows\System32\config\systemprofile\.selectivemirror\`) when running as a service. State DB, log, and lock file were invisible to the user session. Fixed by deriving data directory from the config file's own directory.
+
+- **Relative config path produced CWD-dependent data paths** (0.2.9)
+  `filepath.Dir("config.yaml")` returns `"."`, making state DB and log relative to CWD. The Windows service has CWD=`C:\Windows\System32`, so paths broke silently. Fixed by resolving config path to absolute at the top of `config.Load()`.
+
+- **Log file held with exclusive lock on Windows** (0.2.16)
+  `os.OpenFile` on Windows opens with no share mode by default. Every `Get-Content -Wait` (PowerShell log tail) would block indefinitely, spawning zombie PowerShell processes. Fixed by using `syscall.CreateFile` with `FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE`.
+
+- **rclone not found when running as Windows service** (0.2.10, 0.2.13)
+  SYSTEM account has a different PATH. `exec.LookPath("rclone")` failed. Fixed by auto-resolving `rclone_path` to an absolute path during `smirror service install` and writing it into config.yaml.
+
+- **rclone remotes not found when running as Windows service** (0.2.21)
+  SYSTEM has its own `%APPDATA%` with no `rclone.conf`. All sync operations failed with exit code 1 (no remotes configured). Fixed by adding `rclone_config` support — all rclone calls now pass `--config` when set. Auto-resolved during `smirror service install`.
+
+- **PID unreadable from lock file** (0.2.1, replaced in 0.2.2)
+  `LockFileEx` locks file bytes, preventing even shared reads. `IsLocked()` couldn't read the PID written inside the lock file. Initially tried a `.pid` sidecar file (fragile). Replaced with SQLite state DB approach — `smirror start` writes `instance_pid`, `instance_exe` to the state DB, which is always readable.
+
+- **Service didn't write instance info to state DB** (0.2.10)
+  `serviceMain` never called `SetMeta("instance_pid", ...)`, so `smirror status` showed "instance running:" with no PID or path. Fixed by adding the same instance info writes as foreground mode.
+
+- **Machine account displayed as username** (0.2.20)
+  When running as LocalSystem, `user.Current()` returns the machine account (e.g., `MSI\MSI$`), not `NT AUTHORITY\SYSTEM`. Users saw cryptic `MSI$` as the username. Fixed by detecting the trailing `$` and displaying `SYSTEM (LocalSystem)`.
+
+- **Timestamps inconsistent between commands** (0.2.1)
+  `smirror status` showed UTC (Zulu time) while `smirror sync-now` showed local time. Fixed all user-facing timestamps to use `.Local().Format(time.RFC3339)`.
+
+- **Stale command references** (0.2.1)
+  Error messages and help text referenced deleted commands (`smirror doctor`, `smirror verify`). Fixed throughout to reference `smirror status` and `smirror test-mirrors`.
+
+- **test-mirrors log-writable check conflicted with running instance** (0.2.17)
+  The check opened the log file with `os.OpenFile` (exclusive on Windows), which would fail if the service held it open. Fixed by using shared file open.
+
+- **test-mirrors failure summary not shown** (0.2.22)
+  With 15+ checks, a single failure scrolled off screen. Only `"15 passed, 1 failed"` was visible at the bottom. Fixed by repeating all failure details after the summary.
+
+- **Running instance reported as test failure** (0.2.25)
+  The single-instance lock check counted a running smirror as a "failed" check, even though that's the normal operating state. Changed from pass/fail to informational.
+
+- **`report-bug` showed duplicate version line** (0.2.3)
+  The new version header printed before every command duplicated the version already in the bug report output.
+
+- **Bundled rclone created version drift risk** (0.2.14)
+  Release ZIP and MSI bundled a copy of rclone.exe alongside the user's own winget-installed copy, creating two potentially different versions. Removed bundled rclone; declared as prerequisite.
+
+### Added
+
+- Windows Service: full SCM integration (`smirror service install/uninstall/start/stop`)
+- `smirror status` shows instance mode (foreground/service), user, PID, executable path, start time
+- `smirror service install` auto-resolves `rclone_path` and `rclone_config` into config.yaml
+- `smirror service start` prints log tail command that works in both cmd and PowerShell
+- Version header printed at start of every command
+- Copyright line in `smirror version`
+- MSI installer with post-install rclone download (winget or direct from rclone.org)
+- `rclone_config` config field for explicit rclone.conf path
+- `config.RcloneArgs()` helper for consistent `--config` flag injection
+
+### Changed
+
+- `projects:` renamed to `mirrors:` in config (internal Go identifiers unchanged)
+- `validate` renamed to `test-mirrors`
+- `doctor` and `verify` merged into `test-mirrors` (kept as hidden aliases)
+- `stats` renamed to `project-stats` (kept as hidden alias)
+- rclone is a declared prerequisite, not bundled
