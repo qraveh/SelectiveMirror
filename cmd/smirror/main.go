@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -34,7 +35,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.18-dev"
+var version = "0.2.19-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -301,10 +302,14 @@ func cmdStart(configPath string, args []string) {
 	st.SetMeta("instance_pid", fmt.Sprintf("%d", os.Getpid()))
 	st.SetMeta("instance_exe", exePath)
 	st.SetMeta("instance_started", time.Now().Local().Format(time.RFC3339))
+	st.SetMeta("instance_mode", "foreground")
+	st.SetMeta("instance_user", currentUser())
 	defer func() {
 		st.SetMeta("instance_pid", "")
 		st.SetMeta("instance_exe", "")
 		st.SetMeta("instance_started", "")
+		st.SetMeta("instance_mode", "")
+		st.SetMeta("instance_user", "")
 	}()
 
 	// Build filter engines
@@ -496,7 +501,21 @@ func cmdStatus(configPath string) {
 	if locked {
 		iPid, _ := st.GetMeta("instance_pid")
 		iExe, _ := st.GetMeta("instance_exe")
-		parts := []string{"smirror.exe instance running:"}
+		iMode, _ := st.GetMeta("instance_mode")
+		iUser, _ := st.GetMeta("instance_user")
+		iStarted, _ := st.GetMeta("instance_started")
+
+		// Build status line: "smirror.exe service running as SYSTEM: (PID 1234) C:\...\smirror.exe"
+		modeStr := "instance"
+		if iMode != "" {
+			modeStr = iMode
+		}
+		parts := []string{fmt.Sprintf("smirror.exe %s running", modeStr)}
+		if iUser != "" {
+			parts = append(parts, fmt.Sprintf("as %s:", iUser))
+		} else {
+			parts = append(parts, ":")
+		}
 		if iPid != "" {
 			parts = append(parts, fmt.Sprintf("(PID %s)", iPid))
 		}
@@ -504,6 +523,11 @@ func cmdStatus(configPath string) {
 			parts = append(parts, iExe)
 		}
 		fmt.Println(strings.Join(parts, " "))
+		if iStarted != "" {
+			if t, err := time.Parse(time.RFC3339, iStarted); err == nil {
+				fmt.Printf("  Started: %s (%s ago)\n", t.Local().Format(time.RFC3339), time.Since(t).Round(time.Second))
+			}
+		}
 		fmt.Println()
 	} else {
 		fmt.Printf("Instance: not running\n\n")
@@ -1752,10 +1776,14 @@ func serviceMain() {
 		st.SetMeta("instance_pid", fmt.Sprintf("%d", os.Getpid()))
 		st.SetMeta("instance_exe", exePath)
 		st.SetMeta("instance_started", time.Now().Local().Format(time.RFC3339))
+		st.SetMeta("instance_mode", "service")
+		st.SetMeta("instance_user", currentUser())
 		defer func() {
 			st.SetMeta("instance_pid", "")
 			st.SetMeta("instance_exe", "")
 			st.SetMeta("instance_started", "")
+			st.SetMeta("instance_mode", "")
+			st.SetMeta("instance_user", "")
 		}()
 
 		filters := buildFilters(cfg)
@@ -1805,6 +1833,27 @@ func serviceMain() {
 // cmdService handles the `smirror service` subcommand for Windows Service management.
 // updateConfigRclonePath replaces the rclone_path value in the YAML config file
 // with an absolute path so the Windows service (SYSTEM account) can find rclone.
+// currentUser returns the current username (e.g., "raveh" or "NT AUTHORITY\SYSTEM").
+func currentUser() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	// On Windows, u.Username is "DOMAIN\user". Use just the name for local users.
+	if runtime.GOOS == "windows" {
+		parts := strings.SplitN(u.Username, `\`, 2)
+		if len(parts) == 2 {
+			// Keep full name for SYSTEM/service accounts, short name for local users
+			domain := strings.ToUpper(parts[0])
+			if domain == "NT AUTHORITY" || domain == "NT SERVICE" {
+				return u.Username
+			}
+			return parts[1]
+		}
+	}
+	return u.Username
+}
+
 func updateConfigRclonePath(configPath, absRclonePath string) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
