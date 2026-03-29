@@ -17,6 +17,12 @@ func unlockFile(f *os.File) {
 	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 }
 
+// readFileShared reads a file — on Unix, flock doesn't block reads, so
+// os.ReadFile works fine.
+func readFileShared(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}
+
 // signalProcess checks if a process is running by sending signal 0.
 func signalProcess(proc *os.Process) error {
 	return proc.Signal(syscall.Signal(0))

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/qraveh/SelectiveMirror/internal/config"
 	"github.com/qraveh/SelectiveMirror/internal/filter"
@@ -34,7 +35,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.0-dev"
+var version = "0.2.1-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -84,15 +85,13 @@ func main() {
 		cmdDryRun(configPath, cmdArgs)
 	case "status":
 		cmdStatus(configPath)
-	case "test-mirrors", "doctor":
-		cmdDoctor(configPath)
+	case "test-mirrors", "doctor", "verify":
+		cmdTestMirrors(configPath, cmdArgs)
 	case "list-filters":
 		cmdListFilters(configPath, cmdArgs)
 	case "explain":
 		cmdExplain(configPath, cmdArgs)
-	case "verify":
-		cmdVerify(configPath, cmdArgs)
-	case "stats":
+	case "project-stats", "stats":
 		cmdStats(configPath)
 	case "report-bug":
 		cmdReportBug(configPath, cmdArgs)
@@ -120,11 +119,10 @@ Commands:
   sync-now [mirror]         Trigger immediate sync for one or all mirrors
   dry-run [mirror]          Show what would be synced without doing it
   status                    Show sync status and metrics per mirror
-  test-mirrors              Run all diagnostics (config, rclone, remotes, DB, watcher)
+  test-mirrors [mirror]     Run all diagnostics and verify sync state
   list-filters [mirror]     Show effective filter rules
   explain <mirror> <path>   Explain why a file is included or excluded
-  verify [mirror]           Compare local vs remote and report drift
-  stats                     Show file counts and line counts across all mirrors
+  project-stats             Show file counts and line counts across all mirrors
   report-bug [--stdout]     Generate diagnostic report for bug filing
   service <action>          Windows Service: install, uninstall, start, stop
   version                   Show version
@@ -261,7 +259,7 @@ func cmdStart(configPath string, args []string) {
 	if err != nil {
 		if err == lock.ErrAlreadyRunning {
 			fmt.Fprintln(os.Stderr, "Error: another smirror instance is already running.")
-			fmt.Fprintln(os.Stderr, "Use 'smirror doctor' to check instance status.")
+			fmt.Fprintln(os.Stderr, "Use 'smirror status' to check the running instance.")
 		} else {
 			fmt.Fprintf(os.Stderr, "Error acquiring lock: %v\n", err)
 		}
@@ -439,28 +437,49 @@ func cmdStatus(configPath string) {
 		var s metrics.Status
 		if json.Unmarshal(data, &s) == nil {
 			fmt.Printf("Live Metrics (from running instance):\n")
-			fmt.Printf("  Uptime: %s (started %s)\n", s.Uptime, s.StartTime)
+			startLocal := s.StartTime
+			if t, err := time.Parse(time.RFC3339, s.StartTime); err == nil {
+				startLocal = t.Local().Format(time.RFC3339)
+			}
+			fmt.Printf("  Uptime: %s (started %s)\n", s.Uptime, startLocal)
 			fmt.Printf("  Files synced: %d\n", s.FilesSynced)
 			fmt.Printf("  Bytes uploaded: %d\n", s.BytesUploaded)
 			fmt.Printf("  Sync errors: %d\n", s.SyncErrors)
 			fmt.Printf("  Avg latency: %dms\n", s.AvgLatencyMs)
 			fmt.Printf("  Queue depth: %d\n", s.QueueDepth)
 			if s.LastScanTime != "" {
-				fmt.Printf("  Last reconciliation: %s\n", s.LastScanTime)
+				scanLocal := s.LastScanTime
+				if t, err := time.Parse(time.RFC3339, s.LastScanTime); err == nil {
+					scanLocal = t.Local().Format(time.RFC3339)
+				}
+				fmt.Printf("  Last reconciliation: %s\n", scanLocal)
 			}
-			fmt.Printf("  Status generated: %s\n\n", s.GeneratedAt)
+			genLocal := s.GeneratedAt
+			if t, err := time.Parse(time.RFC3339, s.GeneratedAt); err == nil {
+				genLocal = t.Local().Format(time.RFC3339)
+			}
+			fmt.Printf("  Status generated: %s\n\n", genLocal)
 		}
 	}
 
 	lastHB, _ := st.GetMeta("last_heartbeat")
 	if lastHB != "" {
-		fmt.Printf("Last heartbeat: %s\n\n", lastHB)
+		hbLocal := lastHB
+		if t, err := time.Parse(time.RFC3339, lastHB); err == nil {
+			hbLocal = t.Local().Format(time.RFC3339)
+		}
+		fmt.Printf("Last heartbeat: %s\n\n", hbLocal)
 	}
 
 	// Check instance status
 	locked, pid := lock.IsLocked(dataDir(cfg))
 	if locked {
-		fmt.Printf("Instance: running (PID %d)\n\n", pid)
+		fmt.Printf("Instance: running (PID %d)\n", pid)
+		// Resolve PID to executable path
+		if exePath, err := getProcessExePath(pid); err == nil {
+			fmt.Printf("  Executable: %s\n", exePath)
+		}
+		fmt.Println()
 	} else {
 		fmt.Printf("Instance: not running\n\n")
 	}
@@ -475,12 +494,12 @@ func cmdStatus(configPath string) {
 		fmt.Printf("  Remote:  %s\n", proj.Remote)
 		fmt.Printf("  Files synced: %d\n", len(synced))
 		if !lastSync.IsZero() {
-			fmt.Printf("  Last file sync: %s (%s ago)\n", lastSync.Format(time.RFC3339), time.Since(lastSync).Round(time.Second))
+			fmt.Printf("  Last file sync: %s (%s ago)\n", lastSync.Local().Format(time.RFC3339), time.Since(lastSync).Round(time.Second))
 		}
 		lastFullSync, _ := st.GetMeta("last_full_sync_" + proj.Name)
 		if lastFullSync != "" {
 			if t, err := time.Parse(time.RFC3339, lastFullSync); err == nil {
-				fmt.Printf("  Last full sync: %s (%s ago)\n", lastFullSync, time.Since(t).Round(time.Second))
+				fmt.Printf("  Last full sync: %s (%s ago)\n", t.Local().Format(time.RFC3339), time.Since(t).Round(time.Second))
 			} else {
 				fmt.Printf("  Last full sync: %s\n", lastFullSync)
 			}
@@ -501,7 +520,7 @@ func cmdStatus(configPath string) {
 		fmt.Println("Ghost Scan:")
 		if ghostTime != "" {
 			if t, err := time.Parse(time.RFC3339, ghostTime); err == nil {
-				fmt.Printf("  Last scan: %s (%s ago)\n", ghostTime, time.Since(t).Round(time.Second))
+				fmt.Printf("  Last scan: %s (%s ago)\n", t.Local().Format(time.RFC3339), time.Since(t).Round(time.Second))
 			}
 		}
 		if ghostResult == "clean" {
@@ -524,8 +543,218 @@ func cmdStatus(configPath string) {
 	}
 }
 
-func cmdTestMirrors(configPath string) {
-	cmdDoctor(configPath)
+// cmdTestMirrors runs all diagnostics (local + remote) and verifies sync state.
+// Optional argument: mirror name to test only that mirror.
+// Aliases: doctor, verify (kept for backward compatibility).
+func cmdTestMirrors(configPath string, args []string) {
+	fmt.Printf("smirror test-mirrors — %s\n\n", version)
+	passed := 0
+	failed := 0
+
+	check := func(name string, fn func() error) {
+		fmt.Printf("  %-45s ", name)
+		start := time.Now()
+		if err := fn(); err != nil {
+			fmt.Printf("FAIL: %v (%dms)\n", err, time.Since(start).Milliseconds())
+			failed++
+		} else {
+			fmt.Printf("OK (%dms)\n", time.Since(start).Milliseconds())
+			passed++
+		}
+	}
+
+	// 1. Config file
+	var cfg *config.Global
+	check("Config file parses", func() error {
+		var err error
+		cfg, err = config.Load(configPath)
+		return err
+	})
+	if cfg == nil {
+		fmt.Printf("\nCannot continue without valid config. %d passed, %d failed.\n", passed, failed)
+		os.Exit(1)
+	}
+
+	// Determine which mirrors to test
+	projects := cfg.Projects
+	if len(args) > 0 {
+		proj := cfg.FindProject(args[0])
+		if proj == nil {
+			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
+			os.Exit(1)
+		}
+		projects = []config.Project{*proj}
+	}
+
+	// Mirror summary
+	for _, proj := range projects {
+		fmt.Printf("  %s: %s -> %s\n", proj.Name, proj.LocalPath, proj.Remote)
+		ignoreFile := proj.SyncIgnoreFile()
+		if _, err := os.Stat(ignoreFile); err == nil {
+			fmt.Printf("    .syncignore: %s\n", ignoreFile)
+		}
+	}
+	fmt.Println()
+
+	// 2. Mirror paths exist
+	check("All mirror paths exist", func() error {
+		for _, p := range projects {
+			if _, err := os.Stat(p.LocalPath); err != nil {
+				return fmt.Errorf("%s: %v", p.Name, err)
+			}
+		}
+		return nil
+	})
+
+	// 3. No duplicate names
+	check("No duplicate mirror names", func() error {
+		seen := make(map[string]bool)
+		for _, p := range cfg.Projects {
+			if seen[p.Name] {
+				return fmt.Errorf("duplicate: %s", p.Name)
+			}
+			seen[p.Name] = true
+		}
+		return nil
+	})
+
+	// 4. rclone binary — version, path, compatibility
+	check("rclone binary found", func() error {
+		rcloneInfo, err := rclone.Detect(cfg.RclonePath)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\n    version: %s\n    path:    %s\n    os:      %s\n  %-45s ", rcloneInfo.Version, rcloneInfo.Path, rcloneInfo.OS, "rclone version compatibility")
+		compat, msg := rcloneInfo.CompatCheck()
+		switch compat {
+		case rclone.CompatNone:
+			return fmt.Errorf("%s", msg)
+		case rclone.CompatPartial:
+			fmt.Printf("WARN: %s\n  %-45s ", msg, "(continuing)")
+			return nil
+		default:
+			return nil
+		}
+	})
+
+	// 5. Remote connectivity (sequential to avoid API rate limits, 30s timeout each)
+	for _, proj := range projects {
+		p := proj
+		check(fmt.Sprintf("Remote reachable: %s", p.Remote), func() error {
+			rp := cfg.RclonePath
+			if rp == "" {
+				rp = "rclone"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, rp, "mkdir", p.Remote)
+			if err := cmd.Run(); err != nil {
+				if ctx.Err() == context.DeadlineExceeded {
+					return fmt.Errorf("timed out after 30s")
+				}
+				return err
+			}
+			return nil
+		})
+	}
+
+	// 6. State DB
+	check("State DB opens and schema valid", func() error {
+		st, err := state.Open(cfg.StateDB)
+		if err != nil {
+			return err
+		}
+		st.Close()
+		return nil
+	})
+
+	// 7. State DB integrity
+	check("State DB integrity check", func() error {
+		db, err := sql.Open("sqlite", cfg.StateDB)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		var result string
+		err = db.QueryRow("PRAGMA integrity_check").Scan(&result)
+		if err != nil {
+			return err
+		}
+		if result != "ok" {
+			return fmt.Errorf("integrity_check returned: %s", result)
+		}
+		return nil
+	})
+
+	// 8. Log file writable
+	check("Log file writable", func() error {
+		f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return err
+		}
+		f.Close()
+		return nil
+	})
+
+	// 9. Single-instance lock
+	check("Single-instance lock available", func() error {
+		locked, pid := lock.IsLocked(dataDir(cfg))
+		if locked {
+			return fmt.Errorf("another instance running (PID %d)", pid)
+		}
+		return nil
+	})
+
+	// 10. Watcher can be created
+	check("Filesystem watcher available", func() error {
+		_, err := watcher.NewManager(cfg.Projects[:1], buildFilters(cfg), make(chan msync.Task, 1), cfg.DeletePolicy())
+		return err
+	})
+
+	// 11. Write permissions
+	check("Write permissions on mirror dirs", func() error {
+		for _, p := range projects {
+			testPath := filepath.Join(p.LocalPath, ".smirror_write_test")
+			if err := os.WriteFile(testPath, []byte("test"), 0644); err != nil {
+				return fmt.Errorf("%s: %v", p.Name, err)
+			}
+			os.Remove(testPath)
+		}
+		return nil
+	})
+
+	// 12. Filters
+	filters := buildFilters(cfg)
+	check("Filter engines load without error", func() error {
+		for _, p := range projects {
+			if _, ok := filters[p.Name]; !ok {
+				return fmt.Errorf("%s: filter not built", p.Name)
+			}
+		}
+		return nil
+	})
+
+	// 13. Sync drift (per-mirror file comparison)
+	fmt.Println()
+	totalDrift := 0
+	for _, proj := range projects {
+		drift := verifyProject(cfg, proj, filters[proj.Name])
+		totalDrift += drift
+	}
+
+	fmt.Printf("\n%d passed, %d failed", passed, failed)
+	if totalDrift > 0 {
+		fmt.Printf(", %d drift", totalDrift)
+	}
+	fmt.Println()
+
+	if totalDrift > 0 {
+		fmt.Println("Hint: 'smirror sync-now' may resolve most drift.")
+	}
+
+	if failed > 0 || totalDrift > 0 {
+		os.Exit(1)
+	}
 }
 
 func cmdListFilters(configPath string, args []string) {
@@ -609,7 +838,7 @@ func cmdExplain(configPath string, args []string) {
 	} else {
 		fmt.Printf("Local file: %s\n", localPath)
 		fmt.Printf("  Size: %d bytes\n", info.Size())
-		fmt.Printf("  Modified: %s\n", info.ModTime().Format(time.RFC3339))
+		fmt.Printf("  Modified: %s\n", info.ModTime().Local().Format(time.RFC3339))
 
 		if info.Size() > proj.MaxFileSize() {
 			fmt.Printf("  WARNING: exceeds max file size (%dMB)\n", proj.MaxFileSizeMB)
@@ -629,7 +858,7 @@ func cmdExplain(configPath string, args []string) {
 		fs, err := st.GetFileState(proj.Name, relPath)
 		if err == nil && fs != nil {
 			fmt.Printf("\nSync state:\n")
-			fmt.Printf("  Last synced: %s\n", fs.SyncedAt.Format(time.RFC3339))
+			fmt.Printf("  Last synced: %s\n", fs.SyncedAt.Local().Format(time.RFC3339))
 			fmt.Printf("  Synced hash: %s\n", fs.LocalHash)
 			fmt.Printf("  Synced size: %d bytes\n", fs.FileSize)
 			fmt.Printf("  rclone exit: %d", fs.RcloneExit)
@@ -659,222 +888,6 @@ func findMatchingRule(fe *filter.Engine, relPath string) string {
 		}
 	}
 	return "(could not determine specific rule)"
-}
-
-// cmdDoctor runs comprehensive self-test diagnostics.
-func cmdDoctor(configPath string) {
-	fmt.Printf("smirror test-mirrors — %s\n\n", version)
-	passed := 0
-	failed := 0
-
-	check := func(name string, fn func() error) {
-		fmt.Printf("  %-45s ", name)
-		start := time.Now()
-		if err := fn(); err != nil {
-			fmt.Printf("FAIL: %v (%dms)\n", err, time.Since(start).Milliseconds())
-			failed++
-		} else {
-			fmt.Printf("OK (%dms)\n", time.Since(start).Milliseconds())
-			passed++
-		}
-	}
-
-	// 1. Config file
-	var cfg *config.Global
-	check("Config file parses", func() error {
-		var err error
-		cfg, err = config.Load(configPath)
-		return err
-	})
-	if cfg == nil {
-		fmt.Printf("\nCannot continue without valid config. %d passed, %d failed.\n", passed, failed)
-		os.Exit(1)
-	}
-
-	// Mirror summary
-	for _, proj := range cfg.Projects {
-		fmt.Printf("  %s: %s -> %s\n", proj.Name, proj.LocalPath, proj.Remote)
-		ignoreFile := proj.SyncIgnoreFile()
-		if _, err := os.Stat(ignoreFile); err == nil {
-			fmt.Printf("    .syncignore: %s\n", ignoreFile)
-		}
-	}
-	fmt.Println()
-
-	// 2. Mirror paths exist
-	check("All mirror paths exist", func() error {
-		for _, p := range cfg.Projects {
-			if _, err := os.Stat(p.LocalPath); err != nil {
-				return fmt.Errorf("%s: %v", p.Name, err)
-			}
-		}
-		return nil
-	})
-
-	// 3. No duplicate names
-	check("No duplicate mirror names", func() error {
-		seen := make(map[string]bool)
-		for _, p := range cfg.Projects {
-			if seen[p.Name] {
-				return fmt.Errorf("duplicate: %s", p.Name)
-			}
-			seen[p.Name] = true
-		}
-		return nil
-	})
-
-	// 4. rclone binary — version, path, compatibility
-	var rcloneInfo *rclone.Info
-	check("rclone binary found", func() error {
-		var err error
-		rcloneInfo, err = rclone.Detect(cfg.RclonePath)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("\n    version: %s\n    path:    %s\n    os:      %s\n  %-45s ", rcloneInfo.Version, rcloneInfo.Path, rcloneInfo.OS, "rclone version compatibility")
-		compat, msg := rcloneInfo.CompatCheck()
-		switch compat {
-		case rclone.CompatNone:
-			return fmt.Errorf("%s", msg)
-		case rclone.CompatPartial:
-			fmt.Printf("WARN: %s\n  %-45s ", msg, "(continuing)")
-			return nil
-		default:
-			return nil
-		}
-	})
-
-	// 5. Remote connectivity (sequential to avoid API rate limits, 30s timeout each)
-	for _, proj := range cfg.Projects {
-		p := proj
-		check(fmt.Sprintf("Remote reachable: %s", p.Remote), func() error {
-			rp := cfg.RclonePath
-			if rp == "" {
-				rp = "rclone"
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, rp, "mkdir", p.Remote)
-			if err := cmd.Run(); err != nil {
-				if ctx.Err() == context.DeadlineExceeded {
-					return fmt.Errorf("timed out after 30s")
-				}
-				return err
-			}
-			return nil
-		})
-	}
-
-	// 6. State DB
-	check("State DB opens and schema valid", func() error {
-		st, err := state.Open(cfg.StateDB)
-		if err != nil {
-			return err
-		}
-		st.Close()
-		return nil
-	})
-
-	// 7. State DB integrity
-	check("State DB integrity check", func() error {
-		db, err := sql.Open("sqlite", cfg.StateDB)
-		if err != nil {
-			return err
-		}
-		defer db.Close()
-		var result string
-		err = db.QueryRow("PRAGMA integrity_check").Scan(&result)
-		if err != nil {
-			return err
-		}
-		if result != "ok" {
-			return fmt.Errorf("integrity_check returned: %s", result)
-		}
-		return nil
-	})
-
-	// 8. Log file writable
-	check("Log file writable", func() error {
-		f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return err
-		}
-		f.Close()
-		return nil
-	})
-
-	// 9. Single-instance lock
-	check("Single-instance lock available", func() error {
-		locked, pid := lock.IsLocked(dataDir(cfg))
-		if locked {
-			return fmt.Errorf("another instance running (PID %d)", pid)
-		}
-		return nil
-	})
-
-	// 10. Watcher can be created
-	check("Filesystem watcher available", func() error {
-		_, err := watcher.NewManager(cfg.Projects[:1], buildFilters(cfg), make(chan msync.Task, 1), cfg.DeletePolicy())
-		return err
-	})
-
-	// 11. Write permissions
-	check("Write permissions on mirror dirs", func() error {
-		for _, p := range cfg.Projects {
-			testPath := filepath.Join(p.LocalPath, ".smirror_write_test")
-			if err := os.WriteFile(testPath, []byte("test"), 0644); err != nil {
-				return fmt.Errorf("%s: %v", p.Name, err)
-			}
-			os.Remove(testPath)
-		}
-		return nil
-	})
-
-	// 12. Filters
-	check("Filter engines load without error", func() error {
-		for _, p := range cfg.Projects {
-			_, err := filter.New(cfg.GlobalExcludes, p.SyncIgnoreFile())
-			if err != nil {
-				return fmt.Errorf("%s: %v", p.Name, err)
-			}
-		}
-		return nil
-	})
-
-	fmt.Printf("\n%d passed, %d failed\n", passed, failed)
-	if failed > 0 {
-		os.Exit(1)
-	}
-}
-
-// cmdVerify compares local state vs remote and reports drift.
-func cmdVerify(configPath string, args []string) {
-	cfg := loadConfig(configPath)
-	logging.Setup(cfg.LogLevel, "", true)
-	filters := buildFilters(cfg)
-
-	projects := cfg.Projects
-	if len(args) > 0 {
-		proj := cfg.FindProject(args[0])
-		if proj == nil {
-			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
-			os.Exit(1)
-		}
-		projects = []config.Project{*proj}
-	}
-
-	totalDrift := 0
-	for _, proj := range projects {
-		drift := verifyProject(cfg, proj, filters[proj.Name])
-		totalDrift += drift
-	}
-
-	if totalDrift == 0 {
-		fmt.Println("\nNo drift detected.")
-	} else {
-		fmt.Printf("\nTotal drift: %d files\n", totalDrift)
-		os.Exit(1)
-	}
 }
 
 func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) int {
@@ -1506,7 +1519,7 @@ func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, fil
 	}
 
 	if totalGhosts > 0 {
-		summary := fmt.Sprintf("%d ghost files detected on remote. Run 'smirror verify' for details.", totalGhosts)
+		summary := fmt.Sprintf("%d ghost files detected on remote. Run 'smirror test-mirrors' for details.", totalGhosts)
 		slog.Warn(summary)
 		st.SetMeta("ghost_scan_result", summary)
 		st.SetMeta("ghost_scan_time", time.Now().UTC().Format(time.RFC3339))
@@ -1782,4 +1795,25 @@ func cmdService(configPath string, args []string) {
 		fmt.Fprintf(os.Stderr, "Unknown service action: %s\nUse: install, uninstall, start, stop\n", args[0])
 		os.Exit(1)
 	}
+}
+
+// getProcessExePath returns the full executable path for a given PID.
+// Uses QueryFullProcessImageNameW on Windows.
+func getProcessExePath(pid int) (string, error) {
+	const processQueryLimitedInformation = 0x1000
+	h, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
+	if err != nil {
+		return "", err
+	}
+	defer syscall.CloseHandle(h)
+
+	var buf [syscall.MAX_PATH]uint16
+	size := uint32(len(buf))
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	proc := kernel32.NewProc("QueryFullProcessImageNameW")
+	r, _, err := proc.Call(uintptr(h), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+	if r == 0 {
+		return "", err
+	}
+	return syscall.UTF16ToString(buf[:size]), nil
 }

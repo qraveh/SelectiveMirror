@@ -178,6 +178,18 @@ go test ./internal/... -v
 
 ---
 
+## Versioning
+
+Follows [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
+
+- **PATCH** (`0.x.N+1`): Bug fixes, refactors, renames, UI tweaks — no new user-facing functionality.
+- **MINOR** (`0.N+1.0`): New features, new commands, new config options, architectural changes.
+- **MAJOR** (`N+1.0.0`): Breaking changes to config format, CLI interface, or behavior (not expected pre-1.0).
+
+**Workflow**: Increment PATCH on each commit/change. Tag only on MINOR (or MAJOR) releases. High patch numbers are fine (e.g., `0.2.45`). The dev version in `main.go` (`var version`) uses `-dev` suffix between releases (e.g., `0.2.1-dev`). GoReleaser overrides the version at build time via `-X main.version={{.Version}}`.
+
+---
+
 ## Phases
 
 - [x] **Phase 1**: Core mirror — config, filters, watcher, sync, state, CLI

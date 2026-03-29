@@ -53,6 +53,10 @@ func Acquire(dataDir string) (*Lock, error) {
 	fmt.Fprintf(f, "pid=%d\ntime=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339))
 	f.Sync()
 
+	// Also write PID to a separate .pid file (readable while lock is held)
+	pidPath := filepath.Join(dataDir, "smirror.pid")
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+
 	return &Lock{path: lockPath, file: f}, nil
 }
 
@@ -65,36 +69,54 @@ func (l *Lock) Release() error {
 	l.file.Close()
 	l.file = nil
 	os.Remove(l.path)
+	os.Remove(filepath.Join(filepath.Dir(l.path), "smirror.pid"))
 	return nil
 }
 
-// IsLocked checks if the lock file exists and contains a valid PID.
-// This is a best-effort check for diagnostic purposes (e.g., doctor command).
+// IsLocked checks if the lock file is held by another instance.
+// It attempts to acquire the lock — if that fails, another instance is running.
+// Returns (locked, pid) where pid is best-effort (0 if unreadable).
 func IsLocked(dataDir string) (bool, int) {
 	lockPath := filepath.Join(dataDir, "smirror.lock")
-	data, err := os.ReadFile(lockPath)
+
+	// Try to open and lock the file. If we can lock it, no one else holds it.
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return false, 0
 	}
 
-	// Try to parse PID
+	if err := lockFile(f); err != nil {
+		// Lock failed — another instance holds it.
+		f.Close()
+		// Read PID from separate .pid file (lock file bytes are unreadable)
+		pidPath := filepath.Join(dataDir, "smirror.pid")
+		pid := readPIDFromPath(pidPath)
+		return true, pid
+	}
+
+	// We acquired the lock — no other instance is running.
+	// Release it immediately so we don't interfere.
+	unlockFile(f)
+	f.Close()
+	return false, 0
+}
+
+// readPIDFromPath reads the PID from the lock file using shared read access.
+// This works even when another process holds an exclusive lock on the file,
+// because we open with FILE_SHARE_READ|FILE_SHARE_WRITE on Windows.
+func readPIDFromPath(path string) int {
+	data, err := readFileShared(path)
+	if err != nil {
+		return 0
+	}
 	for _, line := range splitLines(string(data)) {
 		if len(line) > 4 && line[:4] == "pid=" {
 			if pid, err := strconv.Atoi(line[4:]); err == nil {
-				// Check if process is still running
-				proc, err := os.FindProcess(pid)
-				if err != nil {
-					return false, pid
-				}
-				// On Windows, FindProcess always succeeds. Try to signal 0.
-				if err := signalProcess(proc); err != nil {
-					return false, pid
-				}
-				return true, pid
+				return pid
 			}
 		}
 	}
-	return false, 0
+	return 0
 }
 
 func splitLines(s string) []string {
