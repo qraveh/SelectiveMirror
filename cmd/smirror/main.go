@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.14-dev"
+var version = "0.2.15-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -1875,7 +1875,7 @@ func cmdService(configPath string, args []string) {
 		fmt.Println("Service 'smirror' started.")
 		cfg, err := config.Load(configPath)
 		if err == nil {
-			fmt.Printf("Follow log: Get-Content '%s' -Wait -Tail 30\n", cfg.LogFile)
+			fmt.Printf("Follow log: powershell -NoProfile -Command \"Get-Content '%s' -Wait -Tail 30\"\n", cfg.LogFile)
 		}
 
 	case "stop":
