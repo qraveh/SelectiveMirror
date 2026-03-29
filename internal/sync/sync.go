@@ -587,6 +587,9 @@ func (e *Engine) defaultRunRclone(ctx context.Context, args []string) int {
 		rclonePath = "rclone"
 	}
 
+	// Prepend global rclone flags (--config for service/SYSTEM account, etc.)
+	args = append(e.cfg.RcloneArgs(), args...)
+
 	e.log.Debug("rclone", "cmd", rclonePath, "args", strings.Join(args, " "))
 
 	// Apply a 5-minute timeout to prevent a single rclone operation from
@@ -670,7 +673,8 @@ func Validate(cfg *config.Global) error {
 		}
 
 		fmt.Printf("Checking %s -> %s ... ", proj.Name, remote)
-		cmd := exec.Command(rclonePath, "lsd", remote, "--max-depth", "0")
+		lsdArgs := append(cfg.RcloneArgs(), "lsd", remote, "--max-depth", "0")
+		cmd := exec.Command(rclonePath, lsdArgs...)
 		if err := cmd.Run(); err != nil {
 			fmt.Println("FAILED")
 			return fmt.Errorf("mirror %q: remote %q unreachable: %w", proj.Name, remote, err)
@@ -699,7 +703,8 @@ func ListRemote(cfg *config.Global, proj config.Project) ([]RemoteFile, error) {
 		rclonePath = "rclone"
 	}
 
-	cmd := exec.Command(rclonePath, "lsjson", proj.Remote, "--recursive", "--hash", "--no-mimetype", "--no-modtime")
+	lsjsonArgs := append(cfg.RcloneArgs(), "lsjson", proj.Remote, "--recursive", "--hash", "--no-mimetype", "--no-modtime")
+	cmd := exec.Command(rclonePath, lsjsonArgs...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("rclone lsjson: %w", err)

@@ -38,7 +38,8 @@ global_excludes:
 # log_level: info    # debug, info, warn, error
 
 # rclone settings
-# rclone_path: rclone           # Path to rclone binary
+# rclone_path: rclone           # Path to rclone binary (auto-resolved on service install)
+# rclone_config: ""             # Path to rclone.conf (auto-resolved on service install)
 # rclone_extra_flags: []        # Extra flags for every rclone call
 # bandwidth_limit: ""           # e.g. "10M" to cap at 10 MB/s
 

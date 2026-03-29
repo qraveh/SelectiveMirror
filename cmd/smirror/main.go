@@ -35,7 +35,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.20-dev"
+var version = "0.2.21-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -702,7 +702,8 @@ func cmdTestMirrors(configPath string, args []string) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, rp, "mkdir", p.Remote)
+			mkdirArgs := append(cfg.RcloneArgs(), "mkdir", p.Remote)
+			cmd := exec.CommandContext(ctx, rp, mkdirArgs...)
 			if err := cmd.Run(); err != nil {
 				if ctx.Err() == context.DeadlineExceeded {
 					return fmt.Errorf("timed out after 30s")
@@ -1830,10 +1831,7 @@ func serviceMain() {
 	}
 }
 
-// cmdService handles the `smirror service` subcommand for Windows Service management.
-// updateConfigRclonePath replaces the rclone_path value in the YAML config file
-// with an absolute path so the Windows service (SYSTEM account) can find rclone.
-// currentUser returns the current username (e.g., "raveh" or "NT AUTHORITY\SYSTEM").
+// currentUser returns the current username (e.g., "raveh" or "SYSTEM (LocalSystem)").
 func currentUser() string {
 	u, err := user.Current()
 	if err != nil {
@@ -1860,24 +1858,26 @@ func currentUser() string {
 	return u.Username
 }
 
-func updateConfigRclonePath(configPath, absRclonePath string) error {
+// updateConfigKey sets a top-level YAML key in the config file.
+// If the key exists, its value is replaced. If not, a new line is appended.
+func updateConfigKey(configPath, key, value string) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
 	}
 	lines := strings.Split(string(data), "\n")
+	prefix := key + ":"
 	found := false
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "rclone_path:") {
-			lines[i] = "rclone_path: " + absRclonePath
+		if strings.HasPrefix(trimmed, prefix) {
+			lines[i] = key + ": " + value
 			found = true
 			break
 		}
 	}
 	if !found {
-		// Append it
-		lines = append(lines, "rclone_path: "+absRclonePath)
+		lines = append(lines, key+": "+value)
 	}
 	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
 }
@@ -1890,18 +1890,29 @@ func cmdService(configPath string, args []string) {
 
 	switch args[0] {
 	case "install":
-		// Resolve rclone to absolute path before installing the service.
-		// The Windows service runs as SYSTEM with a different PATH, so a
-		// relative rclone_path like "rclone" won't be found.
+		// Resolve rclone path and config before installing the service.
+		// The Windows service runs as SYSTEM with different PATH and home dir.
 		if cfg, err := config.Load(configPath); err == nil {
+			// Resolve rclone binary to absolute path
 			if !filepath.IsAbs(cfg.RclonePath) {
 				if info, err := rclone.Detect(cfg.RclonePath); err == nil {
-					// Update the config file with the absolute rclone path
-					if err := updateConfigRclonePath(configPath, info.Path); err != nil {
+					if err := updateConfigKey(configPath, "rclone_path", info.Path); err != nil {
 						fmt.Fprintf(os.Stderr, "Warning: could not update rclone_path in config: %v\n", err)
 						fmt.Fprintf(os.Stderr, "Manually set rclone_path to: %s\n\n", info.Path)
 					} else {
 						fmt.Printf("Resolved rclone_path: %s\n", info.Path)
+					}
+				}
+			}
+			// Resolve rclone config (SYSTEM has its own %APPDATA%, no remotes there)
+			if cfg.RcloneConfig == "" {
+				rcloneConf := filepath.Join(os.Getenv("APPDATA"), "rclone", "rclone.conf")
+				if _, err := os.Stat(rcloneConf); err == nil {
+					if err := updateConfigKey(configPath, "rclone_config", rcloneConf); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: could not update rclone_config in config: %v\n", err)
+						fmt.Fprintf(os.Stderr, "Manually set rclone_config to: %s\n\n", rcloneConf)
+					} else {
+						fmt.Printf("Resolved rclone_config: %s\n", rcloneConf)
 					}
 				}
 			}

@@ -67,6 +67,7 @@ type Global struct {
 	LogFile            string       `yaml:"log_file"`
 	LogLevel           string       `yaml:"log_level"`
 	RclonePath         string       `yaml:"rclone_path"`
+	RcloneConfig       string       `yaml:"rclone_config"`       // path to rclone.conf (for service/SYSTEM account)
 	RcloneExtraFlags   []string     `yaml:"rclone_extra_flags"`
 	BandwidthLimit     string       `yaml:"bandwidth_limit"`
 	HeartbeatIntervalS int          `yaml:"heartbeat_interval_sec"`
@@ -76,6 +77,15 @@ type Global struct {
 	QuarantineDays     int          `yaml:"quarantine_days"`  // days to keep quarantined files (default 30)
 	VerifyIntervalS    int          `yaml:"verify_interval_sec"`  // periodic verify interval (default 21600 = 6h, 0 = disabled)
 	NotifyEnabled      *bool        `yaml:"notify_enabled"`       // Windows toast notifications (default true)
+}
+
+// RcloneArgs returns global rclone flags (--config if set).
+// Prepend these to any rclone command's arguments.
+func (g Global) RcloneArgs() []string {
+	if g.RcloneConfig != "" {
+		return []string{"--config", g.RcloneConfig}
+	}
+	return nil
 }
 
 // HeartbeatInterval returns the heartbeat interval as a time.Duration.
