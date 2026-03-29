@@ -26,9 +26,7 @@
 
     <!-- Directory structure -->
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="$(var.InstallFolder)">
-        <Directory Id="DocsFolder" Name="docs" />
-      </Directory>
+      <Directory Id="INSTALLFOLDER" Name="$(var.InstallFolder)" />
     </StandardDirectory>
 
     <!-- Main component group -->
@@ -67,26 +65,9 @@
       </Component>
     </ComponentGroup>
 
-    <!-- PDF manuals in docs subfolder -->
-    <ComponentGroup Id="DocsComponents" Directory="DocsFolder">
-      <Component Id="InstallManual" Guid="B8C9D0E1-F2A3-4B5C-5D6E-7F8A9B0C1D2E">
-        <File Id="InstallManual.pdf" Source="..\docs\Installation Manual.pdf" />
-      </Component>
-      <Component Id="UserManual" Guid="C9D0E1F2-A3B4-4C5D-6E7F-8A9B0C1D2E3F">
-        <File Id="UserManual.pdf" Source="..\docs\User Manual.pdf" />
-      </Component>
-      <Component Id="DevManual" Guid="D0E1F2A3-B4C5-4D5E-7F8A-9B0C1D2E3F4A">
-        <File Id="DevManual.pdf" Source="..\docs\Developer Manual.pdf" />
-      </Component>
-    </ComponentGroup>
-
     <!-- Features -->
     <Feature Id="ProductFeature" Title="SelectiveMirror" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
-      <!-- PDF manuals — Level="2" means not installed by default (PDFs built separately) -->
-      <Feature Id="DocsFeature" Title="PDF Documentation" Level="2">
-        <ComponentGroupRef Id="DocsComponents" />
-      </Feature>
     </Feature>
 
   </Package>

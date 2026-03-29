@@ -46,20 +46,13 @@ $required = @(
     (Join-Path $root "CREDITS.md"),
     (Join-Path $root "THIRD-PARTY-LICENSES.txt"),
     (Join-Path $root "config.example.yaml"),
+    (Join-Path $root "bin\rclone.exe"),
     (Join-Path $installerDir "Resources\license.rtf")
 )
 
 $missing = @()
 foreach ($f in $required) {
     if (-not (Test-Path $f)) { $missing += $f }
-}
-
-# PDF manuals are optional (built separately)
-$pdfs = @("Installation Manual.pdf", "User Manual.pdf", "Developer Manual.pdf")
-$pdfsMissing = @()
-foreach ($pdf in $pdfs) {
-    $p = Join-Path $root "docs\$pdf"
-    if (-not (Test-Path $p)) { $pdfsMissing += $pdf }
 }
 
 if ($missing.Count -gt 0) {
@@ -69,12 +62,7 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-if ($pdfsMissing.Count -gt 0) {
-    Write-Host " OK (PDFs missing — run docs/build-docs.ps1 first)" -ForegroundColor Yellow
-    $pdfsMissing | ForEach-Object { Write-Host "  Warning: $_" -ForegroundColor Yellow }
-} else {
-    Write-Host " OK" -ForegroundColor Green
-}
+Write-Host " OK" -ForegroundColor Green
 
 # Step 3: Build MSI
 Write-Host "[3/3] Building MSI..." -NoNewline
