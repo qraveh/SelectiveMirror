@@ -40,7 +40,7 @@ func newRotatingWriter(path string, maxBytes int64, maxBackups int) (*rotatingWr
 }
 
 func (w *rotatingWriter) openFile() error {
-	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := openShared(w.path)
 	if err != nil {
 		return err
 	}
