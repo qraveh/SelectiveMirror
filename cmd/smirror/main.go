@@ -35,7 +35,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.21-dev"
+var version = "0.2.22-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -599,12 +599,15 @@ func cmdTestMirrors(configPath string, args []string) {
 	fmt.Println()
 	passed := 0
 	failed := 0
+	var failures []string
 
 	check := func(name string, fn func() error) {
 		fmt.Printf("  %-45s ", name)
 		start := time.Now()
 		if err := fn(); err != nil {
+			msg := fmt.Sprintf("%s: %v", name, err)
 			fmt.Printf("FAIL: %v (%dms)\n", err, time.Since(start).Milliseconds())
+			failures = append(failures, msg)
 			failed++
 		} else {
 			fmt.Printf("OK (%dms)\n", time.Since(start).Milliseconds())
@@ -809,6 +812,13 @@ func cmdTestMirrors(configPath string, args []string) {
 		fmt.Printf(", %d drift", totalDrift)
 	}
 	fmt.Println()
+
+	if len(failures) > 0 {
+		fmt.Println("\nFailed checks:")
+		for _, f := range failures {
+			fmt.Printf("  ✗ %s\n", f)
+		}
+	}
 
 	if totalDrift > 0 {
 		fmt.Println("Hint: 'smirror sync-now' may resolve most drift.")
