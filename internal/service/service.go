@@ -193,8 +193,6 @@ func Start() error {
 		return fmt.Errorf("cannot start service: %w", err)
 	}
 
-	fmt.Println("Service 'smirror' start signal sent.")
-	fmt.Println("Check status with: sc query smirror")
 	return nil
 }
 

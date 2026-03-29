@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.11-dev"
+var version = "0.2.12-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -1811,6 +1811,16 @@ func cmdService(configPath string, args []string) {
 
 	switch args[0] {
 	case "install":
+		// Pre-check: resolve rclone and warn if config uses a relative path,
+		// since the Windows service runs as SYSTEM with a different PATH.
+		if cfg, err := config.Load(configPath); err == nil {
+			if !filepath.IsAbs(cfg.RclonePath) {
+				if info, err := rclone.Detect(cfg.RclonePath); err == nil {
+					fmt.Printf("Warning: rclone_path is %q — the Windows service (SYSTEM account) may not find it.\n", cfg.RclonePath)
+					fmt.Printf("Set rclone_path in config.yaml to: %s\n\n", info.Path)
+				}
+			}
+		}
 		if err := service.Install(configPath); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -1831,6 +1841,11 @@ func cmdService(configPath string, args []string) {
 		if err := service.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
+		}
+		fmt.Println("Service 'smirror' started.")
+		cfg, err := config.Load(configPath)
+		if err == nil {
+			fmt.Printf("Follow log: Get-Content '%s' -Wait -Tail 30\n", cfg.LogFile)
 		}
 
 	case "stop":
