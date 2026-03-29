@@ -46,6 +46,7 @@ $required = @(
     (Join-Path $root "CREDITS.md"),
     (Join-Path $root "THIRD-PARTY-LICENSES.txt"),
     (Join-Path $root "config.example.yaml"),
+    (Join-Path $installerDir "install-rclone.ps1"),
     (Join-Path $installerDir "Resources\license.rtf")
 )
 
