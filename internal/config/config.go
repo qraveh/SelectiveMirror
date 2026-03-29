@@ -180,13 +180,15 @@ func Load(path string) (*Global, error) {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
 
-	// Apply defaults for paths
-	dataDir := DefaultDataDir()
+	// Apply defaults for paths — use the config file's own directory so that
+	// the state DB and log are always co-located with the config, regardless
+	// of which user account is running (foreground or Windows service as SYSTEM).
+	configDir := filepath.Dir(path)
 	if cfg.StateDB == "" || cfg.StateDB == "~/.selectivemirror/state.db" {
-		cfg.StateDB = filepath.Join(dataDir, "state.db")
+		cfg.StateDB = filepath.Join(configDir, "state.db")
 	}
 	if cfg.LogFile == "" || cfg.LogFile == "~/.selectivemirror/selectivemirror.log" {
-		cfg.LogFile = filepath.Join(dataDir, "selectivemirror.log")
+		cfg.LogFile = filepath.Join(configDir, "selectivemirror.log")
 	}
 
 	// Expand ~ in paths
