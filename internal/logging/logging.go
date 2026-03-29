@@ -96,6 +96,12 @@ func (w *rotatingWriter) Close() error {
 	return nil
 }
 
+// OpenShared opens a file for writing with shared access (other processes can read).
+// Exported for use in diagnostics (test-mirrors log-writable check).
+func OpenShared(path string) (*os.File, error) {
+	return openShared(path)
+}
+
 // Setup initializes the slog default logger.
 // level: "debug", "info", "warn", "error"
 // logFile: path to log file (empty = stderr only)

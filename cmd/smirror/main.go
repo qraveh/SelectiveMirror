@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.16-dev"
+var version = "0.2.17-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -719,7 +719,7 @@ func cmdTestMirrors(configPath string, args []string) {
 
 	// 8. Log file writable
 	check("Log file writable", func() error {
-		f, err := os.OpenFile(cfg.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		f, err := logging.OpenShared(cfg.LogFile)
 		if err != nil {
 			return err
 		}
