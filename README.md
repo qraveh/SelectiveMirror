@@ -17,7 +17,7 @@ Real-time selective file synchronization for Windows. Watches local directories 
 
 ### MSI Installer (recommended)
 
-Download `SelectiveMirror.msi` from [Releases](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to your system PATH and bundles rclone.
+Download `SelectiveMirror.msi` from [Releases](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to your system PATH.
 
 ### ZIP Archive
 
@@ -25,7 +25,7 @@ Download the ZIP from [Releases](https://github.com/qraveh/SelectiveMirror/relea
 
 ## Prerequisites
 
-- **rclone v1.73+** -- bundled in the release package, or install separately: `winget install Rclone.Rclone`
+- **rclone v1.73+** -- install with `winget install Rclone.Rclone` or from [rclone.org](https://rclone.org/downloads/)
 - **An rclone remote** -- configure with `rclone config` (one-time setup)
 
 ## Quick Start

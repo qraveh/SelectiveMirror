@@ -92,8 +92,7 @@ func Detect(configuredPath string) (*Info, error) {
 // resolve finds the rclone binary path using the search order:
 // 1. Configured path (if absolute and exists)
 // 2. System PATH (exec.LookPath)
-// 3. Same directory as smirror.exe (bundled rclone)
-// 4. Common install locations (Windows-specific)
+// 3. Common install locations (Windows-specific)
 func resolve(configuredPath string) (string, error) {
 	// 1. If configured path is absolute, check it directly
 	if configuredPath != "" && filepath.IsAbs(configuredPath) {
@@ -115,15 +114,7 @@ func resolve(configuredPath string) (string, error) {
 		return abs, nil
 	}
 
-	// 3. Same directory as the running executable (bundled rclone)
-	if exePath, err := os.Executable(); err == nil {
-		candidate := filepath.Join(filepath.Dir(exePath), "rclone.exe")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
-
-	// 4. Common install locations (Windows only)
+	// 3. Common install locations (Windows only)
 	if runtime.GOOS == "windows" {
 		candidates := windowsSearchPaths()
 		for _, c := range candidates {
@@ -236,7 +227,7 @@ func parseVersionOutput(output string) (Version, string) {
 
 // searchDescription returns a human-readable description of where rclone was searched.
 func searchDescription(configuredPath string) string {
-	parts := []string{"PATH", "exe directory"}
+	parts := []string{"PATH"}
 	if configuredPath != "" {
 		parts = append([]string{configuredPath}, parts...)
 	}

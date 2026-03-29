@@ -25,7 +25,6 @@ archives:
       - CREDITS.md
       - THIRD-PARTY-LICENSES.txt
       - config.example.yaml
-      - bin/rclone.exe
 
 checksum:
   name_template: 'checksums.txt'
