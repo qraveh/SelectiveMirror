@@ -35,7 +35,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.19-dev"
+var version = "0.2.20-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -1839,16 +1839,22 @@ func currentUser() string {
 	if err != nil {
 		return ""
 	}
-	// On Windows, u.Username is "DOMAIN\user". Use just the name for local users.
+	// On Windows, u.Username is "DOMAIN\user".
 	if runtime.GOOS == "windows" {
 		parts := strings.SplitN(u.Username, `\`, 2)
 		if len(parts) == 2 {
-			// Keep full name for SYSTEM/service accounts, short name for local users
 			domain := strings.ToUpper(parts[0])
+			name := parts[1]
+			// NT AUTHORITY\SYSTEM, NT SERVICE\... — keep full name
 			if domain == "NT AUTHORITY" || domain == "NT SERVICE" {
 				return u.Username
 			}
-			return parts[1]
+			// Machine account (COMPUTERNAME$) — means LocalSystem service
+			if strings.HasSuffix(name, "$") {
+				return "SYSTEM (LocalSystem)"
+			}
+			// Regular local user — strip domain
+			return name
 		}
 	}
 	return u.Username
