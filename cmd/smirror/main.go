@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.12-dev"
+var version = "0.2.13-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -1803,6 +1803,30 @@ func serviceMain() {
 }
 
 // cmdService handles the `smirror service` subcommand for Windows Service management.
+// updateConfigRclonePath replaces the rclone_path value in the YAML config file
+// with an absolute path so the Windows service (SYSTEM account) can find rclone.
+func updateConfigRclonePath(configPath, absRclonePath string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "rclone_path:") {
+			lines[i] = "rclone_path: " + absRclonePath
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Append it
+		lines = append(lines, "rclone_path: "+absRclonePath)
+	}
+	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+}
+
 func cmdService(configPath string, args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: smirror service <install|uninstall|start|stop>")
@@ -1811,13 +1835,19 @@ func cmdService(configPath string, args []string) {
 
 	switch args[0] {
 	case "install":
-		// Pre-check: resolve rclone and warn if config uses a relative path,
-		// since the Windows service runs as SYSTEM with a different PATH.
+		// Resolve rclone to absolute path before installing the service.
+		// The Windows service runs as SYSTEM with a different PATH, so a
+		// relative rclone_path like "rclone" won't be found.
 		if cfg, err := config.Load(configPath); err == nil {
 			if !filepath.IsAbs(cfg.RclonePath) {
 				if info, err := rclone.Detect(cfg.RclonePath); err == nil {
-					fmt.Printf("Warning: rclone_path is %q — the Windows service (SYSTEM account) may not find it.\n", cfg.RclonePath)
-					fmt.Printf("Set rclone_path in config.yaml to: %s\n\n", info.Path)
+					// Update the config file with the absolute rclone path
+					if err := updateConfigRclonePath(configPath, info.Path); err != nil {
+						fmt.Fprintf(os.Stderr, "Warning: could not update rclone_path in config: %v\n", err)
+						fmt.Fprintf(os.Stderr, "Manually set rclone_path to: %s\n\n", info.Path)
+					} else {
+						fmt.Printf("Resolved rclone_path: %s\n", info.Path)
+					}
 				}
 			}
 		}
