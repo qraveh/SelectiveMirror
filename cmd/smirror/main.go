@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.6-dev"
+var version = "0.2.7-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -496,14 +496,14 @@ func cmdStatus(configPath string) {
 	if locked {
 		iPid, _ := st.GetMeta("instance_pid")
 		iExe, _ := st.GetMeta("instance_exe")
+		parts := []string{"smirror.exe instance running:"}
 		if iPid != "" {
-			fmt.Printf("Instance: running (PID %s)\n", iPid)
-		} else {
-			fmt.Printf("Instance: running\n")
+			parts = append(parts, fmt.Sprintf("(PID %s)", iPid))
 		}
 		if iExe != "" {
-			fmt.Printf("  Executable: %s\n", iExe)
+			parts = append(parts, iExe)
 		}
+		fmt.Println(strings.Join(parts, " "))
 		fmt.Println()
 	} else {
 		fmt.Printf("Instance: not running\n\n")
