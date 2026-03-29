@@ -35,7 +35,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.22-dev"
+var version = "0.2.23-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -756,16 +756,25 @@ func cmdTestMirrors(configPath string, args []string) {
 	})
 
 	// 9. Single-instance lock
+	lockPath := filepath.Join(dataDir(cfg), "smirror.lock")
 	check("Single-instance lock available", func() error {
 		locked, _ := lock.IsLocked(dataDir(cfg))
 		if locked {
+			parts := []string{fmt.Sprintf("locked by running instance (%s)", lockPath)}
 			if st != nil {
 				iPid, _ := st.GetMeta("instance_pid")
-				if iPid != "" {
-					return fmt.Errorf("another instance running (PID %s)", iPid)
+				iMode, _ := st.GetMeta("instance_mode")
+				iExe, _ := st.GetMeta("instance_exe")
+				if iMode != "" && iPid != "" {
+					parts = append(parts, fmt.Sprintf("%s PID %s", iMode, iPid))
+				} else if iPid != "" {
+					parts = append(parts, fmt.Sprintf("PID %s", iPid))
+				}
+				if iExe != "" {
+					parts = append(parts, iExe)
 				}
 			}
-			return fmt.Errorf("another instance running")
+			return fmt.Errorf("%s", strings.Join(parts, ", "))
 		}
 		return nil
 	})
