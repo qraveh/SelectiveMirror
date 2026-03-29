@@ -449,7 +449,7 @@ Project: MyProject
   Last full sync: 2026-03-27T10:10:00Z (5m ago)
 ```
 
-## validate
+## test-mirrors
 
 Check configuration validity and rclone connectivity. Exits with code 0 on success, 1 on failure.
 
@@ -1022,7 +1022,7 @@ SelectiveMirror searches for rclone in this order:
 - Install rclone: `winget install Rclone.Rclone`
 - Set `rclone_path` to the full path: `rclone_path: C:\Program Files\rclone\rclone.exe`
 
-### "remote unreachable" during validate
+### "remote unreachable" during test-mirrors
 
 The remote is not accessible. This could mean:
 

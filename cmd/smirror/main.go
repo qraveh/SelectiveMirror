@@ -35,7 +35,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.26-dev"
+var version = "0.3.0"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -128,10 +128,10 @@ Commands:
   sync-now [mirror]         Trigger immediate sync for one or all mirrors
   dry-run [mirror]          Show what would be synced without doing it
   status                    Show sync status and metrics per mirror
-  test-mirrors [mirror]     Run all diagnostics and verify sync state
+  test-mirrors [mirror]     Run all diagnostics and verify sync state (aliases: doctor, verify)
   list-filters [mirror]     Show effective filter rules
   explain <mirror> <path>   Explain why a file is included or excluded
-  project-stats             Show file counts and line counts across all mirrors
+  project-stats             Show file counts and line counts across all mirrors (alias: stats)
   report-bug [--stdout]     Generate diagnostic report for bug filing
   service <action>          Windows Service (background): install, uninstall, start, stop
                             ("run as administrator" elevated cmd/PowerShell required for running smirror.exe service install/uninstall)
@@ -1312,8 +1312,8 @@ func cmdStats(configPath string) {
 		other    catCount
 	}
 
-	fmt.Printf("smirror stats\n")
-	fmt.Printf("=============\n")
+	fmt.Printf("smirror project-stats\n")
+	fmt.Printf("=====================\n")
 
 	var allStats []projectStats
 	grandTotal := catCount{}

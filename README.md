@@ -38,16 +38,13 @@ rclone config
 copy config.example.yaml %USERPROFILE%\.selectivemirror\config.yaml
 # Edit config.yaml with your mirrors and remote
 
-# 3. Run diagnostics
-smirror doctor
-
-# 4. Test mirror connectivity
+# 3. Run diagnostics and test mirror connectivity
 smirror test-mirrors
 
-# 5. Preview what would sync
+# 4. Preview what would sync
 smirror dry-run
 
-# 6. Start mirroring
+# 5. Start mirroring
 smirror start
 ```
 
@@ -59,11 +56,12 @@ smirror start
 | `smirror sync-now [mirror]` | Immediate full sync |
 | `smirror dry-run [mirror]` | Show what would sync |
 | `smirror status` | Show sync status, metrics, instance state |
-| `smirror test-mirrors` | Check config + rclone connectivity |
+| `smirror test-mirrors [mirror]` | Run diagnostics, check connectivity, verify sync state (aliases: `doctor`, `verify`) |
 | `smirror list-filters [mirror]` | Show effective filter rules |
 | `smirror explain <mirror> <path>` | Show include/exclude status and sync state |
-| `smirror doctor` | Run 12-point self-test diagnostics |
-| `smirror verify [mirror]` | Compare local vs remote, report drift |
+| `smirror project-stats` | Show file counts and line counts across all mirrors (alias: `stats`) |
+| `smirror report-bug` | Generate diagnostic report for bug filing |
+| `smirror service <action>` | Windows Service: install, uninstall, start, stop |
 | `smirror version` | Show version |
 
 ## Configuration
@@ -87,7 +85,7 @@ See [`config.example.yaml`](config.example.yaml) for a full annotated example.
 - [x] **Phase 1.5** -- Hardening: lock, quiescence, metrics, doctor/verify, delete policy
 - [x] **Phase 2** -- Windows service: native SCM integration via `golang.org/x/sys/windows/svc`
 - [ ] **Phase 3** -- USN journal recovery: fast restart reconciliation
-- [ ] **Phase 4** -- OSS polish: CI, winget manifest, documentation
+- [x] **Phase 4** -- OSS polish: CI, issue templates, documentation, winget manifest
 
 ## License
 

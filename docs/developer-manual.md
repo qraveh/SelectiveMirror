@@ -23,6 +23,8 @@ cmd/smirror/main.go          CLI entry point, command dispatch
         +-- internal/lock         Single-instance file lock (Windows/Unix)
         +-- internal/logging      Structured logging with file rotation
         +-- internal/metrics      Atomic counters, status.json generation
+        +-- internal/notify       Desktop notifications (Windows toast)
+        +-- internal/service      Windows Service integration (SCM handler)
         +-- internal/watcher      fsnotify event loop, debounce, recursive watch
         +-- internal/sync         Task processing, rclone subprocess, hash check
 ```
@@ -274,6 +276,8 @@ Creates a filter engine with no global excludes and no `.syncignore`, useful whe
 | `filter` | `internal/filter/` | ~200 | .syncignore parsing via go-gitignore, hot-reload, rclone filter file generation |
 | `rclone` | `internal/rclone/` | ~170 | Binary detection (PATH + common install locations), version parsing, compatibility checking |
 | `metrics` | `internal/metrics/` | ~150 | Atomic counters, per-project status, status.json snapshot, human-readable formatting |
+| `notify` | `internal/notify/` | ~100 | Desktop notifications via Windows toast (drift alerts, sync failures) |
+| `service` | `internal/service/` | ~150 | Windows Service integration: SCM handler via `golang.org/x/sys/windows/svc`, install/uninstall/start/stop |
 | `lock` | `internal/lock/` | ~80 | Single-instance file lock with PID recording, platform-specific locking |
 | `logging` | `internal/logging/` | ~80 | slog setup, rotating file writer (10MB, 5 backups), console + file multi-writer |
 
@@ -290,6 +294,8 @@ cmd/smirror
   +-- lock          (no internal deps)
   +-- logging       (no internal deps)
   +-- metrics       (no internal deps)
+  +-- notify        (no internal deps, uses: golang.org/x/sys/windows)
+  +-- service       depends on: config, logging (uses: golang.org/x/sys/windows/svc)
   +-- watcher       depends on: config, filter, sync
   +-- sync          depends on: config, filter, metrics, state
 ```
@@ -713,7 +719,7 @@ git push origin v1.1.0
 GoReleaser builds platform-specific binaries and archives. It is triggered by pushing a version tag. The `.goreleaser.yaml` configuration handles:
 
 - Building `smirror.exe` for `windows/amd64` with `-ldflags "-X main.version={{ .Version }}"`.
-- Creating a zip archive with the binary, `README.txt`, and `LICENSE`.
+- Creating a zip archive with the binary, `README.md`, and `LICENSE`.
 
 ## MSI Installer
 

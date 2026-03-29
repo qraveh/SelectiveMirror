@@ -53,8 +53,8 @@ Test-Check "smirror doctor runs (exit 0 or 1)" {
     $LASTEXITCODE -le 1  # 0 = all pass, 1 = some checks warn (e.g. no config yet)
 }
 
-Test-Check "README.txt installed" {
-    Test-Path (Join-Path $installDir "README.txt")
+Test-Check "README.md installed" {
+    Test-Path (Join-Path $installDir "README.md")
 }
 
 Test-Check "LICENSE installed" {
@@ -73,22 +73,17 @@ Test-Check "THIRD-PARTY-LICENSES.txt installed" {
     Test-Path (Join-Path $installDir "THIRD-PARTY-LICENSES.txt")
 }
 
-# PDF manuals (in docs subfolder)
-$docsDir = Join-Path $installDir "docs"
-Test-Check "docs subfolder exists" {
-    Test-Path $docsDir
-}
-
-foreach ($pdf in @("Installation Manual.pdf", "User Manual.pdf", "Developer Manual.pdf")) {
-    Test-Check "PDF: $pdf installed" {
-        Test-Path (Join-Path $docsDir $pdf)
-    }
-}
+# PDF manuals — not yet built; will be added when PDF generation is implemented
+# $docsDir = Join-Path $installDir "docs"
+# Test-Check "docs subfolder exists" { Test-Path $docsDir }
+# foreach ($pdf in @("Installation Manual.pdf", "User Manual.pdf", "Developer Manual.pdf")) {
+#     Test-Check "PDF: $pdf installed" { Test-Path (Join-Path $docsDir $pdf) }
+# }
 
 # PATH check
 Test-Check "Install dir is in system PATH" {
     $syspath = [Environment]::GetEnvironmentVariable("PATH", "Machine")
-    $syspath -split ";" | Where-Object { $_ -eq $installDir } | Measure-Object | Select-Object -ExpandProperty Count | ForEach-Object { $_ -gt 0 }
+    $syspath -split ";" | Where-Object { $_.TrimEnd('\') -eq $installDir.TrimEnd('\') } | Measure-Object | Select-Object -ExpandProperty Count | ForEach-Object { $_ -gt 0 }
 }
 
 Write-Host ""

@@ -278,7 +278,7 @@ SelectiveMirror reads its configuration from:
 This is typically `C:\Users\<YourName>\.selectivemirror\config.yaml`. You can override this with the `--config` flag:
 
 ```
-smirror --config C:\path\to\custom\config.yaml validate
+smirror --config C:\path\to\custom\config.yaml test-mirrors
 ```
 
 ## Configuration Reference

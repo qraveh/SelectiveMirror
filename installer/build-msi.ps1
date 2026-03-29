@@ -4,7 +4,7 @@
 #               wix extension add WixToolset.UI.wixext/6.0.2
 
 param(
-    [string]$Version = "0.2.17"
+    [string]$Version = "0.3.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +41,7 @@ try {
 Write-Host "[2/3] Checking source files..." -NoNewline
 $required = @(
     (Join-Path $root "bin\smirror.exe"),
-    (Join-Path $root "README.txt"),
+    (Join-Path $root "README.md"),
     (Join-Path $root "LICENSE"),
     (Join-Path $root "CREDITS.md"),
     (Join-Path $root "THIRD-PARTY-LICENSES.txt"),

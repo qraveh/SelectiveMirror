@@ -20,7 +20,7 @@ builds:
 archives:
   - formats: ['zip']
     files:
-      - README.txt
+      - README.md
       - LICENSE
       - CREDITS.md
       - THIRD-PARTY-LICENSES.txt

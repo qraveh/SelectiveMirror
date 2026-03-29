@@ -3,6 +3,33 @@
 All notable changes to SelectiveMirror are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [semver](https://semver.org/).
 
+## [0.3.0] — 2026-03-30
+
+### Added
+
+- **OSS Polish (Phase 4)**: CONTRIBUTING.md, SECURITY.md, PR template, winget manifest
+- config.example.yaml documents all config fields (sync_workers, reconcile_interval_sec, syncignore_path)
+
+### Changed
+
+- README.txt merged into README.md (single source of truth); all 6 references updated
+- CI workflows use Go 1.26.1 (matches go.mod)
+- MSI installer version aligned (Variables.wxi + build-msi.ps1 → 0.3.0)
+- Command aliases documented in README.md and help output
+
+### Fixed
+
+- Stale dependency entries removed from CREDITS.md and THIRD-PARTY-LICENSES.txt (hashicorp/golang-lru)
+- Stale command references in docs (validate → test-mirrors, doctor → test-mirrors, stats → project-stats)
+- `project-stats` output banner said "smirror stats" instead of "smirror project-stats"
+- test_install.ps1: removed PDF checks (not yet built), fixed PATH trailing-backslash comparison
+
+### Removed
+
+- README.txt (merged into README.md)
+
+---
+
 ## [0.2.25-dev] — 2026-03-29
 
 ### Bugs fixed

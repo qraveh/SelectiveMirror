@@ -12,6 +12,7 @@ mirrors:
   # - name: AnotherFolder
   #   local_path: C:\Projects\Another
   #   remote: "s3:my-bucket/another"
+  #   syncignore_path: ""           # Override .syncignore location (default: <local_path>/.syncignore)
 
 # Patterns applied to ALL mirrors (in addition to per-mirror .syncignore)
 # Uses .gitignore syntax
@@ -42,6 +43,11 @@ global_excludes:
 # rclone_config: ""             # Path to rclone.conf (auto-resolved on service install)
 # rclone_extra_flags: []        # Extra flags for every rclone call
 # bandwidth_limit: ""           # e.g. "10M" to cap at 10 MB/s
+
+# Performance tuning
+# sync_workers: 4              # Concurrent sync workers (1-16, default 4)
+# reconcile_interval_sec: 300  # Periodic full sync interval in seconds (default 300 = 5 min)
+                               # Catches changes invisible to fsnotify (WSL, network drives, external tools)
 
 # Delete policy: what happens when a local file is deleted
 # delete_policy: ignore         # ignore (default), mirror, or quarantine

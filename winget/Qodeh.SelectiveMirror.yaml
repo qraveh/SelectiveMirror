@@ -1,0 +1,42 @@
+# winget manifest for SelectiveMirror
+# Submit to: https://github.com/microsoft/winget-pkgs
+#
+# After publishing a GitHub release with the MSI:
+# 1. Update PackageVersion and InstallerUrl below
+# 2. Compute SHA256: certutil -hashfile SelectiveMirror.msi SHA256
+# 3. Fork microsoft/winget-pkgs
+# 4. Create: manifests/q/Qodeh/SelectiveMirror/<version>/Qodeh.SelectiveMirror.yaml
+# 5. Submit PR
+#
+# Or use: wingetcreate update --urls <msi-url> --version <version> Qodeh.SelectiveMirror
+
+PackageIdentifier: Qodeh.SelectiveMirror
+PackageVersion: 0.3.0  # UPDATE on each release
+PackageName: SelectiveMirror
+Publisher: Qodeh
+PublisherUrl: https://github.com/qraveh
+Author: Raveh Neeman
+License: MIT
+LicenseUrl: https://github.com/qraveh/SelectiveMirror/blob/master/LICENSE
+ShortDescription: Real-time selective file synchronization for Windows via rclone
+Description: |
+  Watches local directories for file changes and mirrors them to any rclone-supported
+  backend (Google Drive, S3, Dropbox, OneDrive, SFTP, and 70+ others) with explicit
+  include/exclude filtering. Single binary, on-write sync, bandwidth-efficient.
+Tags:
+  - backup
+  - sync
+  - mirror
+  - rclone
+  - file-sync
+  - cloud-storage
+PackageUrl: https://github.com/qraveh/SelectiveMirror
+Moniker: smirror
+MinimumOSVersion: 10.0.0.0
+InstallerType: msi
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/qraveh/SelectiveMirror/releases/download/v0.3.0/SelectiveMirror.msi  # UPDATE
+    InstallerSha256: PLACEHOLDER  # UPDATE: certutil -hashfile SelectiveMirror.msi SHA256
+ManifestType: singleton
+ManifestVersion: 1.6.0
