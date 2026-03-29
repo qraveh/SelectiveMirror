@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.8-dev"
+var version = "0.2.9-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.

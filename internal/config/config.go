@@ -165,6 +165,13 @@ func DefaultConfigPath() string {
 
 // Load reads and parses a YAML config file, applying defaults.
 func Load(path string) (*Global, error) {
+	// Resolve to absolute path so configDir is always absolute,
+	// even if the user passed a relative --config path.
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolving config path: %w", err)
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading config %s: %w", path, err)
