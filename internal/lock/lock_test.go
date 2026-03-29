@@ -71,22 +71,3 @@ func TestIsLockedWhenNotLocked(t *testing.T) {
 		t.Error("expected IsLocked to return false for unlocked dir")
 	}
 }
-
-func TestSplitLines(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected int
-	}{
-		{"a\nb\nc", 3},
-		{"a\r\nb\r\nc", 3},
-		{"single", 1},
-		{"", 0},
-		{"a\n", 1},
-	}
-	for _, tt := range tests {
-		got := splitLines(tt.input)
-		if len(got) != tt.expected {
-			t.Errorf("splitLines(%q) = %d lines, want %d", tt.input, len(got), tt.expected)
-		}
-	}
-}

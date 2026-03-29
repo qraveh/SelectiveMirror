@@ -18,7 +18,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/qraveh/SelectiveMirror/internal/config"
 	"github.com/qraveh/SelectiveMirror/internal/filter"
@@ -35,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.1-dev"
+var version = "0.2.2-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -76,6 +75,14 @@ func main() {
 	cmd := args[0]
 	cmdArgs := args[1:]
 
+	// Print version header for all commands (except version/help which handle it themselves)
+	switch cmd {
+	case "version", "help", "--help", "-h":
+		// handled below
+	default:
+		fmt.Printf("smirror %s\n", version)
+	}
+
 	switch cmd {
 	case "start":
 		cmdStart(configPath, cmdArgs)
@@ -99,6 +106,7 @@ func main() {
 		cmdService(configPath, cmdArgs)
 	case "version":
 		fmt.Printf("smirror %s\n", version)
+		fmt.Println("Copyright (c) 2026 Raveh. MIT License.")
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -287,6 +295,17 @@ func cmdStart(configPath string, args []string) {
 	}
 	defer st.Close()
 
+	// Record instance info so `smirror status` can report it
+	exePath, _ := os.Executable()
+	st.SetMeta("instance_pid", fmt.Sprintf("%d", os.Getpid()))
+	st.SetMeta("instance_exe", exePath)
+	st.SetMeta("instance_started", time.Now().Local().Format(time.RFC3339))
+	defer func() {
+		st.SetMeta("instance_pid", "")
+		st.SetMeta("instance_exe", "")
+		st.SetMeta("instance_started", "")
+	}()
+
 	// Build filter engines
 	filters := buildFilters(cfg)
 
@@ -472,12 +491,17 @@ func cmdStatus(configPath string) {
 	}
 
 	// Check instance status
-	locked, pid := lock.IsLocked(dataDir(cfg))
+	locked, _ := lock.IsLocked(dataDir(cfg))
 	if locked {
-		fmt.Printf("Instance: running (PID %d)\n", pid)
-		// Resolve PID to executable path
-		if exePath, err := getProcessExePath(pid); err == nil {
-			fmt.Printf("  Executable: %s\n", exePath)
+		iPid, _ := st.GetMeta("instance_pid")
+		iExe, _ := st.GetMeta("instance_exe")
+		if iPid != "" {
+			fmt.Printf("Instance: running (PID %s)\n", iPid)
+		} else {
+			fmt.Printf("Instance: running\n")
+		}
+		if iExe != "" {
+			fmt.Printf("  Executable: %s\n", iExe)
 		}
 		fmt.Println()
 	} else {
@@ -547,7 +571,7 @@ func cmdStatus(configPath string) {
 // Optional argument: mirror name to test only that mirror.
 // Aliases: doctor, verify (kept for backward compatibility).
 func cmdTestMirrors(configPath string, args []string) {
-	fmt.Printf("smirror test-mirrors — %s\n\n", version)
+	fmt.Println()
 	passed := 0
 	failed := 0
 
@@ -573,6 +597,12 @@ func cmdTestMirrors(configPath string, args []string) {
 	if cfg == nil {
 		fmt.Printf("\nCannot continue without valid config. %d passed, %d failed.\n", passed, failed)
 		os.Exit(1)
+	}
+
+	// Open state store for instance info lookups (best-effort)
+	st, _ := state.Open(cfg.StateDB)
+	if st != nil {
+		defer st.Close()
 	}
 
 	// Determine which mirrors to test
@@ -698,9 +728,15 @@ func cmdTestMirrors(configPath string, args []string) {
 
 	// 9. Single-instance lock
 	check("Single-instance lock available", func() error {
-		locked, pid := lock.IsLocked(dataDir(cfg))
+		locked, _ := lock.IsLocked(dataDir(cfg))
 		if locked {
-			return fmt.Errorf("another instance running (PID %d)", pid)
+			if st != nil {
+				iPid, _ := st.GetMeta("instance_pid")
+				if iPid != "" {
+					return fmt.Errorf("another instance running (PID %s)", iPid)
+				}
+			}
+			return fmt.Errorf("another instance running")
 		}
 		return nil
 	})
@@ -1795,25 +1831,4 @@ func cmdService(configPath string, args []string) {
 		fmt.Fprintf(os.Stderr, "Unknown service action: %s\nUse: install, uninstall, start, stop\n", args[0])
 		os.Exit(1)
 	}
-}
-
-// getProcessExePath returns the full executable path for a given PID.
-// Uses QueryFullProcessImageNameW on Windows.
-func getProcessExePath(pid int) (string, error) {
-	const processQueryLimitedInformation = 0x1000
-	h, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
-	if err != nil {
-		return "", err
-	}
-	defer syscall.CloseHandle(h)
-
-	var buf [syscall.MAX_PATH]uint16
-	size := uint32(len(buf))
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	proc := kernel32.NewProc("QueryFullProcessImageNameW")
-	r, _, err := proc.Call(uintptr(h), 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
-	if r == 0 {
-		return "", err
-	}
-	return syscall.UTF16ToString(buf[:size]), nil
 }
