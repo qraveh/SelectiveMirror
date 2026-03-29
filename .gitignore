@@ -1,9 +1,10 @@
 # Binary
-/smirror.exe
+*.exe
 
-# IDE
+# IDE / AI tools
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 

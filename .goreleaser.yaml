@@ -25,7 +25,7 @@ archives:
       - CREDITS.md
       - THIRD-PARTY-LICENSES.txt
       - config.example.yaml
-      - docs/*.pdf
+      - bin/rclone.exe
 
 checksum:
   name_template: 'checksums.txt'
@@ -42,5 +42,5 @@ release:
   github:
     owner: qraveh
     name: SelectiveMirror
-  draft: false
+  draft: true
   prerelease: auto
