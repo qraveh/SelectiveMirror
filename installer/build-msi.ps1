@@ -1,10 +1,10 @@
 # build-msi.ps1 — Build SelectiveMirror MSI installer
-# Prerequisites: Go 1.22+, .NET SDK 8.0+, WiX v5 CLI
+# Prerequisites: Go 1.26+, .NET SDK 8.0+, WiX v6 CLI
 # Install WiX: dotnet tool install --global wix
-#               wix extension add WixToolset.UI.wixext/5.0.2
+#               wix extension add WixToolset.UI.wixext/6.0.2
 
 param(
-    [string]$Version = "1.0.0"
+    [string]$Version = "0.2.17"
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,7 +25,7 @@ $ldflags = "-s -w -X main.version=$Version"
 
 Push-Location $root
 try {
-    $env:CGO_ENABLED = "1"
+    $env:CGO_ENABLED = "0"
     & go build -ldflags $ldflags -o $exe ./cmd/smirror/ 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host " FAILED" -ForegroundColor Red
