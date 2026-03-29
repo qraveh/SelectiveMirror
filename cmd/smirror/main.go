@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.2-dev"
+var version = "0.2.3-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -75,9 +75,9 @@ func main() {
 	cmd := args[0]
 	cmdArgs := args[1:]
 
-	// Print version header for all commands (except version/help which handle it themselves)
+	// Print version header for all commands (except those that handle it themselves)
 	switch cmd {
-	case "version", "help", "--help", "-h":
+	case "version", "help", "--help", "-h", "report-bug":
 		// handled below
 	default:
 		fmt.Printf("smirror %s\n", version)
@@ -105,8 +105,8 @@ func main() {
 	case "service":
 		cmdService(configPath, cmdArgs)
 	case "version":
+		fmt.Println("Copyright (c) 2026 Raveh Neeman. MIT License.")
 		fmt.Printf("smirror %s\n", version)
-		fmt.Println("Copyright (c) 2026 Raveh. MIT License.")
 	case "help", "--help", "-h":
 		printUsage()
 	default:
