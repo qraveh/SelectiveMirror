@@ -97,7 +97,7 @@ SelectiveMirror uses the following rclone subcommands:
 | `moveto` | Moving a file to `.quarantine/` on remote (quarantine delete policy) |
 | `touch` | Updating modification time on remote without re-uploading content |
 | `lsjson` | Listing remote files with hashes for `verify` and ghost scan |
-| `lsd` | Checking remote connectivity during `validate` and `doctor` |
+| `lsd` | Checking remote connectivity during `test-mirrors` and `doctor` |
 | `version` | Detecting rclone version and compatibility |
 
 ## Flag Mapping
@@ -198,7 +198,7 @@ smirror --config C:\path\to\config.yaml start
 
 ```yaml
 # Projects to watch and sync
-projects:
+mirrors:
   - name: MyProject
     local_path: C:\Projects\MyProject
     remote: gdrive:backup/MyProject
@@ -313,7 +313,7 @@ C:\Projects\MyProject\.syncignore
 You can override this with the `syncignore_path` field in the project config:
 
 ```yaml
-projects:
+mirrors:
   - name: MyProject
     local_path: C:\Projects\MyProject
     remote: gdrive:backup/MyProject
@@ -454,7 +454,7 @@ Project: MyProject
 Check configuration validity and rclone connectivity. Exits with code 0 on success, 1 on failure.
 
 ```
-smirror validate
+smirror test-mirrors
 ```
 
 Performs these checks:
@@ -855,7 +855,7 @@ This creates a `gdrive` remote. Complete the OAuth flow in your browser when pro
 ### config.yaml Entry
 
 ```yaml
-projects:
+mirrors:
   - name: Research
     local_path: C:\Research
     remote: gdrive:SelectiveMirror/Research
@@ -886,7 +886,7 @@ Region: us-east-1
 ### config.yaml Entry
 
 ```yaml
-projects:
+mirrors:
   - name: Codebase
     local_path: C:\Projects\Codebase
     remote: s3:my-backup-bucket/codebase
@@ -916,7 +916,7 @@ Key File: C:\Users\raveh\.ssh\id_ed25519
 ### config.yaml Entry
 
 ```yaml
-projects:
+mirrors:
   - name: Website
     local_path: C:\Projects\Website
     remote: myserver:/home/backupuser/website-mirror
@@ -937,7 +937,7 @@ No rclone configuration needed. Local paths are used directly.
 ### config.yaml Entry
 
 ```yaml
-projects:
+mirrors:
   - name: LocalBackup
     local_path: C:\Projects\Important
     remote: D:\Backups\Important
@@ -965,7 +965,7 @@ Complete the OAuth flow in your browser when prompted.
 ### config.yaml Entry
 
 ```yaml
-projects:
+mirrors:
   - name: Documents
     local_path: C:\Documents\Work
     remote: dropbox:SelectiveMirror/Documents

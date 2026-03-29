@@ -1,19 +1,19 @@
 # SelectiveMirror configuration
 # Copy to ~/.selectivemirror/config.yaml and customize.
 
-projects:
+mirrors:
   - name: MyProject
     local_path: C:\Projects\MyProject    # Local directory to watch
     remote: "gdrive:backup/MyProject"    # rclone remote (any of 70+ backends)
     debounce_sec: 5                       # Wait N seconds after last change before syncing
     max_file_size_mb: 100                 # Skip files larger than this
 
-  # Add more projects:
-  # - name: AnotherProject
+  # Add more mirrors:
+  # - name: AnotherFolder
   #   local_path: C:\Projects\Another
   #   remote: "s3:my-bucket/another"
 
-# Patterns applied to ALL projects (in addition to per-project .syncignore)
+# Patterns applied to ALL mirrors (in addition to per-mirror .syncignore)
 # Uses .gitignore syntax
 global_excludes:
   - .git/

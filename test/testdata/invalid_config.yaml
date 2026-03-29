@@ -1,4 +1,4 @@
 # Missing required fields
-projects:
+mirrors:
   - local_path: C:\nonexistent
     remote: "gdrive:test"

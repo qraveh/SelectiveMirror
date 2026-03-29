@@ -14,9 +14,9 @@ Quick Start
 -----------
   1. Configure a remote:        rclone config
   2. Copy config.example.yaml to %USERPROFILE%\.selectivemirror\config.yaml
-  3. Edit config.yaml with your projects and remote
+  3. Edit config.yaml with your mirrors and remote
   4. Run diagnostics:           smirror doctor
-  5. Validate config:           smirror validate
+  5. Test mirror connectivity:  smirror test-mirrors
   6. Preview what would sync:   smirror dry-run
   7. Start mirroring:           smirror start
 
@@ -26,9 +26,9 @@ Commands
   smirror sync-now           Immediate full sync
   smirror dry-run            Show what would sync
   smirror status             Show sync status and metrics
-  smirror validate           Check config and rclone connectivity
+  smirror test-mirrors       Check config and rclone connectivity
   smirror list-filters       Show effective filter rules
-  smirror explain <p> <f>    Show include/exclude status for a file
+  smirror explain <m> <f>    Show include/exclude status for a file
   smirror doctor             Run self-test diagnostics
   smirror verify             Compare local vs remote, detect drift
   smirror version            Show version

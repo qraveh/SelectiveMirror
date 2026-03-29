@@ -61,7 +61,7 @@ const (
 
 // Global holds the complete application configuration.
 type Global struct {
-	Projects           []Project    `yaml:"projects"`
+	Projects           []Project    `yaml:"mirrors"`
 	GlobalExcludes     []string     `yaml:"global_excludes"`
 	StateDB            string       `yaml:"state_db"`
 	LogFile            string       `yaml:"log_file"`
@@ -203,33 +203,33 @@ func Load(path string) (*Global, error) {
 // Validate checks the configuration for errors.
 func (g *Global) Validate() error {
 	if len(g.Projects) == 0 {
-		return fmt.Errorf("no projects defined in config")
+		return fmt.Errorf("no mirrors defined in config")
 	}
 
 	names := make(map[string]bool)
 	for i, p := range g.Projects {
 		if p.Name == "" {
-			return fmt.Errorf("project[%d]: name is required", i)
+			return fmt.Errorf("mirror[%d]: name is required", i)
 		}
 		if names[p.Name] {
-			return fmt.Errorf("project[%d]: duplicate name %q", i, p.Name)
+			return fmt.Errorf("mirror[%d]: duplicate name %q", i, p.Name)
 		}
 		names[p.Name] = true
 
 		if p.LocalPath == "" {
-			return fmt.Errorf("project %q: local_path is required", p.Name)
+			return fmt.Errorf("mirror %q: local_path is required", p.Name)
 		}
 		if p.Remote == "" {
-			return fmt.Errorf("project %q: remote is required", p.Name)
+			return fmt.Errorf("mirror %q: remote is required", p.Name)
 		}
 
 		// Check local path exists
 		info, err := os.Stat(p.LocalPath)
 		if err != nil {
-			return fmt.Errorf("project %q: local_path %q: %w", p.Name, p.LocalPath, err)
+			return fmt.Errorf("mirror %q: local_path %q: %w", p.Name, p.LocalPath, err)
 		}
 		if !info.IsDir() {
-			return fmt.Errorf("project %q: local_path %q is not a directory", p.Name, p.LocalPath)
+			return fmt.Errorf("mirror %q: local_path %q is not a directory", p.Name, p.LocalPath)
 		}
 
 		// Apply defaults (DebounceSec 0 = dynamic debounce, don't override)

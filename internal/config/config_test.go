@@ -15,7 +15,7 @@ func TestLoadValidConfig(t *testing.T) {
 
 	configPath := filepath.Join(dir, "config.yaml")
 	os.WriteFile(configPath, []byte(`
-projects:
+mirrors:
   - name: TestProj
     local_path: `+projDir+`
     remote: "gdrive:test"
@@ -65,7 +65,7 @@ func TestLoadInvalidDuplicateNames(t *testing.T) {
 
 	configPath := filepath.Join(dir, "config.yaml")
 	os.WriteFile(configPath, []byte(`
-projects:
+mirrors:
   - name: Dup
     local_path: `+projDir+`
     remote: "gdrive:a"
@@ -84,7 +84,7 @@ func TestLoadMissingLocalPath(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
 	os.WriteFile(configPath, []byte(`
-projects:
+mirrors:
   - name: NoPath
     local_path: `+filepath.Join(dir, "nonexistent")+`
     remote: "gdrive:test"
@@ -103,7 +103,7 @@ func TestLoadMissingName(t *testing.T) {
 
 	configPath := filepath.Join(dir, "config.yaml")
 	os.WriteFile(configPath, []byte(`
-projects:
+mirrors:
   - local_path: `+projDir+`
     remote: "gdrive:test"
 `), 0644)

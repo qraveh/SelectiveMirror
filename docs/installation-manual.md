@@ -290,7 +290,7 @@ Below is the complete list of configuration fields with their defaults.
 Each entry under `projects` defines a directory to watch and its sync destination.
 
 ```yaml
-projects:
+mirrors:
   - name: MyProject              # Required. Unique project name.
     local_path: C:\Projects\MyProject  # Required. Local directory to watch.
     remote: "gdrive:backup/MyProject"  # Required. rclone remote destination.
@@ -342,7 +342,7 @@ All timestamps produced by SelectiveMirror (in logs, state database, and diagnos
 Suppose you want to mirror two project directories to Google Drive. Your `config.yaml` would look like this:
 
 ```yaml
-projects:
+mirrors:
   - name: Research
     local_path: C:\Projects\Research
     remote: "gdrive:Backups/Research"
@@ -412,10 +412,10 @@ Follow this three-step sequence for your first run: validate, dry-run, start.
 
 ## Step 1: Validate
 
-The `validate` command checks your configuration file for syntax errors, verifies that all local paths exist, and tests rclone connectivity to each configured remote.
+The `test-mirrors` command checks your configuration file for syntax errors, verifies that all local paths exist, and tests rclone connectivity to each configured remote.
 
 ```
-smirror validate
+smirror test-mirrors
 ```
 
 Expected output for a healthy setup:
@@ -564,7 +564,7 @@ Use **Settings > Apps > Installed apps** or **Control Panel > Programs and Featu
 
 ## rclone Not Found
 
-**Symptom**: `smirror validate` or `smirror doctor` reports "rclone not found".
+**Symptom**: `smirror test-mirrors` or `smirror doctor` reports "rclone not found".
 
 **Causes and fixes**:
 
@@ -596,7 +596,7 @@ rclone version
 
 ## Remote Unreachable
 
-**Symptom**: `smirror validate` reports a remote connectivity failure.
+**Symptom**: `smirror test-mirrors` reports a remote connectivity failure.
 
 **Possible causes**:
 
@@ -607,13 +607,13 @@ rclone version
 
 ## Configuration Validation Errors
 
-**Symptom**: `smirror validate` reports a config error.
+**Symptom**: `smirror test-mirrors` reports a config error.
 
 Common errors and their fixes:
 
 | Error Message | Fix |
 |--------------|-----|
-| "no projects defined in config" | Add at least one project under the `projects:` key |
+| "no projects defined in config" | Add at least one project under the `mirrors:` key |
 | "name is required" | Every project entry must have a `name` field |
 | "duplicate name" | Project names must be unique |
 | "local_path is required" | Every project must specify a `local_path` |

@@ -1,4 +1,4 @@
-projects:
+mirrors:
   - name: TestProject
     local_path: PLACEHOLDER_LOCAL
     remote: "PLACEHOLDER_REMOTE"

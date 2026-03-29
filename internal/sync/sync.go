@@ -666,14 +666,14 @@ func Validate(cfg *config.Global) error {
 		// Extract remote name (everything before :)
 		parts := strings.SplitN(remote, ":", 2)
 		if len(parts) < 2 {
-			return fmt.Errorf("project %q: invalid remote format %q (expected remote:path)", proj.Name, remote)
+			return fmt.Errorf("mirror %q: invalid remote format %q (expected remote:path)", proj.Name, remote)
 		}
 
 		fmt.Printf("Checking %s -> %s ... ", proj.Name, remote)
 		cmd := exec.Command(rclonePath, "lsd", remote, "--max-depth", "0")
 		if err := cmd.Run(); err != nil {
 			fmt.Println("FAILED")
-			return fmt.Errorf("project %q: remote %q unreachable: %w", proj.Name, remote, err)
+			return fmt.Errorf("mirror %q: remote %q unreachable: %w", proj.Name, remote, err)
 		}
 		fmt.Println("OK")
 	}

@@ -41,6 +41,6 @@ jobs:
           go build -o smirror.exe ./cmd/smirror/
           .\smirror.exe version
 
-      - name: Verify smirror doctor
-        run: .\smirror.exe doctor
-        continue-on-error: true  # doctor may warn if no config
+      - name: Verify smirror test-mirrors
+        run: .\smirror.exe test-mirrors
+        continue-on-error: true  # may warn if no config or rclone remote

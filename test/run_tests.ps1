@@ -45,7 +45,7 @@ function Setup-TestEnv {
 
     # Write config (use forward slashes to avoid YAML escaping issues)
     $cfgContent = @"
-projects:
+mirrors:
   - name: TestProj
     local_path: "$($SrcDir.Replace('\','/'))"
     debounce_sec: 1
