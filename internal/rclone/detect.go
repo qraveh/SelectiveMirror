@@ -145,7 +145,7 @@ func windowsSearchPaths() []string {
 		paths = append(paths, filepath.Join(pf, "rclone", "rclone.exe"))
 	}
 
-	// WinGet links
+	// WinGet links (current user)
 	if lad := os.Getenv("LOCALAPPDATA"); lad != "" {
 		paths = append(paths, filepath.Join(lad, "Microsoft", "WinGet", "Links", "rclone.exe"))
 	}
@@ -158,6 +158,39 @@ func windowsSearchPaths() []string {
 	// Scoop
 	if up := os.Getenv("USERPROFILE"); up != "" {
 		paths = append(paths, filepath.Join(up, "scoop", "shims", "rclone.exe"))
+	}
+
+	// WinGet packages — scan user profiles (needed when running as SYSTEM service)
+	// WinGet installs rclone under each user's LocalAppData with a versioned directory.
+	if sd := os.Getenv("SystemDrive"); sd != "" {
+		usersDir := filepath.Join(sd, "Users")
+		entries, _ := os.ReadDir(usersDir)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			wingetPkgs := filepath.Join(usersDir, entry.Name(), "AppData", "Local",
+				"Microsoft", "WinGet", "Packages")
+			pkgEntries, err := os.ReadDir(wingetPkgs)
+			if err != nil {
+				continue
+			}
+			for _, pkg := range pkgEntries {
+				if pkg.IsDir() && strings.Contains(pkg.Name(), "Rclone.Rclone") {
+					// Scan for rclone.exe inside versioned subdirectory
+					subDir := filepath.Join(wingetPkgs, pkg.Name())
+					subs, _ := os.ReadDir(subDir)
+					for _, sub := range subs {
+						if sub.IsDir() && strings.HasPrefix(sub.Name(), "rclone-") {
+							candidate := filepath.Join(subDir, sub.Name(), "rclone.exe")
+							paths = append(paths, candidate)
+						}
+					}
+					// Also check directly in the package dir
+					paths = append(paths, filepath.Join(subDir, "rclone.exe"))
+				}
+			}
+		}
 	}
 
 	return paths

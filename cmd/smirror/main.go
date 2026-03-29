@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.9-dev"
+var version = "0.2.10-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -1746,6 +1746,17 @@ func serviceMain() {
 			return
 		}
 		defer st.Close()
+
+		// Record instance info so `smirror status` can report it
+		exePath, _ := os.Executable()
+		st.SetMeta("instance_pid", fmt.Sprintf("%d", os.Getpid()))
+		st.SetMeta("instance_exe", exePath)
+		st.SetMeta("instance_started", time.Now().Local().Format(time.RFC3339))
+		defer func() {
+			st.SetMeta("instance_pid", "")
+			st.SetMeta("instance_exe", "")
+			st.SetMeta("instance_started", "")
+		}()
 
 		filters := buildFilters(cfg)
 		m := metrics.New()
