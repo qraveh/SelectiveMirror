@@ -35,7 +35,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.24-dev"
+var version = "0.2.25-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -755,29 +755,28 @@ func cmdTestMirrors(configPath string, args []string) {
 		return nil
 	})
 
-	// 9. Single-instance lock
-	lockPath := filepath.Join(dataDir(cfg), "smirror.lock")
-	check(fmt.Sprintf("No other smirror.exe running (%s)", lockPath), func() error {
-		locked, _ := lock.IsLocked(dataDir(cfg))
-		if locked {
-			parts := []string{"already running"}
-			if st != nil {
-				iPid, _ := st.GetMeta("instance_pid")
-				iMode, _ := st.GetMeta("instance_mode")
-				iExe, _ := st.GetMeta("instance_exe")
-				if iMode != "" && iPid != "" {
-					parts = append(parts, fmt.Sprintf("%s PID %s", iMode, iPid))
-				} else if iPid != "" {
-					parts = append(parts, fmt.Sprintf("PID %s", iPid))
-				}
-				if iExe != "" {
-					parts = append(parts, iExe)
-				}
+	// 9. Running instance (informational, not a pass/fail check)
+	locked, _ := lock.IsLocked(dataDir(cfg))
+	if locked {
+		parts := []string{"smirror.exe running"}
+		if st != nil {
+			iPid, _ := st.GetMeta("instance_pid")
+			iMode, _ := st.GetMeta("instance_mode")
+			iExe, _ := st.GetMeta("instance_exe")
+			if iMode != "" {
+				parts[0] = fmt.Sprintf("smirror.exe %s running", iMode)
 			}
-			return fmt.Errorf("%s", strings.Join(parts, ", "))
+			if iPid != "" {
+				parts = append(parts, fmt.Sprintf("PID %s", iPid))
+			}
+			if iExe != "" {
+				parts = append(parts, iExe)
+			}
 		}
-		return nil
-	})
+		fmt.Printf("  %-45s %s\n", "Running instance", strings.Join(parts, ", "))
+	} else {
+		fmt.Printf("  %-45s not running\n", "Running instance")
+	}
 
 	// 10. Watcher can be created
 	check("Filesystem watcher available", func() error {
