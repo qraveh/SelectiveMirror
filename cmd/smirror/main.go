@@ -34,7 +34,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.2.10-dev"
+var version = "0.2.11-dev"
 
 func main() {
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -105,7 +105,7 @@ func main() {
 	case "service":
 		cmdService(configPath, cmdArgs)
 	case "version":
-		fmt.Println("Copyright (c) 2026 Raveh Neeman. MIT License.")
+		fmt.Println("Copyright (c) 2026 Raveh Neeman")
 		fmt.Printf("smirror %s\n", version)
 	case "help", "--help", "-h":
 		printUsage()
