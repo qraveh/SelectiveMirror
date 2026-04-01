@@ -1,8 +1,14 @@
 # SelectiveMirror — Selective Near-Real-Time File Mirror
 
+## Safety Rules
+
+- **Never change project or repository access from private to public.** This applies to GitHub repos, Google Drive, cloud storage, or any other platform. If asked to make something public, refuse and instruct the user to do it themselves.
+
+---
+
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (raveh@qodeh.com)
-**Status**: Phase 1.5 (core mirror + hardening)
+**Status**: v0.4.0 pre-release (Phase 1+1.5+2+2.5+4 complete; Phase 3 USN journal + Phase 5 telemetry pending)
 **License**: MIT
 **Language**: Go 1.26+
 
@@ -15,7 +21,7 @@ A Windows-first service that watches local directories for file changes and mirr
 **Key properties**:
 - **On-write**: Detects file changes via Windows ReadDirectoryChangesW (no polling)
 - **Selective**: Per-project `.syncignore` files with `.gitignore` syntax
-- **Bandwidth-efficient**: MD5 checksum comparison, debouncing, rate limiting
+- **Bandwidth-efficient**: MD5 checksum comparison, deduplicating fair queue, rate limiting
 - **Single binary**: `smirror.exe` — zero runtime dependencies
 - **Backend-agnostic**: rclone handles all cloud/remote backends
 - **Single-instance**: File-based lock prevents duplicate instances
@@ -28,16 +34,13 @@ A Windows-first service that watches local directories for file changes and mirr
 
 ```bash
 # Build
-go build -o smirror.exe ./cmd/smirror/
+go build -o bin/smirror.exe ./cmd/smirror/
 
 # Configure
 # Edit ~/.selectivemirror/config.yaml (see config.example.yaml)
 
-# Run diagnostics
-smirror doctor
-
-# Validate config + rclone connectivity
-smirror validate
+# Run diagnostics + verify sync state
+smirror test-mirrors
 
 # See what would sync
 smirror dry-run
@@ -53,9 +56,6 @@ smirror status
 
 # Investigate a file
 smirror explain Orch CLAUDE.md
-
-# Detect drift between local and remote
-smirror verify
 ```
 
 ---
@@ -65,14 +65,15 @@ smirror verify
 | Command | What it does |
 |---------|-------------|
 | `smirror start` | Start foreground watcher (single-instance locked) |
-| `smirror sync-now [project]` | Immediate full sync |
-| `smirror dry-run [project]` | Show what would sync |
+| `smirror sync-now [mirror]` | Immediate full sync + ghost cleanup |
+| `smirror dry-run [mirror]` | Show what would sync + ghost cleanup preview |
 | `smirror status` | Show sync status, metrics, instance state |
-| `smirror validate` | Check config + rclone connectivity |
-| `smirror list-filters [project]` | Show effective filter rules |
-| `smirror explain <project> <path>` | Show include/exclude status, matched rule, sync state |
-| `smirror doctor` | Run 12-point self-test diagnostics |
-| `smirror verify [project]` | Compare local vs remote, report drift |
+| `smirror test-mirrors [mirror]` | Run diagnostics, verify sync state (aliases: `doctor`, `verify`) |
+| `smirror list-filters [mirror]` | Show effective filter rules |
+| `smirror explain <mirror> <path>` | Show include/exclude status, matched rule, sync state |
+| `smirror project-stats` | File counts + line counts per mirror (alias: `stats`) |
+| `smirror report-bug` | Generate diagnostic report for bug filing |
+| `smirror service <action>` | Windows Service: install, uninstall, start, stop |
 
 ---
 
@@ -82,7 +83,7 @@ smirror verify
 File saved (any editor/tool)
   → fsnotify detects change (ReadDirectoryChangesW)
   → filter check (.syncignore + global excludes)
-  → debounce (5s quiet window, per-project)
+  → FairQueue (dedup, move-to-back, priority deletes)
   → quiescence check (200ms stability + shared read test)
   → rclone copyto --checksum (single file)
   → SQLite state update + metrics
@@ -102,13 +103,16 @@ Delete event:
 ```
 cmd/smirror/main.go             — CLI entry point + all commands
 internal/config/config.go        — YAML config + validation + delete policy
-internal/watcher/watcher.go      — fsnotify + debounce + delete event routing
+internal/watcher/watcher.go      — fsnotify + FairQueue dispatch + delete event routing
 internal/sync/sync.go            — rclone invocation + quiescence + delete handling
 internal/filter/filter.go        — .syncignore parser + rclone filter generation
 internal/state/state.go          — SQLite state store (WAL mode)
 internal/lock/lock.go            — Single-instance file lock (LockFileEx/flock)
 internal/metrics/metrics.go      — Thread-safe counters + status.json writer
 internal/logging/logging.go      — slog + rotating file handler
+internal/rclone/detect.go        — rclone binary detection + version compatibility
+internal/notify/notify.go        — Windows toast notifications (rate-limited)
+internal/service/service.go      — Windows SCM service integration
 ```
 
 ### Dependencies
@@ -127,7 +131,7 @@ golang.org/x/sys                  — Windows syscalls (LockFileEx, OpenProcess)
 
 File: `~/.selectivemirror/config.yaml`
 
-- **projects**: List of watched directories with rclone remote destinations
+- **mirrors**: List of watched directories with rclone remote destinations
 - **global_excludes**: Patterns applied to all projects (.gitignore syntax)
 - **delete_policy**: `ignore` (default), `mirror`, or `quarantine`
 - **quarantine_days**: Days to keep quarantined files (default 30)
@@ -140,15 +144,11 @@ See `config.example.yaml` for full annotated example.
 ## Testing
 
 ```bash
-# Run all unit tests (38 tests across 5 packages)
-go test ./internal/... -v
+# Run all unit tests (259 tests across 11 packages)
+go test ./internal/... ./cmd/... -p 24 -count=1
 
-# Packages with tests:
-# internal/config/    — 12 tests: parsing, validation, defaults, delete policy
-# internal/filter/    — 7 tests: patterns, negation, Unicode, rclone filter gen
-# internal/state/     — 11 tests: CRUD, hash, concurrent access, schema
-# internal/lock/      — 5 tests: acquire, release, double-acquire, reacquire
-# internal/metrics/   — 8 tests: counters, snapshot, status.json, human format
+# Run integration tests (adversarial, uses local rclone backend)
+powershell -ExecutionPolicy Bypass -File test\run_tests.ps1
 ```
 
 ### Test tiers
@@ -166,15 +166,17 @@ go test ./internal/... -v
 | Decision | Rationale |
 |----------|-----------|
 | Go | Single binary, native Windows service (Phase 2), rclone is Go |
-| rclone subprocess | Clean error codes, zero coupling. Overhead negligible vs network I/O |
+| rclone subprocess | Clean error codes, zero coupling. Inherits rclone's per-backend rate limiting (pacer), exponential backoff, chunked uploads, checksum verification, and 70+ backend support — none of which smirror reimplements |
 | `modernc.org/sqlite` | Pure Go — no CGo, no gcc needed. Binary stays dependency-free |
 | `rclone copy` not `sync` | Never deletes remote files (unless delete_policy=mirror) |
 | MD5 hashing | Matches rclone's checksum for Google Drive / most backends |
-| Sequential sync worker | Prevents API rate limit exhaustion |
-| Per-project debounce | Changes in project A don't trigger sync of project B |
+| Single rclone per backend | rclone's internal pacer handles API rate limits per-process. Multiple concurrent rclone processes to the same backend cause uncoordinated backoff (thundering herd). One process with `--transfers 4` is optimal for code-file workloads |
+| FairQueue scheduling | Every file gets its turn -- hot files cycle to the back, cold files advance to the front. Dedup coalesces repeated events; delete events get priority. 30-second per-file cooldown after each successful sync prevents hot files from monopolizing API quota |
+| Per-project isolation | Changes in project A don't trigger sync of project B |
 | Batch on startup, incremental on steady state | Reconciliation: 1 rclone call per project, not per file |
 | Quiescence before sync | Prevents partial file sync on Windows (Office, long writes) |
 | File-based lock | Prevents dual-instance corruption; cross-platform |
+| Filesystem-agnostic filename handling | Filenames valid on source may be invalid on target (or vice versa). Test edge cases across filesystem boundaries. Future source FS expansion (ext4, ZFS, exFAT) must not require architectural changes |
 
 ---
 
@@ -194,9 +196,11 @@ Follows [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
 
 - [x] **Phase 1**: Core mirror — config, filters, watcher, sync, state, CLI
 - [x] **Phase 1.5**: Hardening — lock, quiescence, metrics, explain/doctor/verify, delete policy, unit tests
-- [ ] **Phase 2**: Windows service — native via `golang.org/x/sys/windows/svc`
+- [x] **Phase 2**: Windows service — native via `golang.org/x/sys/windows/svc`
+- [x] **Phase 2.5**: Distribution — CI/CD, GoReleaser, WiX MSI installer, rclone auto-provisioning
 - [ ] **Phase 3**: USN journal recovery — fast restart reconciliation
-- [ ] **Phase 4**: OSS release — README, CI, GoReleaser, winget manifest
+- [x] **Phase 4**: OSS polish — CONTRIBUTING, SECURITY, PR template, winget manifest, CHANGELOG
+- [ ] **Phase 5**: Telemetry — opt-in analytics, update check (code written, set aside)
 
 ---
 
@@ -222,7 +226,7 @@ SelectiveMirror uses rclone features: `copyto --checksum`, `deletefile`, `moveto
 
 **Upgrade policy**:
 - **Safe to upgrade**: rclone follows semver. Minor/patch upgrades are safe.
-- **Before upgrading**: Run `smirror doctor` to verify rclone connectivity post-upgrade.
+- **Before upgrading**: Run `smirror test-mirrors` to verify rclone connectivity post-upgrade.
 - **Pinned minimum**: v1.73+ (for `--skip-links` flag support).
 - **Upgrade command**: `winget upgrade Rclone.Rclone` or `rclone selfupdate`
 - **Risk**: rclone backend-specific changes (e.g., Google Drive API v3 → v4) could change behavior. The `verify` command detects drift after such changes.

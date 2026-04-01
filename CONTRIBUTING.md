@@ -19,7 +19,7 @@ go build -o bin/smirror.exe ./cmd/smirror/
 ## Testing
 
 ```bash
-# Unit tests (139 tests across 10 packages)
+# Unit tests (259 tests across 11 packages)
 go test ./internal/... -v
 
 # Race detector (CGo-free packages)

@@ -34,11 +34,16 @@ type Task struct {
 	RelPath     string   // empty means full project sync
 	Type        TaskType // TaskSync (default) or TaskDelete
 	ForceDelete bool     // true for rename cleanup: always delete old remote path regardless of delete policy
+	Done        func()   // optional completion callback (e.g., WaitGroup.Done); called after task finishes
 }
 
 // RcloneRunner executes an rclone command and returns the exit code.
 // The default implementation spawns a subprocess; tests inject a fake.
 type RcloneRunner func(ctx context.Context, args []string) int
+
+// RemoteLister returns the list of files on the remote for a project.
+// The default implementation calls rclone lsjson; tests inject a fake.
+type RemoteLister func(cfg *config.Global, proj config.Project) ([]RemoteFile, error)
 
 // Engine processes sync tasks using rclone.
 type Engine struct {
@@ -46,11 +51,14 @@ type Engine struct {
 	state    *state.Store
 	filters  map[string]*filter.Engine // project name -> filter
 	metrics  *metrics.Collector
-	TaskChan chan Task
+	Queue    *FairQueue
 	log      *slog.Logger
 
 	// RunRcloneFunc executes rclone. If nil, uses the default subprocess runner.
 	RunRcloneFunc RcloneRunner
+
+	// ListRemoteFunc lists files on the remote. If nil, uses the default rclone lsjson implementation.
+	ListRemoteFunc RemoteLister
 
 	// Per-file locks prevent two workers from syncing the same file simultaneously.
 	// Key: "project:relPath". Full-project syncs (relPath="") use project name as key.
@@ -60,12 +68,12 @@ type Engine struct {
 // NewEngine creates a sync engine.
 func NewEngine(cfg *config.Global, st *state.Store, filters map[string]*filter.Engine, m *metrics.Collector) *Engine {
 	e := &Engine{
-		cfg:      cfg,
-		state:    st,
-		filters:  filters,
-		metrics:  m,
-		TaskChan: make(chan Task, 1000),
-		log:      slog.Default().With("component", "sync"),
+		cfg:     cfg,
+		state:   st,
+		filters: filters,
+		metrics: m,
+		Queue:   NewFairQueue(10000, 30*time.Second),
+		log:     slog.Default().With("component", "sync"),
 	}
 	e.RunRcloneFunc = e.defaultRunRclone
 	return e
@@ -91,18 +99,14 @@ func (e *Engine) Run(ctx context.Context) {
 
 func (e *Engine) runWorker(ctx context.Context, id int) {
 	for {
-		select {
-		case task, ok := <-e.TaskChan:
-			if !ok {
-				return // channel closed, all tasks drained
-			}
-			if e.metrics != nil {
-				e.metrics.SetQueueDepth(int64(len(e.TaskChan)))
-			}
-			e.processTask(ctx, task)
-		case <-ctx.Done():
-			return
+		task, ok := e.Queue.Dequeue(ctx)
+		if !ok {
+			return // queue closed or context cancelled
 		}
+		if e.metrics != nil {
+			e.metrics.SetQueueDepth(int64(e.Queue.Len()))
+		}
+		e.processTask(ctx, task)
 	}
 }
 
@@ -136,6 +140,11 @@ func (e *Engine) releaseFileLock(task Task) {
 
 // processTask handles a single task with per-file locking and panic recovery.
 func (e *Engine) processTask(ctx context.Context, task Task) {
+	// Signal completion to caller (e.g., reconcileAll waiting via WaitGroup).
+	if task.Done != nil {
+		defer task.Done()
+	}
+
 	// Per-file lock: prevent two workers from syncing the same file simultaneously.
 	e.acquireFileLock(task)
 	defer e.releaseFileLock(task)
@@ -322,6 +331,9 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		if e.metrics != nil {
 			e.metrics.RecordSync(proj.Name, size, elapsed.Milliseconds())
 		}
+		// Set cooldown: prevent re-syncing the same file too soon.
+		// Hot files that change continuously would otherwise consume all API quota.
+		e.Queue.SetCooldown(proj.Name + ":" + relPath)
 	} else {
 		e.log.Warn("sync failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
 		e.state.LogAction(proj.Name, relPath, "error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
@@ -646,6 +658,154 @@ func (e *Engine) DryRun(ctx context.Context, proj config.Project) error {
 		return fmt.Errorf("rclone exit code %d", exitCode)
 	}
 	return nil
+}
+
+// MigrateRemote performs a server-side move of all files from oldRemote to newRemote.
+// Used when a mirror's remote path changes in config — avoids re-uploading files.
+// On Google Drive, this is a server-side rename with no data transfer.
+func (e *Engine) MigrateRemote(ctx context.Context, oldRemote, newRemote string) error {
+	e.log.Info("migrating remote", "old", oldRemote, "new", newRemote)
+	start := time.Now()
+
+	args := []string{"moveto", oldRemote, newRemote}
+	args = append(args, e.commonFlags()...)
+
+	exitCode := e.runRclone(ctx, args)
+	elapsed := time.Since(start)
+
+	if exitCode != 0 {
+		e.log.Warn("remote migration failed", "old", oldRemote, "new", newRemote,
+			"exit", exitCode, "ms", elapsed.Milliseconds())
+		return fmt.Errorf("rclone moveto exit %d", exitCode)
+	}
+
+	e.log.Info("remote migration complete", "old", oldRemote, "new", newRemote,
+		"ms", elapsed.Milliseconds())
+	return nil
+}
+
+// GhostFile represents a remote file with no valid local counterpart.
+type GhostFile struct {
+	Project string // mirror name
+	Path    string // relative path on remote
+	Size    int64
+	IsLeak  bool // true = excluded by filter; false = orphan (not in local tree)
+}
+
+// findGhosts detects remote-only files for a project by comparing the remote listing
+// against the local filesystem + filter rules. Returns the list of ghost files.
+func (e *Engine) findGhosts(proj config.Project) ([]GhostFile, error) {
+	fe, ok := e.filters[proj.Name]
+	if !ok {
+		return nil, fmt.Errorf("no filter engine for project %q", proj.Name)
+	}
+
+	lister := e.ListRemoteFunc
+	if lister == nil {
+		lister = ListRemote
+	}
+	remoteFiles, err := lister(e.cfg, proj)
+	if err != nil {
+		return nil, fmt.Errorf("listing remote: %w", err)
+	}
+
+	// Build set of local non-excluded files
+	localFiles := make(map[string]bool)
+	filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			relPath, _ := filepath.Rel(proj.LocalPath, path)
+			if relPath != "." && fe.IsExcluded(relPath+"/") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		relPath, _ := filepath.Rel(proj.LocalPath, path)
+		relPath = filepath.ToSlash(relPath)
+		if fe.IsExcluded(relPath) {
+			return nil
+		}
+		localFiles[relPath] = true
+		return nil
+	})
+
+	var ghosts []GhostFile
+	for _, rf := range remoteFiles {
+		if rf.IsDir {
+			continue
+		}
+		remotePath := filepath.ToSlash(rf.Path)
+		if strings.HasPrefix(remotePath, ".quarantine/") {
+			continue
+		}
+		if !localFiles[remotePath] {
+			ghosts = append(ghosts, GhostFile{
+				Project: proj.Name,
+				Path:    remotePath,
+				Size:    rf.Size,
+				IsLeak:  fe.IsExcluded(remotePath),
+			})
+		}
+	}
+	return ghosts, nil
+}
+
+// CleanupGhosts removes remote-only files (LEAKs and ORPHANs) for a project.
+// Returns the number of files successfully deleted.
+func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, error) {
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		return 0, err
+	}
+	if len(ghosts) == 0 {
+		return 0, nil
+	}
+
+	deleted := 0
+	for _, g := range ghosts {
+		remotePath := proj.Remote + "/" + g.Path
+		args := []string{"deletefile", remotePath}
+		args = append(args, e.deleteFlags()...)
+
+		exitCode := e.runRclone(ctx, args)
+		kind := "orphan"
+		if g.IsLeak {
+			kind = "leak"
+		}
+		if exitCode == 0 {
+			e.log.Info("ghost cleaned", "project", proj.Name, "path", g.Path, "kind", kind)
+			e.state.LogAction(proj.Name, g.Path, "ghost_cleanup", kind, 0)
+			e.state.DeleteFileState(proj.Name, g.Path)
+			deleted++
+		} else {
+			e.log.Warn("ghost cleanup failed", "project", proj.Name, "path", g.Path, "kind", kind, "exit", exitCode)
+		}
+	}
+	return deleted, nil
+}
+
+// DryRunCleanup shows what ghost files would be cleaned up for a project.
+// Returns the number of ghost files found.
+func (e *Engine) DryRunCleanup(ctx context.Context, proj config.Project) (int, error) {
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		return 0, err
+	}
+	if len(ghosts) == 0 {
+		fmt.Printf("  No ghost files to clean up\n")
+		return 0, nil
+	}
+
+	for _, g := range ghosts {
+		kind := "ORPHAN"
+		if g.IsLeak {
+			kind = "LEAK"
+		}
+		fmt.Printf("  [%s] would delete: %s (%d bytes)\n", kind, g.Path, g.Size)
+	}
+	return len(ghosts), nil
 }
 
 // Validate checks rclone availability and remote connectivity.

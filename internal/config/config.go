@@ -21,15 +21,14 @@ type Project struct {
 	SyncIgnorePath string `yaml:"syncignore_path"` // override; default: <local_path>/.syncignore
 }
 
-// DebounceDuration returns the debounce interval as a time.Duration.
-// Returns 0 when DebounceSec <= 0, which signals dynamic debounce mode:
-// events fire immediately unless rapid repeated writes are detected,
-// in which case a short debounce timer activates automatically.
-// A positive value enables static debounce: every event is delayed by
-// this duration, with the timer resetting on each new event.
+// DebounceDuration returns the quiet-window interval as a time.Duration.
+// Returns 0 when DebounceSec <= 0, which signals queue-based fairness mode:
+// events enqueue immediately into the FairQueue (dedup + move-to-back).
+// A positive value enables static debounce: events are delayed by this
+// duration with the timer resetting on each new event (for Office-style saves).
 func (p Project) DebounceDuration() time.Duration {
 	if p.DebounceSec <= 0 {
-		return 0 // dynamic debounce
+		return 0 // queue-based fairness (default)
 	}
 	return time.Duration(p.DebounceSec) * time.Second
 }

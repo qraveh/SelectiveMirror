@@ -152,7 +152,7 @@ Verify that the version number is **1.73.0 or higher**. SelectiveMirror checks t
 
 SelectiveMirror requires rclone v1.73+ because it uses the `--skip-links` flag, introduced in that version, to prevent symlinks from being followed and uploaded to the remote. Without this flag, a symlink pointing to a large directory tree could cause unintended bulk uploads.
 
-SelectiveMirror performs a version check at startup and during `smirror doctor`. If your rclone version is between 1.50 and 1.72, the application will run but report "partial compatibility" in diagnostics. Versions below 1.50 are rejected outright because they lack critical subcommands.
+SelectiveMirror performs a version check at startup and during `smirror test-mirrors`. If your rclone version is between 1.50 and 1.72, the application will run but report "partial compatibility" in diagnostics. Versions below 1.50 are rejected outright because they lack critical subcommands.
 
 
 # 4. Configuring rclone
@@ -227,7 +227,7 @@ rclone stores its configuration at `%APPDATA%\rclone\rclone.conf` on Windows. Th
 
 ## Option A: MSI Installer (Recommended)
 
-1. Download `SelectiveMirror-1.0.0-amd64.msi` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
+1. Download `SelectiveMirror-0.4.0-amd64.msi` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
 2. Double-click the MSI file
 3. Follow the installation wizard
 4. The installer places `smirror.exe` in `C:\Program Files\SelectiveMirror\` and adds it to the system PATH
@@ -242,12 +242,12 @@ smirror version
 Expected output:
 
 ```
-smirror 1.0.0
+smirror 0.4.0
 ```
 
 ## Option B: Portable Installation (ZIP)
 
-1. Download `SelectiveMirror-1.0.0-amd64.zip` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
+1. Download `SelectiveMirror-0.4.0-amd64.zip` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
 2. Extract the ZIP to a directory of your choice (e.g., `C:\Tools\SelectiveMirror\`)
 3. Add that directory to your system PATH (same procedure as described in Section 3, Option D)
 4. Create the configuration directory manually:
@@ -478,43 +478,48 @@ smirror status
 To verify that the remote matches the local state:
 
 ```
-smirror verify
+smirror test-mirrors
 ```
 
-For a comprehensive self-test:
-
-```
-smirror doctor
-```
-
-The `doctor` command runs 12 diagnostic checks, including rclone version verification, config validation, state database integrity, lock file status, and remote connectivity.
+The `test-mirrors` command runs diagnostic checks including rclone version verification, config validation, state database integrity, lock file status, remote connectivity, and drift detection.
 
 
 # 8. Running as a Windows Service
 
-This feature is planned for v2.0 and will use the native Windows service API (`golang.org/x/sys/windows/svc`).
+SelectiveMirror includes native Windows Service support via `golang.org/x/sys/windows/svc`. The service runs as LocalSystem with automatic start and crash recovery.
 
-Currently, SelectiveMirror runs as a foreground process. For persistent operation, you have two options:
+## Installing the Service
 
-### Option 1: Keep a Terminal Open
+Open an **elevated** PowerShell or Command Prompt and run:
 
-Run `smirror start` in a terminal window and leave it running. This is the simplest approach for active development workstations.
+```
+smirror service install
+smirror service start
+```
 
-### Option 2: Task Scheduler
+The `install` command registers the service with Windows SCM, auto-detects rclone's path (resolving it for the SYSTEM account), and configures automatic restart on failure (10s, 30s, 60s delays).
 
-Create a Windows Scheduled Task to launch SelectiveMirror at logon:
+## Managing the Service
 
-1. Open **Task Scheduler** (`taskschd.msc`)
-2. Click **Create Task** (not "Create Basic Task")
-3. **General** tab: Name it "SelectiveMirror", select "Run only when user is logged on"
-4. **Triggers** tab: Add a trigger for "At log on"
-5. **Actions** tab: Add an action:
-   - Program: `smirror.exe` (or the full path)
-   - Arguments: `start`
-6. **Settings** tab: Uncheck "Stop the task if it runs longer than"
-7. Click **OK**
+```
+smirror service start       # Start the service
+smirror service stop        # Stop the service
+smirror service uninstall   # Remove the service registration
+```
 
-SelectiveMirror's single-instance lock ensures that duplicate launches are harmless --- the second instance will detect the lock and exit immediately.
+You can also manage it via Windows Services (`services.msc`) where it appears as "SelectiveMirror".
+
+## Checking Service Status
+
+```
+smirror status
+```
+
+This shows whether the service is running, its PID, uptime, sync metrics, and ghost scan results.
+
+## Foreground Mode
+
+For development or debugging, run `smirror start` directly in a terminal instead of using the service. The single-instance lock ensures only one instance runs at a time.
 
 
 # 9. Upgrading and Uninstalling
@@ -529,7 +534,7 @@ Download the new MSI and run it. The installer upgrades in place, preserving you
 
 1. Stop the running `smirror start` process
 2. Replace `smirror.exe` with the new version
-3. Run `smirror doctor` to verify the upgrade
+3. Run `smirror test-mirrors` to verify the upgrade
 
 Your configuration (`~/.selectivemirror/config.yaml`), state database (`state.db`), and log files are not modified during an upgrade.
 
@@ -545,7 +550,7 @@ Or, if rclone was installed manually:
 rclone selfupdate
 ```
 
-After upgrading rclone, run `smirror doctor` to verify continued compatibility.
+After upgrading rclone, run `smirror test-mirrors` to verify continued compatibility.
 
 ## Uninstalling SelectiveMirror
 
@@ -564,7 +569,7 @@ Use **Settings > Apps > Installed apps** or **Control Panel > Programs and Featu
 
 ## rclone Not Found
 
-**Symptom**: `smirror test-mirrors` or `smirror doctor` reports "rclone not found".
+**Symptom**: `smirror test-mirrors` reports "rclone not found".
 
 **Causes and fixes**:
 
@@ -580,7 +585,7 @@ SelectiveMirror searches for rclone in this order: (1) the configured `rclone_pa
 
 ## rclone Version Too Old
 
-**Symptom**: `smirror doctor` reports "partial compatibility" or "incompatible".
+**Symptom**: `smirror test-mirrors` reports "partial compatibility" or "incompatible".
 
 **Fix**: Upgrade rclone to v1.73 or later:
 
@@ -626,7 +631,7 @@ Common errors and their fixes:
 When in doubt, run:
 
 ```
-smirror doctor
+smirror test-mirrors
 ```
 
-The `doctor` command performs 12 self-test checks covering configuration integrity, rclone detection and version, remote connectivity, state database health, lock file status, and more. Its output will point you directly to the source of any problem.
+The `test-mirrors` command performs diagnostic checks covering configuration integrity, rclone detection and version, remote connectivity, state database integrity, lock file status, drift detection, and more. Its output will point you directly to the source of any problem.

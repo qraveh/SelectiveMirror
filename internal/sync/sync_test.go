@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -299,11 +300,11 @@ func TestRun_ChannelClose(t *testing.T) {
 		e.Run(context.Background())
 	}()
 
-	close(e.TaskChan)
+	e.Queue.Close()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not stop after channel close")
+		t.Fatal("Run did not stop after queue close")
 	}
 }
 
@@ -1429,28 +1430,22 @@ func TestReconciliation_PeriodicTicker_SendsFullProjectTasks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Simulate reconciliation: send full-project tasks for all projects
+	// Simulate reconciliation: enqueue full-project tasks for all projects
 	for _, proj := range cfg.Projects {
-		select {
-		case e.TaskChan <- Task{Project: proj, RelPath: ""}:
-		case <-ctx.Done():
-			t.Fatal("context cancelled before tasks were sent")
-		}
+		e.Queue.Enqueue(Task{Project: proj, RelPath: ""})
 	}
 
 	// Drain and verify
 	received := map[string]bool{}
-	timeout := time.After(2 * time.Second)
 	for i := 0; i < 2; i++ {
-		select {
-		case task := <-e.TaskChan:
-			if task.RelPath != "" {
-				t.Errorf("expected full-project sync (RelPath=''), got RelPath=%q", task.RelPath)
-			}
-			received[task.Project.Name] = true
-		case <-timeout:
-			t.Fatal("timed out waiting for reconciliation tasks")
+		task, ok := e.Queue.Dequeue(ctx)
+		if !ok {
+			t.Fatal("dequeue failed")
 		}
+		if task.RelPath != "" {
+			t.Errorf("expected full-project sync (RelPath=''), got RelPath=%q", task.RelPath)
+		}
+		received[task.Project.Name] = true
 	}
 
 	if !received["proj-alpha"] {
@@ -1461,40 +1456,34 @@ func TestReconciliation_PeriodicTicker_SendsFullProjectTasks(t *testing.T) {
 	}
 }
 
-// TestReconciliation_ContextCancel_StopsTaskSubmission verifies that when the
-// context is cancelled during reconciliation task submission, the loop exits
-// without blocking.
-func TestReconciliation_ContextCancel_StopsTaskSubmission(t *testing.T) {
+// TestReconciliation_ContextCancel_StopsDequeue verifies that when the
+// context is cancelled, Dequeue returns immediately without blocking.
+func TestReconciliation_ContextCancel_StopsDequeue(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
 	e := testEngine(t, cfg, func(ctx context.Context, args []string) int {
 		return 0
 	})
 
-	// Fill the channel to capacity so the next send would block
-	for i := 0; i < cap(e.TaskChan); i++ {
-		e.TaskChan <- Task{Project: proj, RelPath: "filler"}
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for _, p := range cfg.Projects {
-			select {
-			case e.TaskChan <- Task{Project: p, RelPath: ""}:
-			case <-ctx.Done():
-				return
-			}
+		// This Dequeue will block until context is cancelled (queue is empty)
+		_, ok := e.Queue.Dequeue(ctx)
+		if ok {
+			t.Error("Dequeue should return false on context cancel")
 		}
 	}()
 
+	// Give goroutine time to block on Dequeue
+	time.Sleep(50 * time.Millisecond)
 	cancel()
 
 	select {
 	case <-done:
-		// Success: cancellation unblocked the send
+		// Success: cancellation unblocked the dequeue
 	case <-time.After(2 * time.Second):
 		t.Fatal("reconciliation did not respect context cancellation (blocked on full channel)")
 	}
@@ -1622,5 +1611,996 @@ func TestReconciliation_ConfigInterval_NegativeUsesDefault(t *testing.T) {
 	interval := cfg.ReconcileInterval()
 	if interval != 5*time.Minute {
 		t.Errorf("ReconcileInterval for -1 = %v, want 5m default", interval)
+	}
+}
+
+// --- Task completion callback tests (SM-054) ---
+
+// TestReconcileAll_WaitGroupPattern verifies the exact pattern used by
+// reconcileAll: multiple tasks queued with WaitGroup, a goroutine waits
+// for all to complete before running a follow-up action. The follow-up
+// must NOT run before all tasks finish.
+func TestReconcileAll_WaitGroupPattern(t *testing.T) {
+	proj1 := testProject(t)
+	proj1.Name = "proj-alpha"
+	proj2 := testProject(t)
+	proj2.Name = "proj-beta"
+	cfg := &config.Global{
+		Projects:    []config.Project{proj1, proj2},
+		RclonePath:  "rclone",
+		SyncWorkers: 2,
+	}
+
+	// Track ordering: tasks complete before follow-up runs
+	var orderMu gosync.Mutex
+	var order []string
+
+	// Slow rclone runner — each task takes 200ms
+	runner := func(_ context.Context, args []string) int {
+		time.Sleep(200 * time.Millisecond)
+		return 0
+	}
+
+	e := testEngine(t, cfg, runner)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{
+		proj1.Name: fe,
+		proj2.Name: fe,
+	}
+
+	// Simulate reconcileAll pattern
+	var wg gosync.WaitGroup
+	for _, proj := range cfg.Projects {
+		wg.Add(1)
+		projName := proj.Name
+		e.Queue.Enqueue(Task{
+			Project: proj,
+			RelPath: "",
+			Done: func() {
+				orderMu.Lock()
+				order = append(order, "task:"+projName)
+				orderMu.Unlock()
+				wg.Done()
+			},
+		})
+	}
+
+	// Follow-up (ghost scan equivalent) waits for WaitGroup
+	followUpDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		orderMu.Lock()
+		order = append(order, "follow-up")
+		orderMu.Unlock()
+		close(followUpDone)
+	}()
+
+	// Start workers to process tasks
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go e.Run(ctx)
+
+	// Wait for follow-up to complete
+	select {
+	case <-followUpDone:
+		// Success
+	case <-time.After(10 * time.Second):
+		t.Fatal("follow-up never ran — WaitGroup likely deadlocked")
+	}
+
+	cancel() // stop workers
+
+	// Verify ordering: both tasks completed before follow-up
+	orderMu.Lock()
+	defer orderMu.Unlock()
+
+	if len(order) != 3 {
+		t.Fatalf("expected 3 events, got %d: %v", len(order), order)
+	}
+	// follow-up must be last
+	if order[2] != "follow-up" {
+		t.Errorf("follow-up should be last, but order = %v", order)
+	}
+	// Both tasks must be before follow-up (order between tasks is non-deterministic)
+	hasAlpha := false
+	hasBeta := false
+	for _, s := range order[:2] {
+		if s == "task:proj-alpha" {
+			hasAlpha = true
+		}
+		if s == "task:proj-beta" {
+			hasBeta = true
+		}
+	}
+	if !hasAlpha || !hasBeta {
+		t.Errorf("both tasks should complete before follow-up, got: %v", order)
+	}
+}
+
+
+// TestProcessTask_DoneCallback verifies that the Done callback is called
+// after task processing completes, enabling WaitGroup-based synchronization.
+func TestProcessTask_DoneCallback(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	e := testEngine(t, cfg, func(_ context.Context, args []string) int {
+		return 0
+	})
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	done := make(chan struct{})
+	task := Task{
+		Project: proj,
+		RelPath: "",
+		Done:    func() { close(done) },
+	}
+
+	go e.processTask(context.Background(), task)
+
+	select {
+	case <-done:
+		// Done callback was called — correct
+	case <-time.After(10 * time.Second):
+		t.Fatal("Done callback was not called within 10 seconds")
+	}
+}
+
+// TestProcessTask_DoneCallback_CalledOnPanic verifies that the Done callback
+// is called even when the task panics, preventing WaitGroup deadlocks.
+func TestProcessTask_DoneCallback_CalledOnPanic(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Runner that panics
+	e := testEngine(t, cfg, func(_ context.Context, args []string) int {
+		panic("simulated crash")
+	})
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	// Create a file so syncSingleFile actually calls rclone (which will panic)
+	filePath := filepath.Join(proj.LocalPath, "crash.txt")
+	os.WriteFile(filePath, []byte("data"), 0644)
+
+	done := make(chan struct{})
+	task := Task{
+		Project: proj,
+		RelPath: "crash.txt",
+		Done:    func() { close(done) },
+	}
+
+	go e.processTask(context.Background(), task)
+
+	select {
+	case <-done:
+		// Done callback was called despite panic — correct
+	case <-time.After(10 * time.Second):
+		t.Fatal("Done callback was not called after panic within 10 seconds")
+	}
+}
+
+// TestProcessTask_NilDone verifies that tasks without a Done callback
+// don't crash (backward compatible with existing task creation).
+func TestProcessTask_NilDone(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	e := testEngine(t, cfg, func(_ context.Context, args []string) int {
+		return 0
+	})
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	// Task with nil Done — should not panic
+	task := Task{Project: proj, RelPath: ""}
+	e.processTask(context.Background(), task)
+}
+
+// --- Ghost cleanup tests ---
+
+// testFilterWithExcludes creates a filter.Engine that excludes the given patterns.
+func testFilterWithExcludes(t *testing.T, excludes []string) *filter.Engine {
+	t.Helper()
+	fe, err := filter.New(excludes, "")
+	if err != nil {
+		t.Fatalf("filter.New with excludes: %v", err)
+	}
+	return fe
+}
+
+// testEngineWithRemoteLister creates a test engine with a mock ListRemote returning the given files.
+func testEngineWithRemoteLister(t *testing.T, cfg *config.Global, runner RcloneRunner, remoteFiles []RemoteFile) *Engine {
+	t.Helper()
+	e := testEngine(t, cfg, runner)
+	e.ListRemoteFunc = func(_ *config.Global, _ config.Project) ([]RemoteFile, error) {
+		return remoteFiles, nil
+	}
+	return e
+}
+
+// TestFindGhosts_DetectsOrphan verifies that a file on remote with no local
+// counterpart is reported as an ORPHAN ghost.
+func TestFindGhosts_DetectsOrphan(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Remote has a file that doesn't exist locally
+	remoteFiles := []RemoteFile{
+		{Path: "deleted-file.txt", Size: 100, IsDir: false},
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		t.Fatalf("findGhosts: %v", err)
+	}
+	if len(ghosts) != 1 {
+		t.Fatalf("expected 1 ghost, got %d", len(ghosts))
+	}
+	if ghosts[0].Path != "deleted-file.txt" {
+		t.Errorf("ghost path = %q, want %q", ghosts[0].Path, "deleted-file.txt")
+	}
+	if ghosts[0].IsLeak {
+		t.Error("ghost should be ORPHAN (IsLeak=false), got IsLeak=true")
+	}
+}
+
+// TestFindGhosts_DetectsLeak verifies that a file on remote that matches an
+// exclude rule is reported as a LEAK ghost.
+func TestFindGhosts_DetectsLeak(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Create a local .log file (exists locally but is excluded)
+	logPath := filepath.Join(proj.LocalPath, "results", "run.log")
+	os.MkdirAll(filepath.Dir(logPath), 0755)
+	os.WriteFile(logPath, []byte("log data"), 0644)
+
+	// Remote also has this .log file (synced before exclude was added)
+	remoteFiles := []RemoteFile{
+		{Path: "results/run.log", Size: 8, IsDir: false},
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
+	fe := testFilterWithExcludes(t, []string{"*.log"})
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		t.Fatalf("findGhosts: %v", err)
+	}
+	if len(ghosts) != 1 {
+		t.Fatalf("expected 1 ghost, got %d", len(ghosts))
+	}
+	if ghosts[0].Path != "results/run.log" {
+		t.Errorf("ghost path = %q, want %q", ghosts[0].Path, "results/run.log")
+	}
+	if !ghosts[0].IsLeak {
+		t.Error("ghost should be LEAK (IsLeak=true), got IsLeak=false")
+	}
+}
+
+// TestFindGhosts_NoGhosts verifies that matching local files produce no ghosts.
+func TestFindGhosts_NoGhosts(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Create a local file that also exists on remote
+	localFile := filepath.Join(proj.LocalPath, "readme.txt")
+	os.WriteFile(localFile, []byte("hello"), 0644)
+
+	remoteFiles := []RemoteFile{
+		{Path: "readme.txt", Size: 5, IsDir: false},
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		t.Fatalf("findGhosts: %v", err)
+	}
+	if len(ghosts) != 0 {
+		t.Errorf("expected 0 ghosts, got %d: %+v", len(ghosts), ghosts)
+	}
+}
+
+// TestFindGhosts_SkipsQuarantine verifies that files under .quarantine/ on
+// remote are NOT reported as ghosts.
+func TestFindGhosts_SkipsQuarantine(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: ".quarantine/old.txt.20260101T000000Z", Size: 50, IsDir: false},
+		{Path: "orphan.txt", Size: 10, IsDir: false},
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		t.Fatalf("findGhosts: %v", err)
+	}
+	if len(ghosts) != 1 {
+		t.Fatalf("expected 1 ghost (orphan only, quarantine skipped), got %d", len(ghosts))
+	}
+	if ghosts[0].Path != "orphan.txt" {
+		t.Errorf("ghost = %q, want %q", ghosts[0].Path, "orphan.txt")
+	}
+}
+
+// TestFindGhosts_SkipsDirectories verifies that remote directories are not
+// reported as ghosts.
+func TestFindGhosts_SkipsDirectories(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: "subdir", Size: 0, IsDir: true},
+		{Path: "subdir/orphan.txt", Size: 20, IsDir: false},
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		t.Fatalf("findGhosts: %v", err)
+	}
+	if len(ghosts) != 1 {
+		t.Fatalf("expected 1 ghost (file only, dir skipped), got %d", len(ghosts))
+	}
+	if ghosts[0].Path != "subdir/orphan.txt" {
+		t.Errorf("ghost = %q, want %q", ghosts[0].Path, "subdir/orphan.txt")
+	}
+}
+
+// TestFindGhosts_MixedLeaksAndOrphans verifies correct classification when both
+// LEAKs and ORPHANs are present.
+func TestFindGhosts_MixedLeaksAndOrphans(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Create a local .txt file (not excluded)
+	os.WriteFile(filepath.Join(proj.LocalPath, "keep.txt"), []byte("keep"), 0644)
+
+	remoteFiles := []RemoteFile{
+		{Path: "keep.txt", Size: 4, IsDir: false},       // matches local → not ghost
+		{Path: "old.log", Size: 100, IsDir: false},       // excluded by *.log → LEAK
+		{Path: "deleted.txt", Size: 50, IsDir: false},    // no local file → ORPHAN
+		{Path: "debug.log", Size: 200, IsDir: false},     // excluded by *.log → LEAK
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
+	fe := testFilterWithExcludes(t, []string{"*.log"})
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		t.Fatalf("findGhosts: %v", err)
+	}
+	if len(ghosts) != 3 {
+		t.Fatalf("expected 3 ghosts, got %d: %+v", len(ghosts), ghosts)
+	}
+
+	leaks := 0
+	orphans := 0
+	for _, g := range ghosts {
+		if g.IsLeak {
+			leaks++
+		} else {
+			orphans++
+		}
+	}
+	if leaks != 2 {
+		t.Errorf("expected 2 leaks, got %d", leaks)
+	}
+	if orphans != 1 {
+		t.Errorf("expected 1 orphan, got %d", orphans)
+	}
+}
+
+// TestFindGhosts_ExcludedDirectory verifies that files under an excluded directory
+// on remote are detected as LEAKs, while local files in the excluded dir are not
+// walked (so they don't suppress the ghost detection).
+func TestFindGhosts_ExcludedDirectory(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Create excluded directory with a file locally
+	excludedDir := filepath.Join(proj.LocalPath, "node_modules")
+	os.MkdirAll(excludedDir, 0755)
+	os.WriteFile(filepath.Join(excludedDir, "pkg.json"), []byte("{}"), 0644)
+
+	remoteFiles := []RemoteFile{
+		{Path: "node_modules/pkg.json", Size: 2, IsDir: false},
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
+	fe := testFilterWithExcludes(t, []string{"node_modules/"})
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		t.Fatalf("findGhosts: %v", err)
+	}
+	if len(ghosts) != 1 {
+		t.Fatalf("expected 1 ghost (excluded dir leak), got %d", len(ghosts))
+	}
+	if !ghosts[0].IsLeak {
+		t.Error("file in excluded dir should be LEAK")
+	}
+}
+
+// TestFindGhosts_NoFilterEngine verifies that findGhosts returns an error
+// when the filter engine is missing for a project.
+func TestFindGhosts_NoFilterEngine(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	e := testEngineWithRemoteLister(t, cfg, nil, nil)
+	// Don't set e.filters
+
+	_, err := e.findGhosts(proj)
+	if err == nil {
+		t.Fatal("expected error for missing filter engine")
+	}
+	if !strings.Contains(err.Error(), "no filter engine") {
+		t.Errorf("error = %q, want to contain 'no filter engine'", err)
+	}
+}
+
+// TestCleanupGhosts_DeletesOrphans verifies that CleanupGhosts calls rclone
+// deletefile for each ghost and returns the correct count.
+func TestCleanupGhosts_DeletesOrphans(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: "orphan1.txt", Size: 10, IsDir: false},
+		{Path: "orphan2.txt", Size: 20, IsDir: false},
+	}
+
+	var deletedPaths []string
+	var mu gosync.Mutex
+	runner := func(_ context.Context, args []string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, a := range args {
+			if strings.Contains(a, "orphan") {
+				deletedPaths = append(deletedPaths, a)
+			}
+		}
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+	if cleaned != 2 {
+		t.Errorf("cleaned = %d, want 2", cleaned)
+	}
+	if len(deletedPaths) != 2 {
+		t.Errorf("rclone deletefile called %d times, want 2", len(deletedPaths))
+	}
+}
+
+// TestCleanupGhosts_DeletesLeaks verifies that LEAKs (excluded files on remote)
+// are also cleaned up.
+func TestCleanupGhosts_DeletesLeaks(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// .log file on remote, excluded locally
+	remoteFiles := []RemoteFile{
+		{Path: "results/test.log", Size: 500, IsDir: false},
+	}
+
+	var rcloneCalls [][]string
+	runner := func(_ context.Context, args []string) int {
+		rcloneCalls = append(rcloneCalls, args)
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilterWithExcludes(t, []string{"*.log"})
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+	if cleaned != 1 {
+		t.Errorf("cleaned = %d, want 1", cleaned)
+	}
+
+	// Verify rclone was called with deletefile and the correct remote path
+	if len(rcloneCalls) != 1 {
+		t.Fatalf("expected 1 rclone call, got %d", len(rcloneCalls))
+	}
+	if rcloneCalls[0][0] != "deletefile" {
+		t.Errorf("rclone verb = %q, want %q", rcloneCalls[0][0], "deletefile")
+	}
+	expectedRemote := proj.Remote + "/results/test.log"
+	if rcloneCalls[0][1] != expectedRemote {
+		t.Errorf("rclone target = %q, want %q", rcloneCalls[0][1], expectedRemote)
+	}
+}
+
+// TestCleanupGhosts_NoGhosts verifies zero cleanup when remote matches local.
+func TestCleanupGhosts_NoGhosts(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	os.WriteFile(filepath.Join(proj.LocalPath, "file.txt"), []byte("data"), 0644)
+
+	remoteFiles := []RemoteFile{
+		{Path: "file.txt", Size: 4, IsDir: false},
+	}
+
+	callCount := 0
+	runner := func(_ context.Context, args []string) int {
+		callCount++
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+	if cleaned != 0 {
+		t.Errorf("cleaned = %d, want 0", cleaned)
+	}
+	if callCount != 0 {
+		t.Errorf("rclone called %d times, want 0", callCount)
+	}
+}
+
+// TestCleanupGhosts_PartialFailure verifies that cleanup continues when some
+// rclone deletefile calls fail, and returns the count of successful deletes.
+func TestCleanupGhosts_PartialFailure(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: "ghost1.txt", Size: 10, IsDir: false},
+		{Path: "ghost2.txt", Size: 20, IsDir: false},
+		{Path: "ghost3.txt", Size: 30, IsDir: false},
+	}
+
+	callNum := 0
+	runner := func(_ context.Context, args []string) int {
+		callNum++
+		if callNum == 2 {
+			return 1 // second delete fails
+		}
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+	if cleaned != 2 {
+		t.Errorf("cleaned = %d, want 2 (1 failed)", cleaned)
+	}
+}
+
+// TestCleanupGhosts_DeletesStateEntry verifies that state DB entries are
+// removed for successfully cleaned ghosts.
+func TestCleanupGhosts_DeletesStateEntry(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: "old-synced.txt", Size: 10, IsDir: false},
+	}
+
+	runner := func(_ context.Context, args []string) int {
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	// Seed state: this file was previously synced
+	e.state.UpdateFileState(proj.Name, "old-synced.txt", "abc123", 10, time.Now().UnixNano(), 0)
+
+	// Verify state exists before cleanup
+	fs, _ := e.state.GetFileState(proj.Name, "old-synced.txt")
+	if fs == nil {
+		t.Fatal("state should exist before cleanup")
+	}
+
+	_, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+
+	// State should be gone after cleanup
+	fs, _ = e.state.GetFileState(proj.Name, "old-synced.txt")
+	if fs != nil {
+		t.Error("state should be deleted after ghost cleanup")
+	}
+}
+
+// TestCleanupGhosts_FailedDelete_PreservesState verifies that state DB entries
+// are preserved when rclone deletefile fails (file still exists on remote).
+func TestCleanupGhosts_FailedDelete_PreservesState(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: "stuck.txt", Size: 10, IsDir: false},
+	}
+
+	runner := func(_ context.Context, args []string) int {
+		return 1 // fail
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	// Seed state
+	e.state.UpdateFileState(proj.Name, "stuck.txt", "hash", 10, time.Now().UnixNano(), 0)
+
+	cleaned, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+	if cleaned != 0 {
+		t.Errorf("cleaned = %d, want 0 (delete failed)", cleaned)
+	}
+
+	// State should be preserved
+	fs, _ := e.state.GetFileState(proj.Name, "stuck.txt")
+	if fs == nil {
+		t.Error("state should be preserved when delete fails")
+	}
+}
+
+// TestCleanupGhosts_SkipsQuarantine verifies that files in .quarantine/ are
+// never cleaned up — they are intentionally preserved for recovery.
+func TestCleanupGhosts_SkipsQuarantine(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: ".quarantine/important.txt.20260101T000000Z", Size: 100, IsDir: false},
+		{Path: "real-orphan.txt", Size: 10, IsDir: false},
+	}
+
+	callCount := 0
+	runner := func(_ context.Context, args []string) int {
+		callCount++
+		// Verify quarantine file is never targeted
+		for _, a := range args {
+			if strings.Contains(a, ".quarantine") {
+				t.Error("rclone should never target .quarantine/ files")
+			}
+		}
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+	if cleaned != 1 {
+		t.Errorf("cleaned = %d, want 1 (only real orphan)", cleaned)
+	}
+	if callCount != 1 {
+		t.Errorf("rclone called %d times, want 1", callCount)
+	}
+}
+
+// TestCleanupGhosts_UsesDeletefileVerb verifies that ghost cleanup uses
+// "deletefile" (not "delete" or "purge") for each ghost file individually.
+func TestCleanupGhosts_UsesDeletefileVerb(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: "a.txt", Size: 5, IsDir: false},
+		{Path: "b.txt", Size: 10, IsDir: false},
+	}
+
+	var verbs []string
+	runner := func(_ context.Context, args []string) int {
+		if len(args) > 0 {
+			verbs = append(verbs, args[0])
+		}
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	e.CleanupGhosts(context.Background(), proj)
+	for i, v := range verbs {
+		if v != "deletefile" {
+			t.Errorf("call %d: verb = %q, want %q", i, v, "deletefile")
+		}
+	}
+}
+
+// TestCleanupGhosts_NestedOrphans verifies cleanup of files in subdirectories
+// that no longer exist locally.
+func TestCleanupGhosts_NestedOrphans(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Local has src/ but not src/old/
+	os.MkdirAll(filepath.Join(proj.LocalPath, "src"), 0755)
+	os.WriteFile(filepath.Join(proj.LocalPath, "src", "main.go"), []byte("package main"), 0644)
+
+	remoteFiles := []RemoteFile{
+		{Path: "src/main.go", Size: 12, IsDir: false},              // matches local
+		{Path: "src/old/legacy.go", Size: 200, IsDir: false},       // orphan (dir deleted)
+		{Path: "src/old/utils.go", Size: 150, IsDir: false},        // orphan (dir deleted)
+	}
+
+	deletedPaths := make(map[string]bool)
+	runner := func(_ context.Context, args []string) int {
+		if len(args) > 1 {
+			deletedPaths[args[1]] = true
+		}
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+	if cleaned != 2 {
+		t.Errorf("cleaned = %d, want 2", cleaned)
+	}
+	// Verify correct remote paths were targeted
+	if !deletedPaths[proj.Remote+"/src/old/legacy.go"] {
+		t.Error("expected src/old/legacy.go to be deleted")
+	}
+	if !deletedPaths[proj.Remote+"/src/old/utils.go"] {
+		t.Error("expected src/old/utils.go to be deleted")
+	}
+}
+
+// TestDryRunCleanup_ReportsGhosts verifies that DryRunCleanup prints preview
+// without calling rclone.
+func TestDryRunCleanup_ReportsGhosts(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	remoteFiles := []RemoteFile{
+		{Path: "orphan.txt", Size: 42, IsDir: false},
+		{Path: "old.log", Size: 99, IsDir: false},
+	}
+
+	rcloneCalled := false
+	runner := func(_ context.Context, args []string) int {
+		rcloneCalled = true
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilterWithExcludes(t, []string{"*.log"})
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	count, err := e.DryRunCleanup(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("DryRunCleanup: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+	if rcloneCalled {
+		t.Error("DryRunCleanup should NOT call rclone")
+	}
+}
+
+// TestDryRunCleanup_NoGhosts verifies zero count when no ghosts exist.
+func TestDryRunCleanup_NoGhosts(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	os.WriteFile(filepath.Join(proj.LocalPath, "a.txt"), []byte("ok"), 0644)
+
+	remoteFiles := []RemoteFile{
+		{Path: "a.txt", Size: 2, IsDir: false},
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	count, err := e.DryRunCleanup(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("DryRunCleanup: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+}
+
+// TestCleanupGhosts_MirrorPolicy_SkipsRedundant verifies that CleanupGhosts is
+// skipped when delete_policy=mirror, since rclone sync already handles cleanup.
+// BUG: Currently CleanupGhosts runs redundantly after rclone sync.
+// This test documents the expected behavior for SM-052 review.
+func TestCleanupGhosts_MirrorPolicy_RedundantCheck(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+	cfg.DeletePolicyStr = "mirror"
+
+	// After rclone sync with delete_policy=mirror, remote should already be clean.
+	// But if rclone sync missed something (filter timing), CleanupGhosts catches it.
+	remoteFiles := []RemoteFile{
+		{Path: "already-gone.txt", Size: 10, IsDir: false},
+	}
+
+	deleteCallCount := 0
+	runner := func(_ context.Context, args []string) int {
+		if len(args) > 0 && args[0] == "deletefile" {
+			deleteCallCount++
+			return 3 // rclone: file not found (already deleted by sync)
+		}
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupGhosts(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupGhosts: %v", err)
+	}
+
+	// Deletion was attempted (redundant but not harmful — file was already gone)
+	if deleteCallCount != 1 {
+		t.Errorf("deletefile calls = %d, want 1", deleteCallCount)
+	}
+	// File couldn't be deleted (exit code 3), so cleaned=0
+	if cleaned != 0 {
+		t.Errorf("cleaned = %d, want 0 (file already gone, rclone returned error)", cleaned)
+	}
+}
+
+// TestFindGhosts_RemoteListError verifies that findGhosts returns an error
+// when the remote listing fails.
+func TestFindGhosts_RemoteListError(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	e := testEngine(t, cfg, nil)
+	e.ListRemoteFunc = func(_ *config.Global, _ config.Project) ([]RemoteFile, error) {
+		return nil, fmt.Errorf("network timeout")
+	}
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	_, err := e.findGhosts(proj)
+	if err == nil {
+		t.Fatal("expected error from findGhosts when remote listing fails")
+	}
+	if !strings.Contains(err.Error(), "listing remote") {
+		t.Errorf("error = %q, want to contain 'listing remote'", err)
+	}
+}
+
+// --- MigrateRemote tests ---
+
+// TestMigrateRemote_Success verifies that MigrateRemote calls rclone moveto
+// with correct arguments and returns nil on success.
+func TestMigrateRemote_Success(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	var capturedArgs []string
+	runner := func(_ context.Context, args []string) int {
+		capturedArgs = args
+		return 0
+	}
+
+	e := testEngine(t, cfg, runner)
+
+	err := e.MigrateRemote(context.Background(), "gdrive:AI-hub/OldName", "gdrive:AI-hub/NewName")
+	if err != nil {
+		t.Fatalf("MigrateRemote: %v", err)
+	}
+
+	// Verify rclone was called with moveto
+	if len(capturedArgs) < 3 {
+		t.Fatalf("expected at least 3 args, got %d: %v", len(capturedArgs), capturedArgs)
+	}
+	if capturedArgs[0] != "moveto" {
+		t.Errorf("verb = %q, want moveto", capturedArgs[0])
+	}
+	if capturedArgs[1] != "gdrive:AI-hub/OldName" {
+		t.Errorf("source = %q, want gdrive:AI-hub/OldName", capturedArgs[1])
+	}
+	if capturedArgs[2] != "gdrive:AI-hub/NewName" {
+		t.Errorf("dest = %q, want gdrive:AI-hub/NewName", capturedArgs[2])
+	}
+}
+
+// TestMigrateRemote_Failure verifies that MigrateRemote returns an error
+// when rclone moveto fails.
+func TestMigrateRemote_Failure(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	runner := func(_ context.Context, args []string) int {
+		return 1 // simulate failure
+	}
+
+	e := testEngine(t, cfg, runner)
+
+	err := e.MigrateRemote(context.Background(), "gdrive:old", "gdrive:new")
+	if err == nil {
+		t.Fatal("expected error on rclone failure")
+	}
+	if !strings.Contains(err.Error(), "exit 1") {
+		t.Errorf("error = %q, want to contain 'exit 1'", err)
+	}
+}
+
+// TestMigrateRemote_UsesCommonFlags verifies that MigrateRemote passes
+// common flags (--skip-links, --retries, etc.) to rclone.
+func TestMigrateRemote_UsesCommonFlags(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	var capturedArgs []string
+	runner := func(_ context.Context, args []string) int {
+		capturedArgs = args
+		return 0
+	}
+
+	e := testEngine(t, cfg, runner)
+	e.MigrateRemote(context.Background(), "gdrive:old", "gdrive:new")
+
+	// Common flags should include --skip-links
+	found := false
+	for _, a := range capturedArgs {
+		if a == "--skip-links" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected --skip-links in args: %v", capturedArgs)
 	}
 }

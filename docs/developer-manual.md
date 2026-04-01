@@ -25,8 +25,8 @@ cmd/smirror/main.go          CLI entry point, command dispatch
         +-- internal/metrics      Atomic counters, status.json generation
         +-- internal/notify       Desktop notifications (Windows toast)
         +-- internal/service      Windows Service integration (SCM handler)
-        +-- internal/watcher      fsnotify event loop, debounce, recursive watch
-        +-- internal/sync         Task processing, rclone subprocess, hash check
+        +-- internal/watcher      fsnotify event loop, FairQueue dispatch, recursive watch
+        +-- internal/sync         FairQueue, task processing, rclone subprocess, hash check
 ```
 
 ## Data Flow
@@ -43,13 +43,10 @@ The core data flow follows a pipeline pattern:
   watcher.handleEvent()     Lstat (not Stat) to detect symlinks, check size
        |
        v
-  projectWatcher.pending    Debounce map: relPath -> lastEventTime
+  sync.FairQueue.Enqueue()  Dedup (move-to-back), priority (deletes to front)
        |
        v
-  watcher.debounceLoop()    Tick every 1s, emit matured entries
-       |
-       v
-  sync.Engine.TaskChan      Buffered channel (cap 1000)
+  sync.FairQueue.Dequeue()  Workers block until task available
        |
        v
   sync.Engine.runWorker()   N concurrent workers (default 4, max 16)
@@ -70,7 +67,7 @@ The core data flow follows a pipeline pattern:
 
 **Per-file locking with sync.Map.** Two workers must never sync the same file simultaneously. Mutexes are stored in a `sync.Map` keyed by `"project:relPath"` and are never deleted after unlock -- deleting would create a race where two goroutines hold different mutex instances for the same key.
 
-**Debounce-then-sync.** File change events are collected into a pending map and only emitted to the sync channel after the debounce interval elapses (default 5 seconds). This collapses rapid saves (e.g., IDE auto-save) into a single sync operation.
+**FairQueue scheduling.** File change events are enqueued into a deduplicating priority queue. If a file is already queued, the old entry is removed and a new one placed at the back -- hot files cycle to the back while cold files advance. Delete events get priority. When `debounce_sec > 0` is configured (for Office-style saves), a quiet-window timer fires before enqueuing.
 
 **Hash-based deduplication.** Before invoking rclone, the engine computes an MD5 hash of the local file and compares it against the last known hash in the state database. If the hash and mtime are unchanged and the previous sync succeeded (exit code 0), the file is skipped entirely.
 
@@ -92,6 +89,8 @@ SelectiveMirror deliberately invokes rclone as an external process rather than i
 4. **Binary bloat avoided.** Embedding rclone's dependency tree would add approximately 50MB to the SelectiveMirror binary. The standalone smirror binary is under 15MB.
 
 5. **Testability.** The `RcloneRunner` function type allows tests to inject a fake implementation that returns predetermined exit codes without spawning any process.
+
+6. **Inherited rate limiting.** Each rclone process contains a per-backend pacer that handles API rate limits with exponential backoff. This pacer state is per-process and not shared across processes. smirror therefore serializes rclone calls to the same backend -- running multiple concurrent rclone processes against one backend causes uncoordinated backoff (thundering herd). Internal parallelism within a single rclone call (`--transfers`, default 4) is the correct way to achieve throughput.
 
 ## RcloneRunner Interface
 
@@ -159,7 +158,7 @@ Full-project syncs require an rclone filter file that mirrors the in-memory `.sy
 ```bash
 git clone https://github.com/qraveh/SelectiveMirror.git
 cd SelectiveMirror
-go build -o smirror.exe ./cmd/smirror/
+go build -o bin/smirror.exe ./cmd/smirror/
 ```
 
 The binary is self-contained with no external dependencies (SQLite is embedded via `modernc.org/sqlite`, a pure-Go implementation).
@@ -270,7 +269,7 @@ Creates a filter engine with no global excludes and no `.syncignore`, useful whe
 |---------|------|-------------|----------------|
 | `cmd/smirror` | `cmd/smirror/` | ~1400 | CLI entry point, command dispatch, heartbeat loop, reconciliation, doctor, verify, stats, report-bug |
 | `sync` | `internal/sync/` | ~700 | Task processing, rclone invocation, hash comparison, quiescence, delete policies, per-file locking |
-| `watcher` | `internal/watcher/` | ~700 | fsnotify event loop, debounce, recursive directory watching, symlink policy, health monitoring |
+| `watcher` | `internal/watcher/` | ~700 | fsnotify event loop, FairQueue dispatch, recursive directory watching, symlink policy, health monitoring |
 | `config` | `internal/config/` | ~250 | YAML config loading, validation, defaults, path expansion |
 | `state` | `internal/state/` | ~300 | SQLite state database: schema, CRUD for sync_state/sync_log/meta tables, file hashing |
 | `filter` | `internal/filter/` | ~200 | .syncignore parsing via go-gitignore, hot-reload, rclone filter file generation |
@@ -361,9 +360,9 @@ A task's lifecycle from creation to completion:
 
 1. **Creation.** The watcher (or `cmdSyncNow`, or the reconciliation loop) creates a `sync.Task` struct with a project reference, a relative path, and a task type (`TaskSync` or `TaskDelete`).
 
-2. **Channel.** The task is sent to `Engine.TaskChan`, a buffered channel with capacity 1000. If the channel is full, the sender blocks (watcher debounce loop) or drops (`.syncignore` reload, which uses a non-blocking send).
+2. **FairQueue.** The task is enqueued via `Engine.Queue.Enqueue(task)`. If a task for the same file is already in the queue, the old entry is removed and the new one goes to the back (dedup + move-to-back). Delete events use `EnqueuePriority` to jump to the front.
 
-3. **Worker dequeue.** One of N workers (default 4) receives the task from the channel via `select`.
+3. **Worker dequeue.** One of N workers (default 4) calls `Queue.Dequeue(ctx)`, which blocks until a task is available or the context is cancelled.
 
 4. **Per-file lock.** The worker calls `acquireFileLock(task)` which does `LoadOrStore` on a `sync.Map` to get or create a mutex for the key `"project:relPath"`, then locks it. Full-project syncs use just the project name as the key.
 
@@ -421,45 +420,25 @@ This is efficient (one handle per project) and allows subdirectories to be freel
 
 **Linux/macOS (inotify/kqueue).** These APIs do not support recursive watching natively. The watcher walks the directory tree at startup and adds each subdirectory individually via `addRecursive()`. When a new subdirectory is created, the watcher detects the `Create` event and adds it dynamically.
 
-## Debounce Loop
+## FairQueue Dispatch
 
-Each project has its own debounce goroutine. The loop ticks every 1 second and checks the pending map:
+The watcher dispatches events directly to the sync engine's FairQueue:
 
-```go
-func (m *Manager) debounceLoop(ctx context.Context, pw *projectWatcher) {
-    ticker := time.NewTicker(1 * time.Second)
-    for {
-        select {
-        case <-ticker.C:
-            var ready []msync.Task
-            pw.mu.Lock()
-            for relPath, lastEvent := range pw.pending {
-                if now.Sub(lastEvent) >= pw.project.DebounceDuration() {
-                    ready = append(ready, msync.Task{...})
-                    delete(pw.pending, relPath)
-                }
-            }
-            pw.mu.Unlock()
-            // Send outside the lock
-            for _, task := range ready {
-                pw.syncChan <- task
-            }
-        }
-    }
-}
-```
+- **Default mode** (`debounce_sec = 0`): Every file event calls `queue.Enqueue(task)` immediately. The FairQueue handles deduplication (move-to-back) and fairness. No timers, no pending map.
+- **Static mode** (`debounce_sec > 0`): Events start/reset a per-file timer. When the timer fires (quiet window elapsed), it calls `queue.Enqueue(task)`. This preserves the quiet-window behavior needed for Office-style saves.
+- **Delete events**: Always use `queue.EnqueuePriority(task)` to jump to the front, regardless of mode.
 
-The collect-then-send pattern is deliberate: tasks are collected under the mutex, then sent outside it. This prevents a deadlock where a full `syncChan` blocks the send while the mutex prevents new events from being enqueued by the event loop.
+The FairQueue's `Enqueue` is non-blocking (mutex-guarded, not channel-based), so the watcher event loop never blocks on a full queue.
 
 ## Event Handling
 
 | fsnotify Event | Handler | Action |
 |----------------|---------|--------|
-| `Create` / `Write` | `handleEvent` | Check filters, validate file type (Lstat), add to debounce pending map |
-| `Remove` | `handleRemove` | Clean stale watchers (non-Windows), clear pending entries, queue `TaskDelete` |
-| `Rename` | `handleRename` | Clean stale watchers, clear pending, queue `TaskDelete` with `ForceDelete: true` |
+| `Create` / `Write` | `handleEvent` | Check filters, validate file type (Lstat), enqueue to FairQueue |
+| `Remove` | `handleRemove` | Clean stale watchers (non-Windows), clear pending timers, enqueue `TaskDelete` with priority |
+| `Rename` | `handleRename` | Clean stale watchers, clear pending, enqueue `TaskDelete` with `ForceDelete: true` and priority |
 
-When a new directory is created (or moved in), the watcher walks its contents and queues individual file sync tasks via `queueFilesInDir()`, bypassing debounce since the files already exist and are stable.
+When a new directory is created (or moved in), the watcher walks its contents and queues individual file sync tasks via `queueFilesInDir()`, directly into the FairQueue since the files already exist and are stable.
 
 ## Symlink Policy
 

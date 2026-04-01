@@ -6,12 +6,13 @@ Real-time selective file synchronization for Windows. Watches local directories 
 
 - **On-write sync** -- detects file changes via Windows `ReadDirectoryChangesW` (no polling)
 - **Selective filtering** -- per-directory `.syncignore` files with `.gitignore` syntax
-- **Bandwidth-efficient** -- MD5 checksum comparison, debouncing, rate limiting
+- **Bandwidth-efficient** -- MD5 checksum comparison, deduplicating fair queue, rate limiting
 - **Single binary** -- `smirror.exe`, no runtime dependencies beyond rclone
 - **Backend-agnostic** -- rclone handles all cloud/remote storage
 - **Single-instance** -- file-based lock prevents duplicate watchers
 - **Quiescence** -- files must be stable before sync (handles Office saves, long writes)
 - **Delete policy** -- configurable ignore/mirror/quarantine for local deletions
+- **Fair scheduling** -- hot files cycle to the back of the queue; no single file can starve other mirrors
 
 ## Installation
 
@@ -86,6 +87,7 @@ See [`config.example.yaml`](config.example.yaml) for a full annotated example.
 - [x] **Phase 2** -- Windows service: native SCM integration via `golang.org/x/sys/windows/svc`
 - [ ] **Phase 3** -- USN journal recovery: fast restart reconciliation
 - [x] **Phase 4** -- OSS polish: CI, issue templates, documentation, winget manifest
+- [ ] **Phase 5** -- Telemetry: opt-in analytics, update check
 
 ## License
 

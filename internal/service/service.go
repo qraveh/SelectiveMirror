@@ -211,7 +211,17 @@ func Stop() error {
 	}
 	defer s.Close()
 
-	status, err := s.Control(svc.Stop)
+	// Check if already stopped before sending control signal
+	status, err := s.Query()
+	if err != nil {
+		return fmt.Errorf("cannot query service state: %w", err)
+	}
+	if status.State == svc.Stopped {
+		fmt.Println("Service 'smirror' was not running.")
+		return nil
+	}
+
+	status, err = s.Control(svc.Stop)
 	if err != nil {
 		return fmt.Errorf("cannot stop service: %w", err)
 	}

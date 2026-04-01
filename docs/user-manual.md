@@ -17,7 +17,7 @@ SelectiveMirror is a real-time file synchronization engine for Windows that watc
 Unlike raw `rclone sync`, which operates as a batch command that you must run manually, SelectiveMirror provides:
 
 - **Real-time detection** of file creates, modifications, renames, and deletes via the Windows `ReadDirectoryChangesW` API.
-- **Debouncing** of rapid edits -- when you save a file ten times in five seconds, only one sync occurs.
+- **Fair queue with deduplication** -- when you save a file ten times in five seconds, only one sync occurs. Hot files cycle to the back; other files get their turn first.
 - **Checksum-based deduplication** -- files are hashed with MD5 before upload. If the content has not changed since the last sync, no upload occurs.
 - **Per-file locking** -- concurrent sync workers cannot race on the same file.
 - **Selective filtering** via `.syncignore` files (gitignore syntax) and global exclude patterns.
@@ -43,14 +43,36 @@ The system is composed of four stages:
 
 1. **Watcher** -- Uses `fsnotify` (backed by `ReadDirectoryChangesW` on Windows) to detect file system events recursively within each project directory. Tracks renames as delete + create pairs. Monitors `.syncignore` files for hot-reload.
 
-2. **Debounce** -- Each file event starts or resets a per-file timer (default 5 seconds, configurable per project via `debounce_sec`). When the timer fires without being reset, the file is enqueued for sync. This prevents redundant uploads during rapid-fire saves.
+2. **FairQueue** -- File events are enqueued into a deduplicating priority queue. If a file is already waiting in the queue and changes again, the old entry is removed and a new one is placed at the back -- ensuring hot files don't starve cold ones. Delete events get priority and jump to the front. When `debounce_sec` is configured (for Office-style save patterns), a quiet-window timer fires before enqueuing.
 
-3. **Sync Engine** -- A pool of concurrent workers (default 4, max 16) processes the task queue. Before syncing, each file undergoes:
+3. **Sync Engine** -- A pool of concurrent workers (default 4, max 16) processes the FairQueue. Before syncing, each file undergoes:
    - A quiescence check (200ms stability wait + 3 lock-acquisition attempts).
    - An MD5 hash comparison against the state database. If the hash matches the last successful sync and the modification time is unchanged, the file is skipped entirely.
    - Per-file mutex locking to prevent two workers from operating on the same file.
 
 4. **rclone** -- The actual file transfer is delegated to rclone as a subprocess. Different rclone subcommands are used depending on the operation: `copyto` for single files, `copy` or `sync` for full-project reconciliation, `deletefile` for mirror deletes, `moveto` for quarantine, `touch` for metadata-only updates, and `lsjson` for remote file listing.
+
+## Fair Scheduling
+
+SelectiveMirror uses a FairQueue to prevent any single file or mirror from monopolizing the sync engine. The policy is simple: **every file gets its turn -- hot files cycle to the back, cold files advance to the front.**
+
+Without fairness, a large file that changes every few seconds (e.g., a database or session log) would continuously re-enter the queue at the same priority as every other file, consuming sync workers and API quota indefinitely. Other mirrors would starve.
+
+The FairQueue enforces three rules:
+
+1. **Coalesce.** If a file is already waiting in the queue and changes again, the old entry is removed and a new one is placed at the back. No duplicates, no wasted work.
+
+2. **Move to back.** A hot file that keeps changing keeps getting pushed to the tail. Cold files naturally advance to the front and get synced first.
+
+3. **Priority lane.** Delete events jump to the front of the queue. Remote cleanup should never wait behind a large upload.
+
+This design eliminates fixed debounce timers for the default mode (`debounce_sec: 0`). For directories with Office-style save patterns (temp file, delete, rename), static debounce (`debounce_sec > 0`) is preserved and provides a quiet-window before enqueuing.
+
+### Per-File Cooldown
+
+After a file is successfully synced, it enters a 30-second cooldown. During cooldown, the file stays in the queue but is skipped -- other files dequeue and sync first. When the cooldown expires, the file becomes eligible again. If the file changed during cooldown, it syncs the latest version; if not, the hash check skips it as a no-op.
+
+This prevents a continuously-changing file (e.g., a 21MB session log) from consuming 100% of the API quota on repeated uploads that are immediately obsoleted by the next change. The first sync is always immediate -- cooldown only affects *repeated* syncs of the same file. Delete events and full-project syncs bypass cooldown entirely.
 
 ## How It Differs from Raw rclone
 
@@ -99,6 +121,20 @@ SelectiveMirror uses the following rclone subcommands:
 | `lsjson` | Listing remote files with hashes for `verify` and ghost scan |
 | `lsd` | Checking remote connectivity during `test-mirrors` and `doctor` |
 | `version` | Detecting rclone version and compatibility |
+
+## What SelectiveMirror Inherits from rclone
+
+By delegating all file transfer to rclone, SelectiveMirror inherits a set of production-grade capabilities without reimplementing them:
+
+- **Per-backend rate limiting.** rclone's internal pacer adapts API call frequency to each backend's limits. Google Drive, S3, Dropbox, and OneDrive each have different rate limit profiles; rclone knows them all and throttles accordingly.
+- **Exponential backoff with jitter.** When a backend returns 429 (Too Many Requests) or 503, rclone automatically backs off using a truncated exponential strategy with randomization, preventing request storms.
+- **Chunked uploads.** Large files are split into chunks (configurable via `--drive-chunk-size` for Google Drive). Each chunk is uploaded independently with retry, so a network interruption mid-upload loses only one chunk, not the entire file.
+- **Server-side checksums.** rclone verifies uploads against backend-provided checksums (MD5 for Google Drive, SHA-1 for Dropbox, etc.), catching silent corruption during transfer.
+- **70+ backend drivers.** Each backend has its own authentication, API conventions, and error handling. rclone encapsulates all of this behind a uniform CLI interface.
+- **Automatic retries.** Failed operations are retried (default 3 times with configurable sleep between retries) before being reported as errors.
+- **Connection pooling and HTTP/2.** rclone reuses connections and leverages HTTP/2 multiplexing where supported, reducing handshake overhead for many small files.
+
+SelectiveMirror's architecture ensures these capabilities work correctly by using a single rclone process per sync operation. Running multiple concurrent rclone processes against the same backend would create independent, uncoordinated rate limiters -- each process has its own pacer with no shared state. This is why smirror serializes rclone calls to the same remote and relies on rclone's internal `--transfers` parallelism (default 4 concurrent file transfers within one process) for throughput.
 
 ## Flag Mapping
 
@@ -528,22 +564,22 @@ Status: EXCLUDED
 Matched rule: node_modules/
 ```
 
-## doctor
+## test-mirrors
 
-Run a 12-point self-test diagnostic. Exits with code 0 if all checks pass, 1 if any fail.
+Run a comprehensive self-test diagnostic (aliases: `doctor`, `verify`). Exits with code 0 if all checks pass, 1 if any fail.
 
 ```
-smirror doctor
+smirror test-mirrors
 ```
 
 Example output:
 
 ```
-smirror doctor -- 1.0.0
+smirror test-mirrors
 
   Config file parses                                OK (5ms)
-  All project paths exist                           OK (1ms)
-  No duplicate project names                        OK (0ms)
+  All mirror paths exist                            OK (1ms)
+  No duplicate mirror names                         OK (0ms)
   rclone binary found                               OK (120ms)
     version: 1.68.2
     path:    C:\Program Files\rclone\rclone.exe
@@ -556,7 +592,7 @@ smirror doctor -- 1.0.0
   Log file writable                                 OK (1ms)
   Single-instance lock available                    OK (0ms)
   Filesystem watcher available                      OK (3ms)
-  Write permissions on project dirs                 OK (2ms)
+  Write permissions on mirror dirs                  OK (2ms)
   Filter engines load without error                 OK (1ms)
 
 14 passed, 0 failed
@@ -564,29 +600,18 @@ smirror doctor -- 1.0.0
 
 See Section 9 for details on each check.
 
-## verify
+## project-stats
 
-Compare local files against remote and report drift. Exits with code 0 if no drift, 1 if drift is detected.
-
-```
-smirror verify              # all projects
-smirror verify MyProject    # one project
-```
-
-See Section 8 for details.
-
-## stats
-
-Show file counts, line counts, and size breakdown by language category across all projects.
+Show file counts, line counts, and size breakdown by language category across all mirrors (alias: `stats`).
 
 ```
-smirror stats
+smirror project-stats
 ```
 
 Example output:
 
 ```
-smirror stats
+smirror project-stats
 =============
 
 MyProject  (245 files, 18420 lines, 1.2 MB, 312 ignored)
@@ -756,11 +781,11 @@ Ghost scan results are stored in the state database and displayed by `smirror st
 
 # 8. Verifying Integrity
 
-The `smirror verify` command performs a comprehensive comparison between local and remote state.
+The `smirror test-mirrors` command (with aliases `verify` and `doctor`) performs a comprehensive comparison between local and remote state as part of its diagnostic checks.
 
 ```
-smirror verify              # all projects
-smirror verify MyProject    # one project
+smirror test-mirrors              # all mirrors
+smirror test-mirrors MyMirror     # one mirror
 ```
 
 ## How It Works
@@ -803,9 +828,9 @@ No drift detected.
 
 # 9. Diagnostics
 
-## smirror doctor
+## smirror test-mirrors
 
-The `doctor` command runs 12 diagnostic checks. Each check reports OK or FAIL with timing:
+The `test-mirrors` command (aliases: `doctor`, `verify`) runs diagnostic checks. Each check reports OK or FAIL with timing:
 
 ### Check Details
 
@@ -995,7 +1020,7 @@ mirrors:
 | 8 | Transfer limit reached | rclone's `--max-transfer` limit hit (if configured via extra flags) |
 | 9 | Success, no transfers | All files already up to date |
 | 10 | Duration limit reached | rclone's `--max-duration` limit hit (if configured via extra flags) |
-| -1 | Exec failure | rclone binary not found or could not be started. Run `smirror doctor` |
+| -1 | Exec failure | rclone binary not found or could not be started. Run `smirror test-mirrors` |
 | -2 | Timeout (5 min) | Single operation exceeded 5-minute deadline. May indicate a very large file or network stall |
 
 ## Common Errors and Solutions
@@ -1007,7 +1032,7 @@ Only one instance of smirror can run at a time. The lock file is located in the 
 **Solutions**:
 
 - Check if another smirror process is running: `tasklist | findstr smirror`
-- If the previous process crashed without releasing the lock, the lock file may be stale. Run `smirror doctor` to check, then delete the lock file manually if needed.
+- If the previous process crashed without releasing the lock, the lock file may be stale. Run `smirror test-mirrors` to check, then delete the lock file manually if needed.
 
 ### "rclone not found"
 
@@ -1046,7 +1071,7 @@ The remote is not accessible. This could mean:
 
 ### State database corruption
 
-If `smirror doctor` reports a state DB integrity failure:
+If `smirror test-mirrors` reports a state DB integrity failure:
 
 1. Stop smirror.
 2. Delete or rename the state database file (default: `~/.selectivemirror/state.db`).

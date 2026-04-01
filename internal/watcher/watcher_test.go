@@ -1,6 +1,7 @@
 package watcher
 
 import (
+	"context"
 	"log/slog"
 	"path/filepath"
 	"runtime"
@@ -215,18 +216,18 @@ func TestHealthErrors_CappedAt100(t *testing.T) {
 // TestDebounce_SingleEvent verifies that a single file event fires exactly once
 // after the debounce duration (event-driven, no polling).
 func TestDebounce_SingleEvent(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
 		project:  config.Project{Name: "debounce-test", LocalPath: t.TempDir(), DebounceSec: 1},
-		syncChan: syncChan,
+		queue: queue,
 		pending:  make(map[string]*time.Timer),
 	}
 
 	addDebounceTimer(m, pw, "file.txt")
 
 	select {
-	case task := <-syncChan:
+	case task := <-dequeueTask(queue):
 		if task.RelPath != "file.txt" {
 			t.Errorf("RelPath = %q, want %q", task.RelPath, "file.txt")
 		}
@@ -237,7 +238,7 @@ func TestDebounce_SingleEvent(t *testing.T) {
 	// No duplicate
 	time.Sleep(200 * time.Millisecond)
 	select {
-	case task := <-syncChan:
+	case task := <-dequeueTask(queue):
 		t.Errorf("duplicate task for %q", task.RelPath)
 	default:
 	}
@@ -245,11 +246,11 @@ func TestDebounce_SingleEvent(t *testing.T) {
 
 // TestDebounce_MultipleRapidEvents_SameFile verifies coalescing via timer reset.
 func TestDebounce_MultipleRapidEvents_SameFile(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
 		project:  config.Project{Name: "debounce-coalesce", LocalPath: t.TempDir(), DebounceSec: 1},
-		syncChan: syncChan,
+		queue: queue,
 		pending:  make(map[string]*time.Timer),
 	}
 
@@ -259,7 +260,7 @@ func TestDebounce_MultipleRapidEvents_SameFile(t *testing.T) {
 	}
 
 	select {
-	case task := <-syncChan:
+	case task := <-dequeueTask(queue):
 		if task.RelPath != "rapid.txt" {
 			t.Errorf("RelPath = %q, want %q", task.RelPath, "rapid.txt")
 		}
@@ -269,7 +270,7 @@ func TestDebounce_MultipleRapidEvents_SameFile(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 	select {
-	case <-syncChan:
+	case <-dequeueSignal(queue):
 		t.Error("expected only 1 coalesced task")
 	default:
 	}
@@ -277,11 +278,11 @@ func TestDebounce_MultipleRapidEvents_SameFile(t *testing.T) {
 
 // TestDebounce_DifferentFiles_Independent verifies per-file independence.
 func TestDebounce_DifferentFiles_Independent(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
 		project:  config.Project{Name: "debounce-independent", LocalPath: t.TempDir(), DebounceSec: 1},
-		syncChan: syncChan,
+		queue: queue,
 		pending:  make(map[string]*time.Timer),
 	}
 
@@ -293,7 +294,7 @@ func TestDebounce_DifferentFiles_Independent(t *testing.T) {
 	timeout := time.After(3 * time.Second)
 	for i := 0; i < 3; i++ {
 		select {
-		case task := <-syncChan:
+		case task := <-dequeueTask(queue):
 			seen[task.RelPath] = true
 		case <-timeout:
 			t.Fatalf("only got %d/3 tasks", i)
@@ -308,11 +309,11 @@ func TestDebounce_DifferentFiles_Independent(t *testing.T) {
 
 // TestDebounce_TimerReset verifies that resetting delays emission.
 func TestDebounce_TimerReset(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
 		project:  config.Project{Name: "debounce-reset", LocalPath: t.TempDir(), DebounceSec: 1},
-		syncChan: syncChan,
+		queue: queue,
 		pending:  make(map[string]*time.Timer),
 	}
 
@@ -323,14 +324,14 @@ func TestDebounce_TimerReset(t *testing.T) {
 	// At 800ms from start (300ms after reset), nothing should have fired
 	time.Sleep(300 * time.Millisecond)
 	select {
-	case task := <-syncChan:
+	case task := <-dequeueTask(queue):
 		t.Errorf("timer NOT reset: premature task for %q", task.RelPath)
 	default:
 	}
 
 	// Wait for the reset timer
 	select {
-	case task := <-syncChan:
+	case task := <-dequeueTask(queue):
 		if task.RelPath != "reset.txt" {
 			t.Errorf("RelPath = %q, want %q", task.RelPath, "reset.txt")
 		}
@@ -341,18 +342,18 @@ func TestDebounce_TimerReset(t *testing.T) {
 
 // TestDebounce_PendingMapCleared verifies cleanup after emission.
 func TestDebounce_PendingMapCleared(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
 		project:  config.Project{Name: "debounce-clear", LocalPath: t.TempDir(), DebounceSec: 1},
-		syncChan: syncChan,
+		queue: queue,
 		pending:  make(map[string]*time.Timer),
 	}
 
 	addDebounceTimer(m, pw, "once.txt")
 
 	select {
-	case <-syncChan:
+	case <-dequeueSignal(queue):
 	case <-time.After(3 * time.Second):
 		t.Fatal("timer never fired")
 	}
@@ -377,11 +378,7 @@ func addDebounceTimer(m *Manager, pw *projectWatcher, relPath string) {
 			pw.mu.Lock()
 			delete(pw.pending, rp)
 			pw.mu.Unlock()
-			select {
-			case pw.syncChan <- msync.Task{Project: pw.project, RelPath: rp}:
-			default:
-				m.log.Warn("sync channel full", "path", rp)
-			}
+			pw.queue.Enqueue(msync.Task{Project: pw.project, RelPath: rp})
 		})
 	}
 	pw.mu.Unlock()
@@ -394,19 +391,18 @@ func addDebounceTimer(m *Manager, pw *projectWatcher, relPath string) {
 // TestDynamicDebounce_FirstEventFiresImmediately verifies that in dynamic mode,
 // the very first event for a file fires immediately without any delay.
 func TestDynamicDebounce_FirstEventFiresImmediately(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
 		project:    config.Project{Name: "dyn-immediate", LocalPath: t.TempDir(), DebounceSec: 0},
-		syncChan:   syncChan,
+		queue:   queue,
 		pending:    make(map[string]*time.Timer),
-		lastSynced: make(map[string]time.Time),
 	}
 
 	simulateDynamicEvent(m, pw, "new_file.txt")
 
 	select {
-	case task := <-syncChan:
+	case task := <-dequeueTask(queue):
 		if task.RelPath != "new_file.txt" {
 			t.Errorf("RelPath = %q, want %q", task.RelPath, "new_file.txt")
 		}
@@ -416,73 +412,59 @@ func TestDynamicDebounce_FirstEventFiresImmediately(t *testing.T) {
 }
 
 // TestDynamicDebounce_RapidEventsDebounce verifies that rapid events within
-// the detection window activate debouncing instead of firing immediately.
-func TestDynamicDebounce_RapidEventsDebounce(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+// With queue-based fairness, rapid events for the same file coalesce via dedup.
+// The second enqueue moves the file to the back of the queue (no timer delay).
+func TestDynamicDebounce_RapidEventsCoalesce(t *testing.T) {
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
-		project:    config.Project{Name: "dyn-burst", LocalPath: t.TempDir(), DebounceSec: 0},
-		syncChan:   syncChan,
-		pending:    make(map[string]*time.Timer),
-		lastSynced: make(map[string]time.Time),
+		project: config.Project{Name: "dyn-burst", LocalPath: t.TempDir(), DebounceSec: 0},
+		queue:   queue,
+		pending: make(map[string]*time.Timer),
 	}
 
-	// First event fires immediately
+	// Two rapid events for the same file
 	simulateDynamicEvent(m, pw, "burst.txt")
-	<-syncChan // drain
-
-	// Second event within 500ms should NOT fire immediately — it should debounce
-	time.Sleep(50 * time.Millisecond)
 	simulateDynamicEvent(m, pw, "burst.txt")
 
-	// Verify nothing fires immediately
-	time.Sleep(100 * time.Millisecond)
-	select {
-	case <-syncChan:
-		t.Error("rapid second event should debounce, not fire immediately")
-	default:
-		// expected — debounce timer is active
+	// FairQueue dedup means only 1 entry (second moved to back = same position since only entry)
+	if queue.Len() != 1 {
+		t.Errorf("expected 1 entry after dedup, got %d", queue.Len())
 	}
 
-	// Wait for the debounce timer to fire (500ms)
-	select {
-	case task := <-syncChan:
-		if task.RelPath != "burst.txt" {
-			t.Errorf("RelPath = %q, want %q", task.RelPath, "burst.txt")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("debounce timer did not fire")
+	task, ok := queue.Dequeue(context.Background())
+	if !ok {
+		t.Fatal("dequeue failed")
+	}
+	if task.RelPath != "burst.txt" {
+		t.Errorf("RelPath = %q, want burst.txt", task.RelPath)
 	}
 }
 
 // TestDynamicDebounce_IsolatedEventAfterCooldown verifies that an event arriving
 // after the detection window has passed fires immediately (back to instant mode).
 func TestDynamicDebounce_IsolatedEventAfterCooldown(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
-		project:    config.Project{Name: "dyn-cooldown", LocalPath: t.TempDir(), DebounceSec: 0},
-		syncChan:   syncChan,
-		pending:    make(map[string]*time.Timer),
-		lastSynced: make(map[string]time.Time),
+		project: config.Project{Name: "dyn-cooldown", LocalPath: t.TempDir(), DebounceSec: 0},
+		queue:   queue,
+		pending: make(map[string]*time.Timer),
 	}
 
-	// First event fires immediately
+	// First event enqueues immediately
 	simulateDynamicEvent(m, pw, "cool.txt")
-	<-syncChan
+	drainOne(queue)
 
-	// Wait past the detection window
-	time.Sleep(dynamicDebounceDetect + 100*time.Millisecond)
-
-	// Next event should fire immediately (not debounced)
+	// Second event also enqueues immediately (no cooldown concept with FairQueue)
 	start := time.Now()
 	simulateDynamicEvent(m, pw, "cool.txt")
 
 	select {
-	case task := <-syncChan:
+	case task := <-dequeueTask(queue):
 		elapsed := time.Since(start)
 		if elapsed > 100*time.Millisecond {
-			t.Errorf("event should fire immediately after cooldown, took %v", elapsed)
+			t.Errorf("event should enqueue immediately, took %v", elapsed)
 		}
 		if task.RelPath != "cool.txt" {
 			t.Errorf("RelPath = %q, want %q", task.RelPath, "cool.txt")
@@ -495,50 +477,45 @@ func TestDynamicDebounce_IsolatedEventAfterCooldown(t *testing.T) {
 // TestDynamicDebounce_RapidBurstCoalesces verifies that a burst of N events
 // for the same file results in exactly 2 syncs: 1 immediate + 1 debounced.
 func TestDynamicDebounce_RapidBurstCoalesces(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
 		project:    config.Project{Name: "dyn-coalesce", LocalPath: t.TempDir(), DebounceSec: 0},
-		syncChan:   syncChan,
+		queue:   queue,
 		pending:    make(map[string]*time.Timer),
-		lastSynced: make(map[string]time.Time),
 	}
 
-	// Fire 10 rapid events
+	// Fire 10 rapid events for the same file.
+	// With FairQueue dedup, all 10 coalesce into 1 entry (move-to-back on each re-enqueue).
 	for i := 0; i < 10; i++ {
 		simulateDynamicEvent(m, pw, "rapid.txt")
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Should get exactly 2: first fires immediately, rest coalesce into 1 debounced
-	count := 0
-	timeout := time.After(3 * time.Second)
-	for {
-		select {
-		case <-syncChan:
-			count++
-			if count > 2 {
-				t.Fatalf("expected at most 2 syncs, got %d+", count)
-			}
-		case <-timeout:
-			if count != 2 {
-				t.Errorf("expected exactly 2 syncs (1 immediate + 1 debounced), got %d", count)
-			}
-			return
-		}
+	// Should get exactly 1: all events coalesced by FairQueue dedup
+	task, ok := queue.Dequeue(context.Background())
+	if !ok {
+		t.Fatal("expected 1 task from coalesced burst")
+	}
+	if task.RelPath != "rapid.txt" {
+		t.Errorf("RelPath = %q, want rapid.txt", task.RelPath)
+	}
+
+	// Verify queue is empty (no second task)
+	if queue.Len() != 0 {
+		t.Errorf("expected empty queue after coalesced burst, got Len=%d", queue.Len())
 	}
 }
 
 // TestDynamicDebounce_DifferentFilesIndependent verifies that dynamic debounce
 // tracks files independently: event for file A doesn't affect file B's timing.
 func TestDynamicDebounce_DifferentFilesIndependent(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	m := &Manager{log: slog.Default()}
 	pw := &projectWatcher{
 		project:    config.Project{Name: "dyn-independent", LocalPath: t.TempDir(), DebounceSec: 0},
-		syncChan:   syncChan,
+		queue:   queue,
 		pending:    make(map[string]*time.Timer),
-		lastSynced: make(map[string]time.Time),
 	}
 
 	// Three different files — all should fire immediately (first event for each)
@@ -550,7 +527,7 @@ func TestDynamicDebounce_DifferentFilesIndependent(t *testing.T) {
 	timeout := time.After(500 * time.Millisecond)
 	for i := 0; i < 3; i++ {
 		select {
-		case task := <-syncChan:
+		case task := <-dequeueTask(queue):
 			seen[task.RelPath] = true
 		case <-timeout:
 			t.Fatalf("only got %d/3 immediate tasks", i)
@@ -563,35 +540,47 @@ func TestDynamicDebounce_DifferentFilesIndependent(t *testing.T) {
 	}
 }
 
-// simulateDynamicEvent simulates the dynamic debounce logic from handleEvent.
+// simulateDynamicEvent simulates the queue-based fairness logic from handleEvent.
+// With FairQueue, every event is simply enqueued. The queue handles dedup/fairness.
 func simulateDynamicEvent(m *Manager, pw *projectWatcher, relPath string) {
-	pw.mu.Lock()
-	if t, ok := pw.pending[relPath]; ok {
-		t.Reset(dynamicDebounceDuration)
-	} else if last, ok := pw.lastSynced[relPath]; ok && time.Since(last) < dynamicDebounceDetect {
-		rp := relPath
-		pw.pending[relPath] = time.AfterFunc(dynamicDebounceDuration, func() {
-			pw.mu.Lock()
-			delete(pw.pending, rp)
-			pw.lastSynced[rp] = time.Now()
-			pw.mu.Unlock()
-			select {
-			case pw.syncChan <- msync.Task{Project: pw.project, RelPath: rp}:
-			default:
-				m.log.Warn("sync channel full", "path", rp)
-			}
-		})
-	} else {
-		pw.lastSynced[relPath] = time.Now()
-		pw.mu.Unlock()
-		select {
-		case pw.syncChan <- msync.Task{Project: pw.project, RelPath: relPath}:
-		default:
-			m.log.Warn("sync channel full", "path", relPath)
+	pw.queue.Enqueue(msync.Task{Project: pw.project, RelPath: relPath})
+}
+
+// --- FairQueue test helpers ---
+
+// dequeueTask returns a channel that delivers one task from the FairQueue.
+// Used in select statements in tests.
+func dequeueTask(q *msync.FairQueue) <-chan msync.Task {
+	ch := make(chan msync.Task, 1)
+	go func() {
+		task, ok := q.Dequeue(context.Background())
+		if ok {
+			ch <- task
 		}
-		return
-	}
-	pw.mu.Unlock()
+		close(ch)
+	}()
+	return ch
+}
+
+// dequeueSignal returns a channel that signals when any task is dequeued.
+// Used in select statements where we only care about timing, not the task.
+func dequeueSignal(q *msync.FairQueue) <-chan struct{} {
+	ch := make(chan struct{}, 1)
+	go func() {
+		_, ok := q.Dequeue(context.Background())
+		if ok {
+			ch <- struct{}{}
+		}
+		close(ch)
+	}()
+	return ch
+}
+
+// drainOne dequeues and discards one task from the queue.
+func drainOne(q *msync.FairQueue) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	q.Dequeue(ctx)
 }
 
 // --- helpers ---
@@ -695,10 +684,10 @@ func TestLastEventAge_NoEvents(t *testing.T) {
 // --- Burst delete detection tests (SM-050) ---
 
 func TestTrackDeleteBurst_BelowThreshold_NoReconciliation(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	pw := &projectWatcher{
 		project:  makeProject(t.TempDir(), "test"),
-		syncChan: syncChan,
+		queue: queue,
 		pending:  make(map[string]*time.Timer),
 	}
 	m := &Manager{log: slog.Default()}
@@ -712,7 +701,7 @@ func TestTrackDeleteBurst_BelowThreshold_NoReconciliation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	select {
-	case <-syncChan:
+	case <-dequeueSignal(queue):
 		t.Error("reconciliation should not trigger below threshold")
 	default:
 		// expected
@@ -720,10 +709,10 @@ func TestTrackDeleteBurst_BelowThreshold_NoReconciliation(t *testing.T) {
 }
 
 func TestTrackDeleteBurst_AtThreshold_TriggersReconciliation(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	pw := &projectWatcher{
 		project:  makeProject(t.TempDir(), "test"),
-		syncChan: syncChan,
+		queue: queue,
 		pending:  make(map[string]*time.Timer),
 	}
 	m := &Manager{log: slog.Default()}
@@ -752,10 +741,10 @@ func TestTrackDeleteBurst_AtThreshold_TriggersReconciliation(t *testing.T) {
 }
 
 func TestTrackDeleteBurst_WindowExpiry_ResetsCounter(t *testing.T) {
-	syncChan := make(chan msync.Task, 100)
+	queue := msync.NewFairQueue(0, 0)
 	pw := &projectWatcher{
 		project:  makeProject(t.TempDir(), "test"),
-		syncChan: syncChan,
+		queue: queue,
 		pending:  make(map[string]*time.Timer),
 	}
 	m := &Manager{log: slog.Default()}

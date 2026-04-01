@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	gosync "sync"
 	"syscall"
 	"time"
 
@@ -35,9 +36,18 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.3.1-dev"
+var version = "0.3.8-dev"
 
 func main() {
+	// Emergency: write to a fixed path so we can diagnose service crashes.
+	// Must happen before anything else — services have no console.
+	earlyLog, _ := os.OpenFile(`C:\smirror-early.log`, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if earlyLog != nil {
+		fmt.Fprintf(earlyLog, "%s main() entered pid=%d isSvc=%v args=%v\n",
+			time.Now().Format(time.RFC3339), os.Getpid(), service.IsWindowsService(), os.Args)
+		earlyLog.Close()
+	}
+
 	// If running as a Windows Service, the SCM invokes us with no args.
 	// Detect this and enter service mode immediately.
 	if service.IsWindowsService() {
@@ -323,7 +333,7 @@ func cmdStart(configPath string, args []string) {
 	syncEngine := msync.NewEngine(cfg, st, filters, m)
 
 	// Create watcher manager (with delete policy)
-	watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.TaskChan, cfg.DeletePolicy())
+	watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.Queue, cfg.DeletePolicy())
 	if err != nil {
 		slog.Error("watcher creation failed", "error", err)
 		os.Exit(1)
@@ -340,6 +350,9 @@ func cmdStart(configPath string, args []string) {
 		slog.Info("received signal, shutting down", "signal", sig)
 		cancel()
 	}()
+
+	// Detect and migrate remote path changes before reconciliation
+	detectRemoteChanges(ctx, cfg, st, syncEngine)
 
 	// Run startup reconciliation
 	slog.Info("running startup reconciliation")
@@ -385,25 +398,48 @@ func cmdSyncNow(configPath string, args []string) {
 
 	ctx := context.Background()
 
+	// Detect and migrate remote path changes before syncing
+	detectRemoteChanges(ctx, cfg, st, syncEngine)
+
+	// Resolve target projects once (used for both sync and ghost cleanup)
+	projects := cfg.Projects
 	if len(args) > 0 {
 		proj := cfg.FindProject(args[0])
 		if proj == nil {
 			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
 			os.Exit(1)
 		}
-		syncEngine.TaskChan <- msync.Task{Project: *proj, RelPath: ""}
-	} else {
-		for _, proj := range cfg.Projects {
-			syncEngine.TaskChan <- msync.Task{Project: proj, RelPath: ""}
-		}
+		projects = []config.Project{*proj}
+	}
+
+	for _, proj := range projects {
+		syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
 	}
 
 	// Process all queued tasks synchronously: start workers, wait for them
 	// to finish processing everything. We close the channel after queueing
 	// so workers exit once all tasks are drained.
-	close(syncEngine.TaskChan)
+	syncEngine.Queue.Close()
 	syncEngine.Run(ctx) // blocks until all workers complete
-	fmt.Println("Sync complete")
+
+	// Clean up ghost files (LEAKs + ORPHANs) on remote
+	totalCleaned := 0
+	for _, proj := range projects {
+		cleaned, err := syncEngine.CleanupGhosts(ctx, proj)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Ghost cleanup error for %s: %v\n", proj.Name, err)
+			continue
+		}
+		if cleaned > 0 {
+			fmt.Printf("Cleaned %d ghost file(s) from %s\n", cleaned, proj.Name)
+			totalCleaned += cleaned
+		}
+	}
+	if totalCleaned > 0 {
+		fmt.Printf("Sync complete (%d ghost files cleaned)\n", totalCleaned)
+	} else {
+		fmt.Println("Sync complete")
+	}
 }
 
 func cmdDryRun(configPath string, args []string) {
@@ -437,6 +473,15 @@ func cmdDryRun(configPath string, args []string) {
 			fmt.Fprintf(os.Stderr, "Dry run error for %s: %v\n", proj.Name, err)
 		}
 		fmt.Println()
+	}
+
+	// Show what ghost files would be cleaned
+	fmt.Println("=== Ghost cleanup preview ===")
+	for _, proj := range projects {
+		fmt.Printf("\n%s:\n", proj.Name)
+		if _, err := syncEngine.DryRunCleanup(ctx, proj); err != nil {
+			fmt.Fprintf(os.Stderr, "Ghost scan error for %s: %v\n", proj.Name, err)
+		}
 	}
 }
 
@@ -780,7 +825,7 @@ func cmdTestMirrors(configPath string, args []string) {
 
 	// 10. Watcher can be created
 	check("Filesystem watcher available", func() error {
-		_, err := watcher.NewManager(cfg.Projects[:1], buildFilters(cfg), make(chan msync.Task, 1), cfg.DeletePolicy())
+		_, err := watcher.NewManager(cfg.Projects[:1], buildFilters(cfg), msync.NewFairQueue(100, 0), cfg.DeletePolicy())
 		return err
 	})
 
@@ -993,6 +1038,7 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 
 	// Walk local tree
 	localFiles := make(map[string]bool)
+	leaksCounted := make(map[string]bool) // LEAKs found during local walk, to avoid double-counting in remote iteration
 	drift := 0
 
 	filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
@@ -1021,6 +1067,7 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 			if _, onRemote := remoteMap[relPath]; onRemote {
 				fmt.Printf("  LEAK: %s (excluded locally but exists on remote)\n", relPath)
 				drift++
+				leaksCounted[relPath] = true
 			}
 			return nil
 		}
@@ -1046,10 +1093,16 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 		return nil
 	})
 
-	// Check for unexpected remote files
+	// Check for unexpected remote files (ORPHANs + LEAKs not already counted during local walk).
+	// LEAKs from excluded files that exist locally are caught during the local walk above.
+	// This loop catches ORPHANs (no local file at all) and LEAKs for files that don't exist
+	// locally either (e.g., file excluded AND deleted locally).
 	for remotePath := range remoteMap {
 		if strings.HasPrefix(remotePath, ".quarantine/") {
 			continue // skip quarantine directory
+		}
+		if leaksCounted[remotePath] {
+			continue // already counted during local walk
 		}
 		if !localFiles[remotePath] {
 			// Check if it's excluded
@@ -1092,6 +1145,7 @@ func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engi
 	}
 
 	localFiles := make(map[string]bool)
+	leaksCounted := make(map[string]bool) // avoid double-counting LEAKs (SM-053)
 	drift := 0
 
 	filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
@@ -1116,6 +1170,7 @@ func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engi
 			if _, onRemote := remoteMap[relPath]; onRemote {
 				slog.Warn("auto-verify: filter leak", "mirror", proj.Name, "path", relPath)
 				drift++
+				leaksCounted[relPath] = true
 			}
 			return nil
 		}
@@ -1144,8 +1199,15 @@ func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engi
 		if strings.HasPrefix(remotePath, ".quarantine/") {
 			continue
 		}
+		if leaksCounted[remotePath] {
+			continue // already counted during local walk (SM-053)
+		}
 		if !localFiles[remotePath] {
-			slog.Debug("auto-verify: orphan remote", "mirror", proj.Name, "path", remotePath)
+			if fe != nil && fe.IsExcluded(remotePath) {
+				slog.Warn("auto-verify: filter leak", "mirror", proj.Name, "path", remotePath)
+			} else {
+				slog.Debug("auto-verify: orphan remote", "mirror", proj.Name, "path", remotePath)
+			}
 			drift++
 		}
 	}
@@ -1514,20 +1576,42 @@ func hashFile(path string) (string, int64, error) {
 
 // reconcileAll uses batch rclone copy per project (fast) instead of per-file sync,
 // then scans for ghost files on the remote that don't exist locally.
+// detectRemoteChanges checks if any mirror's remote path changed since last run.
+// If so, performs a server-side migration (rclone moveto) instead of re-uploading.
+func detectRemoteChanges(ctx context.Context, cfg *config.Global, st *state.Store, syncEngine *msync.Engine) {
+	for _, proj := range cfg.Projects {
+		key := "remote_" + proj.Name
+		stored, _ := st.GetMeta(key)
+		if stored != "" && stored != proj.Remote {
+			slog.Info("remote path changed, migrating",
+				"mirror", proj.Name,
+				"old", stored, "new", proj.Remote)
+			if err := syncEngine.MigrateRemote(ctx, stored, proj.Remote); err != nil {
+				slog.Warn("remote migration failed, will re-sync",
+					"mirror", proj.Name, "error", err)
+			} else {
+				slog.Info("remote migration complete", "mirror", proj.Name)
+			}
+		}
+		st.SetMeta(key, proj.Remote)
+	}
+}
+
 func reconcileAll(ctx context.Context, cfg *config.Global, st *state.Store, filters map[string]*filter.Engine, syncEngine *msync.Engine) {
+	var wg gosync.WaitGroup
 	for _, proj := range cfg.Projects {
 		slog.Info("reconciling", "mirror", proj.Name)
+		wg.Add(1)
 		// Use full-project sync — single rclone invocation with filters.
 		// Much faster than individual file syncs (1 rclone call vs N).
-		syncEngine.TaskChan <- msync.Task{Project: proj, RelPath: ""}
+		syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: "", Done: wg.Done})
 	}
 
 	// Ghost scan: detect orphaned files on remote that no longer exist locally.
-	// Runs after reconciliation so that rclone copy has finished uploading.
+	// Waits for all reconciliation tasks to complete before scanning (SM-054).
 	// This catches rename orphans, stale files from previous bugs, etc.
 	go func() {
-		// Wait for reconciliation to finish (rclone copy tasks are queued above)
-		time.Sleep(30 * time.Second)
+		wg.Wait()
 		scanForGhosts(ctx, cfg, st, filters)
 	}()
 }
@@ -1647,11 +1731,10 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 			if syncEngine != nil {
 				slog.Info("periodic reconciliation")
 				for _, proj := range cfg.Projects {
-					select {
-					case syncEngine.TaskChan <- msync.Task{Project: proj, RelPath: ""}:
-					case <-ctx.Done():
+					if ctx.Err() != nil {
 						return
 					}
+					syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
 				}
 			}
 
@@ -1739,6 +1822,23 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 // serviceMain runs smirror as a Windows Service.
 // Called from main() when IsWindowsService() returns true.
 func serviceMain() {
+	// Emergency diagnostic log — writes to a guaranteed location before any
+	// other initialization. Services running as SYSTEM have no console/stderr;
+	// if we crash before the normal log opens, this is the only evidence.
+	crashLog, _ := os.OpenFile(`C:\smirror-service-crash.log`,
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	if crashLog != nil {
+		fmt.Fprintf(crashLog, "%s serviceMain entered pid=%d args=%v\n",
+			time.Now().Format(time.RFC3339), os.Getpid(), os.Args)
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(crashLog, "%s PANIC: %v\n", time.Now().Format(time.RFC3339), r)
+			}
+			fmt.Fprintf(crashLog, "%s serviceMain exiting\n", time.Now().Format(time.RFC3339))
+			crashLog.Close()
+		}()
+	}
+
 	// When the SCM starts the service, args come from the service config.
 	// Parse --config from os.Args (the SCM passes the configured arguments).
 	configPath := config.DefaultConfigPath()
@@ -1757,11 +1857,24 @@ func serviceMain() {
 
 	startFunc := func() {
 		// Re-use cmdStart logic but with context from service handler
-		cfg := loadConfig(configPath)
+		if crashLog != nil {
+			fmt.Fprintf(crashLog, "%s startFunc: loading config %s\n", time.Now().Format(time.RFC3339), configPath)
+		}
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			if crashLog != nil {
+				fmt.Fprintf(crashLog, "%s startFunc: config load FAILED: %v\n", time.Now().Format(time.RFC3339), err)
+			}
+			slog.Error("config load failed", "error", err, "path", configPath)
+			return
+		}
 
 		if errs := preflight(cfg); len(errs) > 0 {
 			for _, e := range errs {
 				slog.Error("pre-flight failed", "error", e)
+				if crashLog != nil {
+					fmt.Fprintf(crashLog, "%s startFunc: preflight failed: %v\n", time.Now().Format(time.RFC3339), e)
+				}
 			}
 			return
 		}
@@ -1769,12 +1882,18 @@ func serviceMain() {
 		lk, err := lock.Acquire(dataDir(cfg))
 		if err != nil {
 			slog.Error("lock acquire failed", "error", err)
+			if crashLog != nil {
+				fmt.Fprintf(crashLog, "%s startFunc: lock failed: %v\n", time.Now().Format(time.RFC3339), err)
+			}
 			return
 		}
 		defer lk.Release()
 
 		rw, err := logging.Setup(cfg.LogLevel, cfg.LogFile, false)
 		if err != nil {
+			if crashLog != nil {
+				fmt.Fprintf(crashLog, "%s startFunc: logging setup failed: %v\n", time.Now().Format(time.RFC3339), err)
+			}
 			return
 		}
 		if rw != nil {
@@ -1810,7 +1929,7 @@ func serviceMain() {
 		notifier := notify.New(cfg.IsNotifyEnabled())
 		syncEngine := msync.NewEngine(cfg, st, filters, m)
 
-		watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.TaskChan, cfg.DeletePolicy())
+		watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.Queue, cfg.DeletePolicy())
 		if err != nil {
 			slog.Error("watcher creation failed", "error", err)
 			return
@@ -1820,6 +1939,7 @@ func serviceMain() {
 		ctx, cancel = context.WithCancel(context.Background())
 		defer cancel()
 
+		detectRemoteChanges(ctx, cfg, st, syncEngine)
 		reconcileAll(ctx, cfg, st, filters, syncEngine)
 		m.RecordScanComplete()
 

@@ -3,7 +3,38 @@
 All notable changes to SelectiveMirror are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [semver](https://semver.org/).
 
-## [0.3.0] — 2026-03-30
+## [0.4.0] — Unreleased
+
+### Added
+
+- **Ghost cleanup**: `sync-now` automatically removes LEAKs (excluded files still on remote) and ORPHANs (remote-only files with no local counterpart) after syncing (SM-052)
+- **Ghost preview**: `dry-run` shows what ghost files would be cleaned without executing
+- **Task completion callback**: `Done func()` on sync tasks enables WaitGroup-based coordination
+- **ListRemoteFunc**: injectable remote lister for testability (same pattern as RcloneRunner)
+- 28 new unit tests for ghost detection, cleanup, dry-run preview, and task completion (259 total)
+- Test-driven bug discovery policy added to BugTracker
+
+### Changed
+
+- `reconcileAll` uses WaitGroup to wait for actual sync completion before ghost scan, replacing hardcoded 30-second sleep (SM-054)
+- `cmdSyncNow` resolves target projects once and reuses for both sync and ghost cleanup
+- `.goreleaser.yaml`: CGO_ENABLED=0 (matches pure-Go SQLite — no CGo needed)
+- Documentation: all `smirror doctor`/`verify`/`stats` references updated to primary names `test-mirrors`/`project-stats`
+- Installation manual: version references updated, Windows Service section rewritten with actual instructions (was "planned for v2.0")
+- SECURITY.md: version support table updated
+
+### Fixed
+
+- **Verify double-counted LEAKs** (SM-053): excluded files were counted once during local walk and again during remote iteration, inflating drift totals. Fixed with `leaksCounted` deduplication set in both `verifyProject` and `verifyProjectQuiet`
+- **Auto-verify missing LEAK distinction** (SM-055): `verifyProjectQuiet` logged all remote-only files as "orphan remote" without checking filter exclusion. Now correctly distinguishes LEAKs from ORPHANs
+- **Ghost scan race condition** (SM-054): `scanForGhosts` in service startup could run before reconciliation finished. Replaced `time.Sleep(30s)` with `sync.WaitGroup` coordination
+- **Duplicate FindProject call** in `cmdSyncNow`: hoisted project resolution to avoid redundant lookup and potential nil dereference
+
+---
+
+## [0.3.0] — 2026-03-30 (retracted)
+
+Retracted due to service crash-loop caused by corrupted config and os.Exit in service code path. All changes included in 0.4.0.
 
 ### Added
 
@@ -14,7 +45,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 - README.txt merged into README.md (single source of truth); all 6 references updated
 - CI workflows use Go 1.26.1 (matches go.mod)
-- MSI installer version aligned (Variables.wxi + build-msi.ps1 → 0.3.0)
+- MSI installer version aligned (Variables.wxi + build-msi.ps1)
 - Command aliases documented in README.md and help output
 
 ### Fixed
