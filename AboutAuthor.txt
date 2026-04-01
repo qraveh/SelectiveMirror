@@ -1,16 +1,19 @@
 This is the only human-written file in the entire SelectiveMirror project so far.
 
-I am Raveh Neeman, a HW/SW engineer and a quantum computing researcher. 
+I am Raveh Neeman, a HW/SW architect and a quantum computing researcher. 
 Since there is only one Raveh Neeman in the digital world so far, you can easily find more about me if you wish.
 
 In March 2026, I was building an AI orchestration system designed to make different AI systems — 
-Claude, ChatGPT, Gemini, Copilot, and virtually any others — work together on the same project.
-
-My AI orchestration system aims to be consistently more clever, more capable, and more productive than any of these AIs can be on their own.
+Claude, ChatGPT, Gemini, Copilot, and virtually all other local and remote AI systems one need for the modern development — work together on the same project.
 
 A central piece of this orchestration system is shared storage, to which all non-temporary, non-garbage files of a project under development — 
 and, more generally, all relevant files worth being accounted for by an AI — 
-are automatically mirrored when they are created, closed after an update with debounce, renamed, moved, metadata-updated, or deleted.
+are automatically mirrored when they are created, closed after an update, renamed, moved, metadata-updated, or deleted.
+On-the-fly mirroring is messy. An editor saves a huge file ten times in five seconds. A build tool creates hundreds of temporary artifacts. 
+A large log file grows continuously. Office applications write to temp files, delete the original, then rename. A user reorganizes directories mid-session. Cloud APIs impose rate limits that vary by provider, account tier, and time of day.
 
-This is how SelectiveMirror, a standalone Windows service, was born. I am pleased to make it a free and open-source public utility.
-A chosen transport layer for the mirroring is an external utility rclone which supports over 70 file systems and cloud storage backends.
+This is how SelectiveMirror, a standalone Windows service, was born.
+It handles all of this with a fair scheduling queue that deduplicates repeated events, prioritizes deletions, and enforces a per-file cooldown after each successful sync — so no single hot file can monopolize or deplete the connection. It filters out noise through .syncignore files (using the familiar .gitignore syntax), detects and cleans up stale remote files automatically, and performs server-side renames when a mirror's remote path changes — without re-uploading a single byte.
+
+I am pleased to make it a free and open-source public utility.
+The chosen transport layer for the mirroring is an external utility rclone, which supports over 70 file systems and cloud storage backends.
