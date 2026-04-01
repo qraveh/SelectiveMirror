@@ -331,15 +331,15 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		if e.metrics != nil {
 			e.metrics.RecordSync(proj.Name, size, elapsed.Milliseconds())
 		}
-		// Set cooldown: prevent re-syncing the same file too soon.
-		// Hot files that change continuously would otherwise consume all API quota.
 		e.Queue.SetCooldown(proj.Name + ":" + relPath)
+		e.Queue.RecordSuccess(proj.Name)
 	} else {
 		e.log.Warn("sync failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
 		e.state.LogAction(proj.Name, relPath, "error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
 		if e.metrics != nil {
 			e.metrics.RecordError(proj.Name, fmt.Sprintf("rclone exit %d for %s", exitCode, relPath))
 		}
+		e.Queue.RecordFailure(proj.Name)
 	}
 }
 
@@ -436,12 +436,14 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 		e.log.Info("full sync complete", "project", proj.Name, "ms", elapsed.Milliseconds())
 		e.state.LogAction(proj.Name, "", "full_sync", fmt.Sprintf("ok, %dms", elapsed.Milliseconds()), elapsed.Milliseconds())
 		e.state.SetMeta("last_full_sync_"+proj.Name, time.Now().UTC().Format(time.RFC3339))
+		e.Queue.RecordSuccess(proj.Name)
 	} else {
 		e.log.Warn("full sync failed", "project", proj.Name, "exit", exitCode, "ms", elapsed.Milliseconds())
 		e.state.LogAction(proj.Name, "", "full_sync_error", fmt.Sprintf("rclone exit %d, %dms", exitCode, elapsed.Milliseconds()), elapsed.Milliseconds())
 		if e.metrics != nil {
 			e.metrics.RecordError(proj.Name, fmt.Sprintf("full sync rclone exit %d", exitCode))
 		}
+		e.Queue.RecordFailure(proj.Name)
 	}
 }
 

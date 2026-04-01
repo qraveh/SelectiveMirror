@@ -581,3 +581,181 @@ func TestFairQueue_Cooldown_ZeroDuration_Disabled(t *testing.T) {
 		t.Errorf("should be instant with cooldown=0, took %v", elapsed)
 	}
 }
+
+// --- Circuit breaker tests ---
+
+// TestFairQueue_CircuitBreaker_TripsAfterThreshold verifies that after 3
+// consecutive failures for a mirror, its tasks are skipped during dequeue.
+func TestFairQueue_CircuitBreaker_TripsAfterThreshold(t *testing.T) {
+	q := NewFairQueue(0, 0)
+
+	// Record 3 failures (threshold)
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+
+	// Enqueue a task for the failed mirror
+	q.Enqueue(testTask("proj-A", "file.txt"))
+	// Enqueue a task for a healthy mirror
+	q.Enqueue(testTask("proj-B", "file.txt"))
+
+	// Should skip proj-A and return proj-B
+	task, ok := q.Dequeue(context.Background())
+	if !ok {
+		t.Fatal("dequeue failed")
+	}
+	if task.Project.Name != "proj-B" {
+		t.Errorf("got project %q, want proj-B (proj-A should be in backoff)", task.Project.Name)
+	}
+}
+
+// TestFairQueue_CircuitBreaker_SuccessResets verifies that a success resets
+// the failure counter and clears backoff.
+func TestFairQueue_CircuitBreaker_SuccessResets(t *testing.T) {
+	q := NewFairQueue(0, 0)
+
+	// Trip the breaker
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+
+	// Success resets
+	q.RecordSuccess("proj-A")
+
+	q.Enqueue(testTask("proj-A", "file.txt"))
+
+	start := time.Now()
+	task, ok := q.Dequeue(context.Background())
+	elapsed := time.Since(start)
+
+	if !ok || task.Project.Name != "proj-A" {
+		t.Fatal("dequeue should succeed after reset")
+	}
+	if elapsed > 50*time.Millisecond {
+		t.Errorf("should be instant after reset, took %v", elapsed)
+	}
+}
+
+// TestFairQueue_CircuitBreaker_BelowThreshold_NoBackoff verifies that
+// fewer than 3 failures don't trigger backoff.
+func TestFairQueue_CircuitBreaker_BelowThreshold_NoBackoff(t *testing.T) {
+	q := NewFairQueue(0, 0)
+
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A") // only 2
+
+	q.Enqueue(testTask("proj-A", "file.txt"))
+
+	start := time.Now()
+	task, ok := q.Dequeue(context.Background())
+	elapsed := time.Since(start)
+
+	if !ok || task.Project.Name != "proj-A" {
+		t.Fatal("dequeue should succeed below threshold")
+	}
+	if elapsed > 50*time.Millisecond {
+		t.Errorf("should be instant below threshold, took %v", elapsed)
+	}
+}
+
+// TestFairQueue_CircuitBreaker_DeletesBypassBackoff verifies that delete events
+// for a mirror in backoff still execute immediately.
+func TestFairQueue_CircuitBreaker_DeletesBypassBackoff(t *testing.T) {
+	q := NewFairQueue(0, 0)
+
+	// Trip the breaker
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+
+	// Enqueue a delete for the failed mirror
+	q.EnqueuePriority(testDeleteTask("proj-A", "urgent.txt"))
+
+	start := time.Now()
+	task, ok := q.Dequeue(context.Background())
+	elapsed := time.Since(start)
+
+	if !ok || task.Type != TaskDelete {
+		t.Fatal("expected delete task")
+	}
+	if elapsed > 50*time.Millisecond {
+		t.Errorf("delete should bypass circuit breaker, took %v", elapsed)
+	}
+}
+
+// TestFairQueue_CircuitBreaker_OtherMirrorsUnaffected verifies that backoff
+// on mirror A does not affect mirror B.
+func TestFairQueue_CircuitBreaker_OtherMirrorsUnaffected(t *testing.T) {
+	q := NewFairQueue(0, 0)
+
+	// Trip proj-A
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+
+	// Enqueue for both
+	q.Enqueue(testTask("proj-A", "a.txt"))
+	q.Enqueue(testTask("proj-B", "b.txt"))
+
+	// proj-B should dequeue first (proj-A in backoff)
+	task, _ := q.Dequeue(context.Background())
+	if task.Project.Name != "proj-B" {
+		t.Errorf("got %q, want proj-B", task.Project.Name)
+	}
+}
+
+// TestFairQueue_CircuitBreaker_BackoffExpires verifies that a mirror in backoff
+// becomes eligible after the backoff duration expires.
+func TestFairQueue_CircuitBreaker_BackoffExpires(t *testing.T) {
+	q := NewFairQueue(0, 0)
+
+	// Trip the breaker
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+
+	// Manually set a short backoff for testing
+	q.mu.Lock()
+	q.circuits["proj-A"].backoffUntil = time.Now().Add(200 * time.Millisecond)
+	q.mu.Unlock()
+
+	q.Enqueue(testTask("proj-A", "file.txt"))
+
+	start := time.Now()
+	task, ok := q.Dequeue(context.Background())
+	elapsed := time.Since(start)
+
+	if !ok || task.Project.Name != "proj-A" {
+		t.Fatal("dequeue should succeed after backoff expires")
+	}
+	if elapsed < 150*time.Millisecond {
+		t.Errorf("should wait for backoff, only waited %v", elapsed)
+	}
+}
+
+// TestFairQueue_CircuitBreaker_ExponentialBackoff verifies that each additional
+// failure after threshold increases the backoff duration.
+func TestFairQueue_CircuitBreaker_ExponentialBackoff(t *testing.T) {
+	q := NewFairQueue(0, 0)
+
+	// 3 failures = threshold, first backoff = 10s base
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+	q.RecordFailure("proj-A")
+
+	q.mu.Lock()
+	first := q.circuits["proj-A"].backoffUntil
+	q.mu.Unlock()
+
+	// 4th failure = 20s backoff
+	q.RecordFailure("proj-A")
+
+	q.mu.Lock()
+	second := q.circuits["proj-A"].backoffUntil
+	q.mu.Unlock()
+
+	// Second backoff should be later than first
+	if !second.After(first) {
+		t.Errorf("backoff should increase: first=%v second=%v", first, second)
+	}
+}

@@ -1,5 +1,12 @@
 # SelectiveMirror .syncignore
 _testrun_*/
+_stresstest_*/
+_bracket_test/
+_sc2/
+_stresscheck/
+_tptest/
+_movetest/
+_ft*/
 *.exe
 *.db
 *.db-wal

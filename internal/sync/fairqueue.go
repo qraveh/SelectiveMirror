@@ -8,11 +8,18 @@ import (
 	"time"
 )
 
+// circuitState tracks per-mirror failure state for the circuit breaker.
+type circuitState struct {
+	consecutiveFailures int
+	backoffUntil        time.Time
+}
+
 // FairQueue is a thread-safe task queue that provides:
 //   - Deduplication: if a file is already queued, re-enqueue moves it to the back
 //   - Priority: delete events go to the front of the queue
 //   - Fairness: hot files naturally cycle to the back while cold files advance
 //   - Cooldown: after a file is synced, it cannot be dequeued again for a configurable duration
+//   - Circuit breaker: after N consecutive failures for a mirror, pause that mirror with exponential backoff
 //   - Blocking dequeue with context cancellation
 //
 // It replaces the plain chan Task used previously, which could not inspect
@@ -21,9 +28,10 @@ type FairQueue struct {
 	mu          gosync.Mutex
 	cond        *gosync.Cond
 	items       []Task
-	pending     map[string]bool      // tracks which keys are in items (for O(1) membership check)
-	cooldowns   map[string]time.Time // key → earliest allowed dequeue time
-	cooldownDur time.Duration        // duration of cooldown after successful sync
+	pending     map[string]bool          // tracks which keys are in items (for O(1) membership check)
+	cooldowns   map[string]time.Time     // key → earliest allowed dequeue time
+	circuits    map[string]*circuitState // mirror name → failure state
+	cooldownDur time.Duration            // duration of cooldown after successful sync
 	closed      bool
 	maxSize     int // 0 = unlimited
 }
@@ -34,6 +42,7 @@ func NewFairQueue(maxSize int, cooldownDur time.Duration) *FairQueue {
 	q := &FairQueue{
 		pending:     make(map[string]bool),
 		cooldowns:   make(map[string]time.Time),
+		circuits:    make(map[string]*circuitState),
 		cooldownDur: cooldownDur,
 		maxSize:     maxSize,
 	}
@@ -115,6 +124,50 @@ func (q *FairQueue) SetCooldown(key string) {
 	q.cooldowns[key] = time.Now().Add(q.cooldownDur)
 }
 
+// Circuit breaker constants.
+const (
+	circuitBreakerThreshold = 3                // consecutive failures before backoff
+	circuitBreakerMaxBackoff = 5 * time.Minute // maximum backoff duration
+	circuitBreakerBaseBackoff = 10 * time.Second // initial backoff after threshold
+)
+
+// RecordFailure records a sync failure for a mirror. After circuitBreakerThreshold
+// consecutive failures, the mirror enters backoff — all its tasks are skipped
+// during dequeue until the backoff expires. Backoff doubles each time, capped
+// at circuitBreakerMaxBackoff.
+func (q *FairQueue) RecordFailure(mirrorName string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	cs, ok := q.circuits[mirrorName]
+	if !ok {
+		cs = &circuitState{}
+		q.circuits[mirrorName] = cs
+	}
+	cs.consecutiveFailures++
+
+	if cs.consecutiveFailures >= circuitBreakerThreshold {
+		// Exponential backoff: base * 2^(failures - threshold)
+		multiplier := 1 << (cs.consecutiveFailures - circuitBreakerThreshold)
+		backoff := circuitBreakerBaseBackoff * time.Duration(multiplier)
+		if backoff > circuitBreakerMaxBackoff {
+			backoff = circuitBreakerMaxBackoff
+		}
+		cs.backoffUntil = time.Now().Add(backoff)
+	}
+}
+
+// RecordSuccess resets the failure counter for a mirror, clearing any backoff.
+func (q *FairQueue) RecordSuccess(mirrorName string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if cs, ok := q.circuits[mirrorName]; ok {
+		cs.consecutiveFailures = 0
+		cs.backoffUntil = time.Time{}
+	}
+}
+
 // Dequeue removes and returns the first non-cooled task from the queue.
 // Tasks in cooldown are skipped (left in queue for later). If all tasks are
 // in cooldown, blocks until the earliest cooldown expires, the queue is closed,
@@ -145,14 +198,15 @@ func (q *FairQueue) Dequeue(ctx context.Context) (Task, bool) {
 			return Task{}, false
 		}
 
-		// Scan for first non-cooled item
+		// Scan for first eligible item (not cooled, mirror not in backoff)
 		now := time.Now()
 		earliestExpiry := time.Time{}
 		for i, item := range q.items {
 			key := queueKey(item)
+			mirror := item.Project.Name
 
-			// Priority items (deletes) and full-project syncs skip cooldown
-			if item.Type == TaskDelete || key == "" {
+			// Priority items (deletes) skip cooldown and circuit breaker
+			if item.Type == TaskDelete {
 				q.items = append(q.items[:i], q.items[i+1:]...)
 				if key != "" {
 					delete(q.pending, key)
@@ -160,19 +214,37 @@ func (q *FairQueue) Dequeue(ctx context.Context) (Task, bool) {
 				return item, true
 			}
 
-			// Check cooldown
+			// Full-project syncs skip cooldown but respect circuit breaker
+			if key == "" {
+				if cs, ok := q.circuits[mirror]; ok && cs.backoffUntil.After(now) {
+					if earliestExpiry.IsZero() || cs.backoffUntil.Before(earliestExpiry) {
+						earliestExpiry = cs.backoffUntil
+					}
+					continue
+				}
+				q.items = append(q.items[:i], q.items[i+1:]...)
+				return item, true
+			}
+
+			// Check circuit breaker (mirror-level backoff)
+			if cs, ok := q.circuits[mirror]; ok && cs.backoffUntil.After(now) {
+				if earliestExpiry.IsZero() || cs.backoffUntil.Before(earliestExpiry) {
+					earliestExpiry = cs.backoffUntil
+				}
+				continue
+			}
+
+			// Check per-file cooldown
 			if expiry, ok := q.cooldowns[key]; ok && expiry.After(now) {
-				// Still cooling down — track earliest expiry
 				if earliestExpiry.IsZero() || expiry.Before(earliestExpiry) {
 					earliestExpiry = expiry
 				}
 				continue
 			}
 
-			// Not cooled — take it
+			// Eligible — take it
 			q.items = append(q.items[:i], q.items[i+1:]...)
 			delete(q.pending, key)
-			// Clean up expired cooldown entry
 			delete(q.cooldowns, key)
 			return item, true
 		}
