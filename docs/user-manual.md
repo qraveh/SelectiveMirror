@@ -30,14 +30,14 @@ Unlike raw `rclone sync`, which operates as a batch command that you must run ma
 The system is composed of four stages:
 
 ```
-  Filesystem Events           Debounce             Sync Engine            rclone
+  Filesystem Events          FairQueue              Sync Engine            rclone
  +-----------------+    +----------------+    +-----------------+    +----------+
- | ReadDirectory   |--->| Per-file timer |--->| Worker pool     |--->| copyto   |
- | ChangesW        |    | (default 5s)   |    | (default 4)     |    | copy     |
- | (fsnotify)      |    | coalesces      |    | per-file locks  |    | sync     |
- |                 |    | rapid edits    |    | MD5 dedup       |    | deletefile|
- | Rename tracking |    |                |    | quiescence check|    | moveto   |
- | Delete tracking |    |                |    | state DB update |    | touch    |
+ | ReadDirectory   |--->| Dedup          |--->| Worker pool     |--->| copyto   |
+ | ChangesW        |    | (move-to-back) |    | (default 4)     |    | copy     |
+ | (fsnotify)      |    | Priority lane  |    | per-file locks  |    | sync     |
+ |                 |    | (deletes first)|    | MD5 dedup       |    | deletefile|
+ | Rename tracking |    | 30s cooldown   |    | quiescence check|    | moveto   |
+ | Delete tracking |    | per file       |    | state DB update |    | touch    |
  +-----------------+    +----------------+    +-----------------+    +----------+
 ```
 
@@ -279,7 +279,7 @@ global_excludes:
 | `name` | string | *required* | Unique identifier for the project. Used in commands, logs, and state DB. |
 | `local_path` | string | *required* | Absolute path to the local directory to watch. Must exist and be a directory. |
 | `remote` | string | *required* | rclone remote destination in `remote:path` format (e.g., `gdrive:backup/project`). |
-| `debounce_sec` | int | `5` | Seconds to wait after the last file event before syncing. Higher values reduce upload frequency during rapid editing. |
+| `debounce_sec` | int | `0` | Quiet-window before enqueuing (0 = immediate queue-based fairness, default). When > 0, waits N seconds after last change — use for Office-style saves. |
 | `max_file_size_mb` | int | `100` | Maximum file size in megabytes. Files exceeding this limit are silently skipped. |
 | `syncignore_path` | string | `<local_path>/.syncignore` | Override path to the `.syncignore` file for this project. |
 
@@ -358,7 +358,7 @@ mirrors:
 
 ## Hot Reload
 
-When SelectiveMirror is running, changes to `.syncignore` files are detected automatically. The filter engine reloads within one debounce cycle (default 5 seconds). No restart is required.
+When SelectiveMirror is running, changes to `.syncignore` files are detected automatically. The filter engine reloads immediately when `.syncignore` is modified. No restart is required.
 
 Hot reload works because the watcher monitors `.syncignore` files alongside all other files in the project directory. When a change is detected, the filter engine re-reads and recompiles the rules. A log message confirms whether the rules actually changed.
 

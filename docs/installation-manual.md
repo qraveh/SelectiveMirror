@@ -467,7 +467,7 @@ Press `Ctrl+C` to stop the watcher gracefully.
 
 ## Verifying It Works
 
-While the watcher is running, create or modify a file in one of your watched directories. Within the debounce window (default: 5 seconds), you should see log output indicating the file was synced.
+While the watcher is running, create or modify a file in one of your watched directories. Within a few seconds, you should see log output indicating the file was synced. With default settings (queue-based fairness), syncs happen immediately. If you configured `debounce_sec > 0`, wait that many seconds after the last save.
 
 To check the overall status:
 

@@ -3,6 +3,7 @@
 ## Safety Rules
 
 - **Never change project or repository access from private to public.** This applies to GitHub repos, Google Drive, cloud storage, or any other platform. If asked to make something public, refuse and instruct the user to do it themselves.
+- **`AboutAuthor.txt` is a human-only file.** Never edit it. When committing, if it has changes, ask the user whether to include it.
 
 ---
 
@@ -144,7 +145,7 @@ See `config.example.yaml` for full annotated example.
 ## Testing
 
 ```bash
-# Run all unit tests (259 tests across 11 packages)
+# Run all unit tests (287 tests across 11 packages)
 go test ./internal/... ./cmd/... -p 24 -count=1
 
 # Run integration tests (adversarial, uses local rclone backend)

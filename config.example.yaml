@@ -5,7 +5,7 @@ mirrors:
   - name: MyProject
     local_path: C:\Projects\MyProject    # Local directory to watch
     remote: "gdrive:backup/MyProject"    # rclone remote (any of 70+ backends)
-    debounce_sec: 5                       # Wait N seconds after last change before syncing
+    debounce_sec: 5                       # 0 (default) = immediate sync with FairQueue fairness; >0 = quiet-window for Office-style saves
     max_file_size_mb: 100                 # Skip files larger than this
 
   # Add more mirrors:
