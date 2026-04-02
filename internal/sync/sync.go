@@ -393,7 +393,9 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		// Optimistically set remote_hash: rclone succeeded, so remote now has
 		// this content. This enables content-addressed skip on the next sync
 		// and closes the A→B→A window (Case 4 in edge case analysis).
-		e.state.UpdateRemoteVerification(proj.Name, relPath, hash, size)
+		if err := e.state.UpdateRemoteVerification(proj.Name, relPath, hash, size); err != nil {
+			e.log.Warn("state: update remote verification", "project", proj.Name, "path", relPath, "err", err)
+		}
 		e.Queue.SetAdaptiveCooldown(proj.Name+":"+relPath, elapsed)
 		e.Queue.RecordSuccess(proj.Name)
 	} else {
