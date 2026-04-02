@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.0"
+var version = "0.7.1-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -448,19 +448,20 @@ func cmdSyncNow(configPath string, args []string) {
 		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
 	}
 
-	// SM-073: Acquire lock to prevent races with running service.
-	// sync-now invokes rclone (copyto, deletefile, copy) which can race with
-	// the service's watcher-driven sync and delete operations.
+	// SM-073/SM-076: If service is running, signal it to sync instead of racing.
 	lk, err := lock.Acquire(dataDir(cfg))
 	if err != nil {
 		if err == lock.ErrAlreadyRunning {
-			fmt.Fprintln(os.Stderr, "Error: smirror service is running. Stop it first:")
-			fmt.Fprintln(os.Stderr, "  smirror service stop")
-			fmt.Fprintln(os.Stderr, "  smirror sync-now")
-			fmt.Fprintln(os.Stderr, "  smirror service start")
-		} else {
-			fmt.Fprintf(os.Stderr, "Error acquiring lock: %v\n", err)
+			// Service is running — send sync-now signal via SCM
+			fmt.Println("Service is running — sending sync-now signal...")
+			if signalErr := service.SendSyncNow(); signalErr != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", signalErr)
+				os.Exit(ExitRcloneError)
+			}
+			fmt.Println("Sync-now signal sent. The service will perform an immediate full sync.")
+			return
 		}
+		fmt.Fprintf(os.Stderr, "Error acquiring lock: %v\n", err)
 		os.Exit(ExitLockConflict)
 	}
 	defer func() { _ = lk.Release() }()
@@ -2011,6 +2012,8 @@ func serviceMain() {
 	}
 
 	var cancel context.CancelFunc
+	var liveSyncEngine *msync.Engine // shared with syncNowFunc
+	var liveCfg *config.Global
 
 	startFunc := func() {
 		// Re-use cmdStart logic but with context from service handler
@@ -2136,6 +2139,9 @@ func serviceMain() {
 		go syncEngine.Run(ctx)
 		go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine, filters, notifier)
 
+		liveSyncEngine = syncEngine
+		liveCfg = cfg
+
 		slog.Info("smirror service running", "mirrors", cfg.ProjectNames())
 		<-ctx.Done()
 		slog.Info("smirror service stopped")
@@ -2147,7 +2153,18 @@ func serviceMain() {
 		}
 	}
 
-	if err := service.Run(startFunc, stopFunc); err != nil {
+	syncNowFunc := func() {
+		if liveSyncEngine == nil || liveCfg == nil {
+			slog.Warn("sync-now signal received but engine not ready")
+			return
+		}
+		slog.Info("sync-now signal received, triggering immediate full sync")
+		for _, proj := range liveCfg.Projects {
+			liveSyncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
+		}
+	}
+
+	if err := service.Run(startFunc, stopFunc, syncNowFunc); err != nil {
 		slog.Error("service run failed", "error", err)
 		os.Exit(1)
 	}

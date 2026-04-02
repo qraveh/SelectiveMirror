@@ -16,6 +16,11 @@ const serviceName = "smirror"
 const serviceDisplayName = "SelectiveMirror"
 const serviceDescription = "Real-time selective file synchronization engine"
 
+// CmdSyncNow is a user-defined service control code (128-255 range).
+// Sent by `smirror sync-now` to request the running service to perform
+// an immediate full sync without stopping.
+const CmdSyncNow = svc.Cmd(128)
+
 // IsWindowsService reports whether the current process was started by the
 // Windows Service Control Manager (as opposed to being run interactively).
 func IsWindowsService() bool {
@@ -28,8 +33,9 @@ func IsWindowsService() bool {
 
 // handler implements svc.Handler for the SCM run loop.
 type handler struct {
-	startFunc func()
-	stopFunc  func()
+	startFunc   func()
+	stopFunc    func()
+	syncNowFunc func() // called when CmdSyncNow control code received
 }
 
 func (h *handler) Execute(args []string, r <-chan svc.ChangeRequest, s chan<- svc.Status) (bool, uint32) {
@@ -60,6 +66,10 @@ func (h *handler) Execute(args []string, r <-chan svc.ChangeRequest, s chan<- sv
 				case <-time.After(30 * time.Second):
 				}
 				return false, 0
+			case CmdSyncNow:
+				if h.syncNowFunc != nil {
+					go h.syncNowFunc()
+				}
 			case svc.Interrogate:
 				s <- c.CurrentStatus
 			}
@@ -71,13 +81,37 @@ func (h *handler) Execute(args []string, r <-chan svc.ChangeRequest, s chan<- sv
 }
 
 // Run executes smirror under SCM control. startFunc is called when the service
-// receives a Start command; stopFunc is called on Stop/Shutdown. This function
-// blocks until the service is stopped.
-func Run(startFunc, stopFunc func()) error {
+// receives a Start command; stopFunc is called on Stop/Shutdown; syncNowFunc
+// is called when the CmdSyncNow custom control code is received (from `smirror sync-now`).
+// This function blocks until the service is stopped.
+func Run(startFunc, stopFunc, syncNowFunc func()) error {
 	return svc.Run(serviceName, &handler{
-		startFunc: startFunc,
-		stopFunc:  stopFunc,
+		startFunc:   startFunc,
+		stopFunc:    stopFunc,
+		syncNowFunc: syncNowFunc,
 	})
+}
+
+// SendSyncNow sends the CmdSyncNow custom control code to the running smirror service.
+// This triggers an immediate full sync without stopping the service.
+func SendSyncNow() error {
+	m, err := mgr.Connect()
+	if err != nil {
+		return fmt.Errorf("cannot connect to Service Control Manager: %w", err)
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService(serviceName)
+	if err != nil {
+		return fmt.Errorf("service %q is not installed", serviceName)
+	}
+	defer s.Close()
+
+	_, err = s.Control(CmdSyncNow)
+	if err != nil {
+		return fmt.Errorf("cannot send sync-now signal: %w", err)
+	}
+	return nil
 }
 
 // Install registers smirror as a Windows service. The service is configured
