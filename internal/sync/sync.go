@@ -915,6 +915,23 @@ func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, e
 			e.state.LogAction(proj.Name, g.Path, "ghost_cleanup", kind, 0)
 			e.state.DeleteFileState(proj.Name, g.Path)
 			deleted++
+		} else if exitCode == 4 {
+			// SM-075: deletefile failed with "file not found" — likely duplicate directories
+			// on Google Drive. Fall back to rclone delete --rmdirs on parent directory.
+			parentDir := filepath.Dir(g.Path)
+			if parentDir != "." && parentDir != "" {
+				parentRemote := proj.Remote + "/" + parentDir
+				fallbackArgs := []string{"delete", parentRemote, "--rmdirs"}
+				fallbackArgs = append(fallbackArgs, e.deleteFlags(proj)...)
+				if e.runRclone(ctx, fallbackArgs) == 0 {
+					e.log.Info("ghost cleaned (parent dir fallback)", "project", proj.Name, "path", g.Path, "kind", kind)
+					e.state.LogAction(proj.Name, g.Path, "ghost_cleanup", kind+" (dir fallback)", 0)
+					e.state.DeleteFileState(proj.Name, g.Path)
+					deleted++
+				} else {
+					e.log.Warn("ghost cleanup failed (dir fallback also failed)", "project", proj.Name, "path", g.Path, "kind", kind)
+				}
+			}
 		} else {
 			e.log.Warn("ghost cleanup failed", "project", proj.Name, "path", g.Path, "kind", kind, "exit", exitCode)
 		}

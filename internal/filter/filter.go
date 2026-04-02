@@ -149,18 +149,55 @@ func (e *Engine) Reload() (changed bool, err error) {
 	}
 	e.rebuildMerged()
 
-	// Detect if rules actually changed
+	// Detect if rules actually changed and log the diff (SM-070)
+	changed = false
 	if len(oldRules) != len(e.projectRules) {
-		e.generation++
-		return true, nil
-	}
-	for i := range oldRules {
-		if oldRules[i] != e.projectRules[i] {
-			e.generation++
-			return true, nil
+		changed = true
+	} else {
+		for i := range oldRules {
+			if oldRules[i] != e.projectRules[i] {
+				changed = true
+				break
+			}
 		}
 	}
-	return false, nil
+
+	if changed {
+		e.generation++
+		logFilterDiff(e.syncIgnorePath, oldRules, e.projectRules)
+	}
+	return changed, nil
+}
+
+// logFilterDiff logs added and removed rules when .syncignore changes.
+func logFilterDiff(path string, oldRules, newRules []string) {
+	old := make(map[string]bool, len(oldRules))
+	for _, r := range oldRules {
+		old[r] = true
+	}
+	new := make(map[string]bool, len(newRules))
+	for _, r := range newRules {
+		new[r] = true
+	}
+
+	var added, removed []string
+	for _, r := range newRules {
+		if !old[r] {
+			added = append(added, r)
+		}
+	}
+	for _, r := range oldRules {
+		if !new[r] {
+			removed = append(removed, r)
+		}
+	}
+
+	if len(added) > 0 {
+		slog.Info(".syncignore rules added", "path", path, "added", added)
+	}
+	if len(removed) > 0 {
+		slog.Info(".syncignore rules removed", "path", path, "removed", removed)
+	}
 }
 
 // SyncIgnorePath returns the path to the .syncignore file being watched.
