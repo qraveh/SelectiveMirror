@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.13-dev"
+var version = "0.7.14-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -343,6 +343,7 @@ func cmdStart(configPath string, args []string) {
 	st.SetMeta("instance_exe", exePath)
 	st.SetMeta("instance_started", time.Now().Local().Format(time.RFC3339))
 	st.SetMeta("instance_mode", "foreground")
+	st.SetMeta("instance_version", version)
 	st.SetMeta("instance_user", currentUser())
 	st.SetMeta("last_health_error", "")
 	defer func() {
@@ -652,6 +653,7 @@ func cmdStatus(configPath string) {
 		iPid, _ := st.GetMeta("instance_pid")
 		iExe, _ := st.GetMeta("instance_exe")
 		iMode, _ := st.GetMeta("instance_mode")
+		iVersion, _ := st.GetMeta("instance_version")
 		iUser, _ := st.GetMeta("instance_user")
 		iStarted, _ := st.GetMeta("instance_started")
 
@@ -660,7 +662,11 @@ func cmdStatus(configPath string) {
 		if iMode != "" {
 			modeStr = iMode
 		}
-		parts := []string{fmt.Sprintf("smirror.exe %s running", modeStr)}
+		versionStr := ""
+		if iVersion != "" {
+			versionStr = " v" + iVersion
+		}
+		parts := []string{fmt.Sprintf("smirror.exe %s running%s", modeStr, versionStr)}
 		if iUser != "" {
 			parts = append(parts, fmt.Sprintf("as %s:", iUser))
 		} else {
@@ -2099,6 +2105,7 @@ func serviceMain() {
 		st.SetMeta("instance_exe", exePath)
 		st.SetMeta("instance_started", time.Now().Local().Format(time.RFC3339))
 		st.SetMeta("instance_mode", "service")
+		st.SetMeta("instance_version", version)
 		st.SetMeta("instance_user", currentUser())
 		st.SetMeta("last_health_error", "")
 		defer func() {
