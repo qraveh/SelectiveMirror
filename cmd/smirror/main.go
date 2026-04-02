@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.20-dev"
+var version = "0.7.21-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -778,7 +778,8 @@ func cmdStatus(configPath string) {
 			fmt.Println("Anomalies: none this session")
 		}
 		if older > 0 {
-			fmt.Printf("  (%d anomalies from previous sessions in log files)\n", older)
+			anomalyDir := filepath.Join(dataDir(cfg), "anomalies")
+			fmt.Printf("  (%d anomalies from previous sessions — review or delete: %s)\n", older, anomalyDir)
 		}
 		fmt.Println()
 	}
