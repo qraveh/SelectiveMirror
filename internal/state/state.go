@@ -187,7 +187,7 @@ func (s *Store) PruneOrphanedProjects(activeProjects []string) (int64, error) {
 		placeholders[i] = "?"
 		args[i] = p
 	}
-	query := "DELETE FROM sync_state WHERE project NOT IN (" + strings.Join(placeholders, ",") + ")"
+	query := "DELETE FROM sync_state WHERE project NOT IN (" + strings.Join(placeholders, ",") + ")" //nolint:gosec // placeholders are all "?" — no user input
 	result, err := s.db.Exec(query, args...)
 	if err != nil {
 		return 0, err

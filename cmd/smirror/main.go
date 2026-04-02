@@ -1460,7 +1460,7 @@ func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engi
 			} else if err == nil {
 				// SM-083: Hash matches — record remote verification
 				if st != nil {
-					st.UpdateRemoteVerification(proj.Name, relPath, strings.ToLower(md5Hash), rf.Size)
+					_ = st.UpdateRemoteVerification(proj.Name, relPath, strings.ToLower(md5Hash), rf.Size)
 				}
 			}
 		}
