@@ -417,6 +417,23 @@ func cmdSyncNow(configPath string, args []string) {
 		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
 	}
 
+	// SM-073: Acquire lock to prevent races with running service.
+	// sync-now invokes rclone (copyto, deletefile, copy) which can race with
+	// the service's watcher-driven sync and delete operations.
+	lk, err := lock.Acquire(dataDir(cfg))
+	if err != nil {
+		if err == lock.ErrAlreadyRunning {
+			fmt.Fprintln(os.Stderr, "Error: smirror service is running. Stop it first:")
+			fmt.Fprintln(os.Stderr, "  smirror service stop")
+			fmt.Fprintln(os.Stderr, "  smirror sync-now")
+			fmt.Fprintln(os.Stderr, "  smirror service start")
+		} else {
+			fmt.Fprintf(os.Stderr, "Error acquiring lock: %v\n", err)
+		}
+		os.Exit(ExitLockConflict)
+	}
+	defer func() { _ = lk.Release() }()
+
 	st, err := state.Open(cfg.StateDB)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
