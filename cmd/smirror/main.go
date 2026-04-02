@@ -40,11 +40,12 @@ var version = "0.5.1-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
-	ExitSuccess     = 0
-	ExitError       = 1 // general error
-	ExitConfigError = 2 // config load/validation failure
-	ExitRcloneError = 3 // rclone-related failure
+	ExitSuccess      = 0
+	ExitError        = 1 // general error
+	ExitConfigError  = 2 // config load/validation failure
+	ExitRcloneError  = 3 // rclone-related failure (unreachable, auth, binary missing)
 	ExitLockConflict = 4 // another instance is running
+	ExitDrift        = 5 // diagnostic found drift (leaks, orphans, mismatches — tool worked, action needed)
 )
 
 func main() {
@@ -897,8 +898,11 @@ func cmdTestMirrors(configPath string, args []string) {
 		fmt.Println("Hint: 'smirror sync-now' may resolve most drift.")
 	}
 
-	if failed > 0 || totalDrift > 0 {
+	if failed > 0 {
 		os.Exit(ExitRcloneError)
+	}
+	if totalDrift > 0 {
+		os.Exit(ExitDrift)
 	}
 }
 

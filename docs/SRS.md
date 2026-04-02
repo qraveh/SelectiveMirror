@@ -824,12 +824,12 @@ Bug hunt markers (SM-031 through SM-061) provide a secondary traceability chain 
 ### 11.1 Release Roadmap
 
 ```
-v0.4.0 (current)     v0.5.0              v0.6.0              v0.7.0+             v1.0
+v0.4.0               v0.5.0              v0.6.0              v0.7.0              v1.0
 ─────────────────── ─────────────────── ─────────────────── ─────────────────── ───────
-Ghost cleanup        Per-mirror config   Hook system         Anomaly reporter    SLA validation
-FairQueue            Adaptive sync       USN journal         Performance         Conformance
-Circuit breaker      DB hardening        CLI polish          benchmarks          Release polish
-                     Filter safety                           Anomaly patterns
+Ghost cleanup        Per-mirror config   Anomaly reporter    Hook system         SLA validation
+FairQueue            Adaptive sync       Anomaly patterns    USN journal         Conformance
+Circuit breaker      DB hardening        Self-diagnostics    Platform hardening  Release polish
+                     Filter safety
 ```
 
 ### 11.2 Pre-Release SLA Gate
@@ -883,22 +883,11 @@ Remaining for 0.4.0 release:
 
 **Estimated scope**: ~15 work items, mix of small and medium. This is the "make it production-ready" release.
 
-### 11.5 v0.6.0 — Hooks & Platform Hardening
+### 11.5 v0.6.0 — Anomaly Intelligence
 
-**Theme**: Extensibility infrastructure, cross-platform readiness, diagnostic maturity.
-
-| Work Item | Requirements | Effort | Risk | Dependencies |
-|-----------|-------------|--------|------|-------------|
-| **Pre/post-sync hook system** | FR-ASP-17 | Large | Medium — design callback points, error handling, timeout, security | Sync engine callback architecture |
-| **USN journal integration** | FR-WATCH-10 | Large | High — Windows-specific, kernel API, circular buffer handling | None |
-| **Gitignore conformance test suite** | FR-FILTER-01 | Medium | Low — test-only, no production code change | None |
-| **Windows Event Log integration** | FR-SVC-08 | Small | Low — golang.org/x/sys/windows has eventlog package | None |
-| **Symlink documentation & info logging** | FR-WATCH-06 | Small | Low — doc + log level change | None |
-| **Watch depth configurability** | FR-WATCH-11 | Small | Low — filter at watcher level | None |
-
-### 11.6 v0.7.0+ — Anomaly Intelligence
-
-**Theme**: Self-diagnosing system, automated failure analysis foundation.
+**Theme**: Self-diagnosing system, automated failure analysis. Moved ahead of platform hardening
+because anomaly data is most valuable while the system is still maturing — it catches unknown
+unknowns in the field and informs which hardening investments (hooks, USN, Event Log) matter most.
 
 | Work Item | Requirements | Effort | Risk | Dependencies |
 |-----------|-------------|--------|------|-------------|
@@ -911,6 +900,20 @@ Remaining for 0.4.0 release:
 | **Configurable outbound reporting** | FR-ANOM-11 | Medium | Medium — endpoint design, opt-in/out logic, zero-traffic guarantee | FR-ANOM-04 |
 | **Anomaly notification (toast + future webhook)** | FR-ANOM-09 | Small | Low — extend existing notify package | FR-ANOM-03 |
 | **Report auto-rotation** | FR-ANOM-10 | Small | Low — age/size-based cleanup | FR-ANOM-04 |
+
+### 11.6 v0.7.0 — Hooks & Platform Hardening
+
+**Theme**: Extensibility infrastructure, cross-platform readiness. Informed by anomaly data
+collected during v0.6.0 field usage — hardening priorities guided by real failure patterns.
+
+| Work Item | Requirements | Effort | Risk | Dependencies |
+|-----------|-------------|--------|------|-------------|
+| **Pre/post-sync hook system** | FR-ASP-17 | Large | Medium — design callback points, error handling, timeout, security | Sync engine callback architecture |
+| **USN journal integration** | FR-WATCH-10 | Large | High — Windows-specific, kernel API, circular buffer handling | None |
+| **Gitignore conformance test suite** | FR-FILTER-01 | Medium | Low — test-only, no production code change | None |
+| **Windows Event Log integration** | FR-SVC-08 | Small | Low — golang.org/x/sys/windows has eventlog package | None |
+| **Symlink documentation & info logging** | FR-WATCH-06 | Small | Low — doc + log level change | None |
+| **Watch depth configurability** | FR-WATCH-11 | Small | Low — filter at watcher level | None |
 
 ### 11.7 v1.0 — Release Readiness
 

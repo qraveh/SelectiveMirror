@@ -3,15 +3,60 @@
 All notable changes to SelectiveMirror are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [semver](https://semver.org/).
 
-## [0.4.0] — Unreleased
+## [0.5.0] — 2026-04-02
+
+### Added
+
+- **FR-ASP-06**: Per-mirror `delete_policy` and `quarantine_days` config overrides. Each mirror can set its own delete policy independent of the global setting
+- **FR-SYNC-13**: Signal-based adaptive cooldown: `max(base*freq, syncDuration*1.5)` replaces fixed 30s cooldown
+- **FR-SYNC-09**: Adaptive reconciliation intervals (doubles after 3 clean cycles, caps at 30min, resets on drift)
+- **FR-SYNC-14**: Per-mirror `rclone_extra_flags` (appended after global flags)
+- **FR-SYNC-16**: Transient retry on rclone exit codes 1 (general error) and 5 (temporary/rate-limit)
+- **FR-DEL-07**: Atomic directory delete via `rclone purge` with fallback to per-file deletion
+- **FR-DEL-09**: Quarantine auto-purge (expired files cleaned during reconciliation, per-mirror retention)
+- **FR-FILTER-11**: Malformed .syncignore safety — saves/restores last-known-good rules on parse error
+- **FR-QUEUE-08/10**: Unbounded queue (removed 10K artificial limit) with overflow callback at 50K
+- **FR-ASP-16**: State DB auto-migration framework (numbered Go functions, idempotent)
+- **FR-ASP-11**: Sync log pruning (30-day retention, cleaned during reconciliation)
+- **FR-CLI-07**: Documented exit codes: 0=success, 1=error, 2=config, 3=rclone, 4=lock, 5=drift
+- Pre-release SLA smoke test (`test/sla_smoke.ps1`): latency, integrity, throughput, memory checks
+- CI coverage gate: build fails if coverage drops below 35%
+- Lint warnings for unanchored negation patterns in .syncignore
+- .syncignore documentation rewrite with anchoring guidance
+- 62 new tests (347 total), 2 fuzz tests
+
+### Changed
+
+- **FR-DEL-01**: `delete_policy: mirror` renamed to `delete_policy: delete` with deprecation warning
+- Rclone filter generator hoists global directory exclusions to top of filter file, enforcing gitignore excluded-parent constraint (SM-062)
+- `test-mirrors` exits with code 5 (ExitDrift) for drift, code 3 (ExitRcloneError) for check failures (SM-068)
+- Quarantine lsjson errors now distinguish "no quarantine dir" (debug) from real failures (warn) (SM-066)
+- ExitRcloneError (3) used in preflight and test-mirrors exits (SM-067)
+- Watcher: extracted pure functions (ClassifyEvent, ShouldSync, ComputeRelPath, IsSymlinkToDir, IsSyncIgnoreFile)
+- All errcheck violations resolved; golangci-lint clean
+- `*~` backup file pattern added to default global_excludes
+
+### Fixed
+
+- **SM-062**: Rclone filter excluded-parent constraint — unanchored `!hooks/*` could override global `.git/` exclusion, causing .git/hooks/ files to sync to remote
+- **SM-065**: Exit code 5 (temporary error) was not retried, causing API rate-limited files to fail permanently
+- **SM-066**: Quarantine auto-purge silently swallowed all lsjson errors, hiding auth/network failures
+- **SM-067**: ExitRcloneError constant was declared but never used
+- **SM-068**: test-mirrors conflated drift detection with rclone failure in exit code
+
+---
+
+## [0.4.0] — 2026-04-02
 
 ### Added
 
 - **Ghost cleanup**: `sync-now` automatically removes LEAKs (excluded files still on remote) and ORPHANs (remote-only files with no local counterpart) after syncing (SM-052)
 - **Ghost preview**: `dry-run` shows what ghost files would be cleaned without executing
+- **FairQueue**: Dedup, move-to-back fairness, priority deletes, per-file cooldown
+- **Circuit breaker**: Per-mirror exponential backoff on consecutive failures (SM-059, SM-060)
 - **Task completion callback**: `Done func()` on sync tasks enables WaitGroup-based coordination
 - **ListRemoteFunc**: injectable remote lister for testability (same pattern as RcloneRunner)
-- 28 new unit tests for ghost detection, cleanup, dry-run preview, and task completion (259 total)
+- 28 new unit tests for ghost detection, cleanup, dry-run preview, and task completion (285 total)
 - Test-driven bug discovery policy added to BugTracker
 
 ### Changed

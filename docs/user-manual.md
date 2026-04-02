@@ -1095,6 +1095,21 @@ mirrors:
 
 # 11. Troubleshooting
 
+## smirror Exit Codes
+
+When smirror exits, the exit code tells scripts and CI what happened:
+
+| Code | Constant | Meaning |
+|---|---|---|
+| 0 | ExitSuccess | Command completed successfully |
+| 1 | ExitError | General error (config load failed, state DB error, etc.) |
+| 2 | ExitConfigError | Configuration validation failed (missing fields, bad paths) |
+| 3 | ExitRcloneError | rclone-related failure (binary not found, remote unreachable, auth failed) |
+| 4 | ExitLockConflict | Another smirror instance is already running |
+| 5 | ExitDrift | Diagnostic found drift (leaks, orphans, hash mismatches) -- the tool worked correctly, but action is needed |
+
+**Note on exit code 5**: `smirror test-mirrors` exits with 5 when drift is detected. This is NOT an error -- it means the diagnostic succeeded and found issues. Scripts can check for exit code 5 to trigger automated remediation (`smirror sync-now`), while exit code 3 indicates an infrastructure problem that needs human attention.
+
 ## rclone Exit Codes
 
 | Code | Meaning | Suggested Action |

@@ -9,7 +9,7 @@
 
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (raveh@qodeh.com)
-**Status**: v0.4.0 pre-release (Phase 1+1.5+2+2.5+4 complete; Phase 3 USN journal + Phase 5 telemetry pending)
+**Status**: v0.5.0 released (Phase 1+1.5+2+2.5+4 complete; Phase 6 anomaly intelligence next; Phase 3 USN journal + Phase 5 telemetry pending)
 **License**: MIT
 **Language**: Go 1.26+
 
@@ -145,7 +145,7 @@ See `config.example.yaml` for full annotated example.
 ## Testing
 
 ```bash
-# Run all unit tests (287 tests across 11 packages)
+# Run all unit tests (347 tests across 11 packages)
 go test ./internal/... ./cmd/... -p 24 -count=1
 
 # Run integration tests (adversarial, uses local rclone backend)
