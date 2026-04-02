@@ -147,6 +147,27 @@ func (s *Store) PruneOldLogs(retentionDays int) (int64, error) {
 	return result.RowsAffected()
 }
 
+// PruneOrphanedProjects removes state entries for projects not in the active config.
+// Returns the number of entries removed.
+func (s *Store) PruneOrphanedProjects(activeProjects []string) (int64, error) {
+	if len(activeProjects) == 0 {
+		return 0, nil
+	}
+	// Build placeholders for IN clause
+	placeholders := make([]string, len(activeProjects))
+	args := make([]interface{}, len(activeProjects))
+	for i, p := range activeProjects {
+		placeholders[i] = "?"
+		args[i] = p
+	}
+	query := "DELETE FROM sync_state WHERE project NOT IN (" + strings.Join(placeholders, ",") + ")"
+	result, err := s.db.Exec(query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()

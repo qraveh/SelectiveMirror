@@ -489,6 +489,11 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 		e.state.LogAction(proj.Name, "", "full_sync", fmt.Sprintf("ok, %dms", elapsed.Milliseconds()), elapsed.Milliseconds())
 		e.state.SetMeta("last_full_sync_"+proj.Name, time.Now().UTC().Format(time.RFC3339))
 		e.Queue.RecordSuccess(proj.Name)
+
+		// SM-083: Backfill state DB for files synced by batch reconciliation.
+		// rclone copy doesn't report per-file results, so we walk the local tree
+		// and record state for any included file that has no DB entry.
+		e.backfillStateAfterBatchSync(ctx, proj)
 	} else {
 		e.log.Warn("full sync failed", "project", proj.Name, "exit", exitCode, "ms", elapsed.Milliseconds())
 		e.state.LogAction(proj.Name, "", "full_sync_error", fmt.Sprintf("rclone exit %d, %dms", exitCode, elapsed.Milliseconds()), elapsed.Milliseconds())
@@ -891,6 +896,71 @@ func (e *Engine) findGhosts(proj config.Project) ([]GhostFile, error) {
 		}
 	}
 	return ghosts, nil
+}
+
+// backfillStateAfterBatchSync walks the local tree and records state DB entries
+// for any included file that has no entry. This closes the blind spot where
+// rclone copy (batch sync) uploads files without recording per-file state.
+// Only backfills successful syncs (assumes batch sync succeeded for all files).
+func (e *Engine) backfillStateAfterBatchSync(ctx context.Context, proj config.Project) {
+	fe, ok := e.filters[proj.Name]
+	if !ok {
+		return
+	}
+
+	backfilled := 0
+	_ = filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil || ctx.Err() != nil {
+			return nil
+		}
+		if d.IsDir() {
+			relPath, _ := filepath.Rel(proj.LocalPath, path)
+			relPath = filepath.ToSlash(relPath)
+			if relPath != "." && fe.IsExcluded(relPath+"/") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+
+		relPath, _ := filepath.Rel(proj.LocalPath, path)
+		relPath = filepath.ToSlash(relPath)
+		if fe.IsExcluded(relPath) {
+			return nil
+		}
+
+		// Check if state DB already has an entry
+		existing, _ := e.state.GetFileState(proj.Name, relPath)
+		if existing != nil {
+			return nil // already tracked
+		}
+
+		// Compute hash and record state
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
+		// Skip files exceeding max size (they weren't synced)
+		if info.Size() > proj.MaxFileSize() {
+			return nil
+		}
+
+		hash, _, err := state.HashFile(path)
+		if err != nil {
+			return nil
+		}
+
+		e.state.UpdateFileState(proj.Name, relPath, hash, info.Size(), info.ModTime().UnixNano(), 0)
+		backfilled++
+		return nil
+	})
+
+	if backfilled > 0 {
+		e.log.Info("backfilled state DB after batch sync", "project", proj.Name, "files", backfilled)
+	}
 }
 
 // ClassifyGhost determines why a remote-only file exists using filter rules and state DB.

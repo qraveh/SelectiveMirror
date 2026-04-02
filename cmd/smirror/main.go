@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.23-dev"
+var version = "0.7.24-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -335,6 +335,11 @@ func cmdStart(configPath string, args []string) {
 		os.Exit(1)
 	}
 	defer st.Close()
+
+	// SM-083: Clean up orphaned project state entries on startup
+	if pruned, err := st.PruneOrphanedProjects(cfg.ProjectNames()); err == nil && pruned > 0 {
+		slog.Info("pruned orphaned project state entries", "removed", pruned)
+	}
 
 	// Record instance info so `smirror status` can report it.
 	// Clear stale health errors from previous run (SM-074).
@@ -2212,6 +2217,11 @@ func serviceMain() {
 			return
 		}
 		defer st.Close()
+
+		// SM-083: Clean up orphaned project state entries on startup
+		if pruned, pErr := st.PruneOrphanedProjects(cfg.ProjectNames()); pErr == nil && pruned > 0 {
+			slog.Info("pruned orphaned project state entries", "removed", pruned)
+		}
 
 		// Record instance info so `smirror status` can report it.
 		// Clear stale health errors from previous run (SM-074).
