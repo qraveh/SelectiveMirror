@@ -28,9 +28,11 @@ jobs:
           golangci-lint run ./internal/... ./cmd/...
 
       - name: Unit tests with coverage
-        run: |
-          go test -v ./internal/... -coverprofile=coverage.out -covermode=count
-          go tool cover -func=coverage.out | findstr "total:"
+        run: go test -v ./internal/... -coverprofile=coverage.out -covermode=count
+
+      - name: Coverage summary
+        shell: pwsh
+        run: go tool cover -func=coverage.out | Select-String "total:"
 
       - name: Coverage gate (fail if below 35%)
         shell: pwsh
