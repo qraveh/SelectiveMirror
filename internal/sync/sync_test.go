@@ -1974,7 +1974,7 @@ func TestFindGhosts_DetectsOrphan(t *testing.T) {
 	if ghosts[0].Path != "deleted-file.txt" {
 		t.Errorf("ghost path = %q, want %q", ghosts[0].Path, "deleted-file.txt")
 	}
-	if ghosts[0].IsLeak {
+	if ghosts[0].IsLeak() {
 		t.Error("ghost should be ORPHAN (IsLeak=false), got IsLeak=true")
 	}
 }
@@ -2009,7 +2009,7 @@ func TestFindGhosts_DetectsLeak(t *testing.T) {
 	if ghosts[0].Path != "results/run.log" {
 		t.Errorf("ghost path = %q, want %q", ghosts[0].Path, "results/run.log")
 	}
-	if !ghosts[0].IsLeak {
+	if !ghosts[0].IsLeak() {
 		t.Error("ghost should be LEAK (IsLeak=true), got IsLeak=false")
 	}
 }
@@ -2125,7 +2125,7 @@ func TestFindGhosts_MixedLeaksAndOrphans(t *testing.T) {
 	leaks := 0
 	orphans := 0
 	for _, g := range ghosts {
-		if g.IsLeak {
+		if g.IsLeak() {
 			leaks++
 		} else {
 			orphans++
@@ -2166,7 +2166,7 @@ func TestFindGhosts_ExcludedDirectory(t *testing.T) {
 	if len(ghosts) != 1 {
 		t.Fatalf("expected 1 ghost (excluded dir leak), got %d", len(ghosts))
 	}
-	if !ghosts[0].IsLeak {
+	if !ghosts[0].IsLeak() {
 		t.Error("file in excluded dir should be LEAK")
 	}
 }
@@ -2337,6 +2337,55 @@ func TestCleanupLeaks_NoLeaks(t *testing.T) {
 	}
 	if called {
 		t.Error("rclone should NOT be called when there are no LEAKs")
+	}
+}
+
+// --- SM-072: Ghost classification taxonomy ---
+
+func TestClassifyGhost_Leak(t *testing.T) {
+	fe := testFilterWithExcludes(t, []string{"*.log"})
+	kind := ClassifyGhost(fe, nil, "proj", "debug.log", config.DeleteIgnore)
+	if kind != GhostLeak {
+		t.Errorf("expected LEAK for excluded file, got %s", kind)
+	}
+}
+
+func TestClassifyGhost_Retained(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+	e := testEngine(t, cfg, nil)
+
+	// File was synced (state DB entry exists)
+	e.state.UpdateFileState("test-proj", "deleted.txt", "abc", 10, 0, 0)
+
+	fe := testFilter(t) // no excludes
+	kind := ClassifyGhost(fe, e.state, "test-proj", "deleted.txt", config.DeleteIgnore)
+	if kind != GhostRetained {
+		t.Errorf("expected RETAINED for synced+deleted file with ignore policy, got %s", kind)
+	}
+}
+
+func TestClassifyGhost_Stale(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+	e := testEngine(t, cfg, nil)
+
+	// File was synced but policy is delete (not ignore)
+	e.state.UpdateFileState("test-proj", "moved.txt", "abc", 10, 0, 0)
+
+	fe := testFilter(t)
+	kind := ClassifyGhost(fe, e.state, "test-proj", "moved.txt", config.DeleteDelete)
+	if kind != GhostStale {
+		t.Errorf("expected STALE for synced+deleted file with delete policy, got %s", kind)
+	}
+}
+
+func TestClassifyGhost_Orphan(t *testing.T) {
+	fe := testFilter(t) // no excludes
+	// No state DB → nil
+	kind := ClassifyGhost(fe, nil, "proj", "mystery.txt", config.DeleteIgnore)
+	if kind != GhostOrphan {
+		t.Errorf("expected ORPHAN for unknown file with no state DB, got %s", kind)
 	}
 }
 

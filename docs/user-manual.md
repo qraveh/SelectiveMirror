@@ -861,12 +861,20 @@ On a separate timer (default 5 minutes, configured by `reconcile_interval_sec`),
 
 ## Ghost Scan
 
-After the startup reconciliation completes, a background goroutine runs a ghost scan. This compares remote files against the local filesystem and identifies:
+After the startup reconciliation completes, a background goroutine runs a ghost scan. This compares remote files against the local filesystem and classifies remote-only files into four categories:
 
-- **Orphans**: Files on the remote that do not exist locally (e.g., from renames or manual deletions while smirror was not running).
-- **Leaks**: Files that are excluded by filter rules but still exist on the remote (e.g., from a rule added after initial sync).
+| Category | Meaning | Action | Counted as drift? |
+|---|---|---|---|
+| **LEAK** | Excluded by current `.syncignore` but exists on remote | Auto-cleaned when filter rules change | Yes |
+| **RETAINED** | Deleted locally, preserved on remote by `delete_policy: ignore` | Working as designed -- no action needed | **No** |
+| **STALE** | Was synced (has state DB record), local file gone, not excluded | May need cleanup (rename/move residue) | Yes |
+| **ORPHAN** | On remote with no state DB record and no local counterpart | Investigate -- batch reconciliation artifact or manual upload | Yes |
 
-Ghost scan results are stored in the state database and displayed by `smirror status`. The scan does not auto-delete anything -- it is diagnostic only.
+RETAINED files are intentionally preserved by `delete_policy: ignore` and are NOT reported as drift. This prevents noise from files the user chose not to mirror deletions for.
+
+LEAKs are automatically cleaned when `.syncignore` filter rules change (the watcher detects the hot-reload and triggers cleanup). This means adding an exclusion rule is sufficient -- no manual cleanup needed.
+
+Ghost scan results are stored in the state database and displayed by `smirror status`.
 
 
 # 8. Verifying Integrity
@@ -888,9 +896,11 @@ smirror test-mirrors MyMirror     # one mirror
    - If the file does not exist on the remote: reports **MISSING REMOTE**.
    - If the file exists on remote and MD5 hashes are available: compares hashes. If they differ: reports **HASH MISMATCH**.
 
-4. **Orphan detection**: For each remote file (excluding `.quarantine/`):
-   - If the file does not exist locally and is not excluded: reports **ORPHAN REMOTE**.
-   - If the file is excluded locally but exists on remote: reports **LEAK**.
+4. **Ghost classification**: For each remote file (excluding `.quarantine/`) not in the local tree:
+   - **LEAK**: excluded by current filter rules but exists on remote.
+   - **STALE**: was synced (state DB record exists), local file gone, not excluded.
+   - **ORPHAN**: no state DB record, not excluded -- genuinely unexpected.
+   - **RETAINED**: deleted locally but preserved by `delete_policy: ignore`. Not counted as drift.
 
 ## Example Output
 

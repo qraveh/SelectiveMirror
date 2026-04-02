@@ -731,12 +731,38 @@ func (e *Engine) MigrateRemote(ctx context.Context, proj config.Project, oldRemo
 }
 
 // GhostFile represents a remote file with no valid local counterpart.
+// GhostKind classifies remote-only files by why they exist on remote.
+type GhostKind string
+
+const (
+	// GhostLeak: file is excluded by current filter but exists on remote.
+	// Cause: synced before filter rule was added. Action: auto-clean.
+	GhostLeak GhostKind = "LEAK"
+
+	// GhostRetained: file was synced, then deleted locally, but remote copy
+	// preserved by delete_policy=ignore. Action: informational only.
+	GhostRetained GhostKind = "RETAINED"
+
+	// GhostStale: file was synced (has state DB entry), local file is gone,
+	// not excluded by filter. Likely a rename/move residue.
+	// Action: report, may need cleanup.
+	GhostStale GhostKind = "STALE"
+
+	// GhostOrphan: file on remote with no state DB entry and no local counterpart.
+	// Cause: batch reconciliation, manual upload, or rclone bug.
+	// Action: report, investigate.
+	GhostOrphan GhostKind = "ORPHAN"
+)
+
 type GhostFile struct {
-	Project string // mirror name
-	Path    string // relative path on remote
+	Project string    // mirror name
+	Path    string    // relative path on remote
 	Size    int64
-	IsLeak  bool // true = excluded by filter; false = orphan (not in local tree)
+	Kind    GhostKind // classification
 }
+
+// IsLeak returns true if this ghost is a LEAK (for backward compatibility).
+func (g GhostFile) IsLeak() bool { return g.Kind == GhostLeak }
 
 // findGhosts detects remote-only files for a project by comparing the remote listing
 // against the local filesystem + filter rules. Returns the list of ghost files.
@@ -789,15 +815,42 @@ func (e *Engine) findGhosts(proj config.Project) ([]GhostFile, error) {
 			continue
 		}
 		if !localFiles[remotePath] {
+			kind := ClassifyGhost(fe, e.state, proj.Name, remotePath, proj.DeletePolicy(e.cfg))
 			ghosts = append(ghosts, GhostFile{
 				Project: proj.Name,
 				Path:    remotePath,
 				Size:    rf.Size,
-				IsLeak:  fe.IsExcluded(remotePath),
+				Kind:    kind,
 			})
 		}
 	}
 	return ghosts, nil
+}
+
+// ClassifyGhost determines why a remote-only file exists using filter rules and state DB.
+// deletePolicy is the effective policy for this project (per-mirror or global).
+func ClassifyGhost(fe *filter.Engine, st *state.Store, project, remotePath string, deletePolicy config.DeletePolicy) GhostKind {
+	// LEAK: excluded by current filter — synced before exclusion was added
+	if fe != nil && fe.IsExcluded(remotePath) {
+		return GhostLeak
+	}
+
+	// Check state DB: was this file ever synced by smirror?
+	if st != nil {
+		fs, err := st.GetFileState(project, remotePath)
+		if err == nil && fs != nil {
+			// Has state DB entry → was synced, file is now gone locally.
+			// If delete_policy=ignore, this is intentional (RETAINED).
+			// Otherwise, it's stale (rename/move residue or missed deletion).
+			if deletePolicy == config.DeleteIgnore {
+				return GhostRetained
+			}
+			return GhostStale
+		}
+	}
+
+	// No state DB entry, not excluded → true orphan (batch reconciliation, manual upload)
+	return GhostOrphan
 }
 
 // CleanupGhosts removes remote-only files (LEAKs and ORPHANs) for a project.
@@ -818,10 +871,7 @@ func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, e
 		args = append(args, e.deleteFlags(proj)...)
 
 		exitCode := e.runRclone(ctx, args)
-		kind := "orphan"
-		if g.IsLeak {
-			kind = "leak"
-		}
+		kind := string(g.Kind)
 		if exitCode == 0 {
 			e.log.Info("ghost cleaned", "project", proj.Name, "path", g.Path, "kind", kind)
 			e.state.LogAction(proj.Name, g.Path, "ghost_cleanup", kind, 0)
@@ -847,8 +897,8 @@ func (e *Engine) CleanupLeaks(ctx context.Context, proj config.Project) (int, er
 
 	deleted := 0
 	for _, g := range ghosts {
-		if !g.IsLeak {
-			continue // skip ORPHANs — those respect delete_policy
+		if g.Kind != GhostLeak {
+			continue // only clean LEAKs — other kinds respect delete_policy
 		}
 		remotePath := proj.Remote + "/" + g.Path
 		args := []string{"deletefile", remotePath}
@@ -879,14 +929,18 @@ func (e *Engine) DryRunCleanup(ctx context.Context, proj config.Project) (int, e
 		return 0, nil
 	}
 
+	actionable := 0
 	for _, g := range ghosts {
-		kind := "ORPHAN"
-		if g.IsLeak {
-			kind = "LEAK"
+		if g.Kind == GhostRetained {
+			continue // don't suggest deleting intentionally retained files
 		}
-		fmt.Printf("  [%s] would delete: %s (%d bytes)\n", kind, g.Path, g.Size)
+		fmt.Printf("  [%s] would delete: %s (%d bytes)\n", g.Kind, g.Path, g.Size)
+		actionable++
 	}
-	return len(ghosts), nil
+	if actionable == 0 {
+		fmt.Printf("  No ghost files to clean up\n")
+	}
+	return actionable, nil
 }
 
 // quarantineEntry represents a file in the .quarantine/ directory.

@@ -889,7 +889,7 @@ func cmdTestMirrors(configPath string, args []string) {
 	fmt.Println()
 	totalDrift := 0
 	for _, proj := range projects {
-		drift := verifyProject(cfg, proj, filters[proj.Name])
+		drift := verifyProject(cfg, proj, filters[proj.Name], st)
 		totalDrift += drift
 	}
 
@@ -1051,7 +1051,7 @@ func findMatchingRule(fe *filter.Engine, relPath string) string {
 	return "(could not determine specific rule)"
 }
 
-func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) int {
+func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine, st *state.Store) int {
 	start := time.Now()
 	fmt.Printf("=== Verify: %s ===\n", proj.Name)
 	fmt.Printf("Local:  %s\n", proj.LocalPath)
@@ -1143,11 +1143,17 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 			continue // already counted during local walk
 		}
 		if !localFiles[remotePath] {
-			// Check if it's excluded
-			if fe != nil && fe.IsExcluded(remotePath) {
+			kind := msync.ClassifyGhost(fe, st, proj.Name, remotePath, proj.DeletePolicy(cfg))
+			switch kind {
+			case msync.GhostRetained:
+				// Intentionally preserved by delete_policy=ignore — not drift
+				continue
+			case msync.GhostLeak:
 				fmt.Printf("  LEAK: %s (excluded locally but exists on remote)\n", remotePath)
-			} else {
-				fmt.Printf("  ORPHAN REMOTE: %s (not in local tree)\n", remotePath)
+			case msync.GhostStale:
+				fmt.Printf("  STALE: %s (was synced, local file gone)\n", remotePath)
+			case msync.GhostOrphan:
+				fmt.Printf("  ORPHAN: %s (not in local tree, no sync record)\n", remotePath)
 			}
 			drift++
 		}
@@ -1166,7 +1172,7 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 
 // verifyProjectQuiet runs drift detection without any stdout output.
 // Used by auto-verify in the heartbeat loop. Returns drift count.
-func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engine) int {
+func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engine, st *state.Store) int {
 	start := time.Now()
 
 	remoteFiles, err := msync.ListRemote(cfg, proj)
@@ -1241,10 +1247,14 @@ func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engi
 			continue // already counted during local walk (SM-053)
 		}
 		if !localFiles[remotePath] {
-			if fe != nil && fe.IsExcluded(remotePath) {
+			kind := msync.ClassifyGhost(fe, st, proj.Name, remotePath, proj.DeletePolicy(cfg))
+			if kind == msync.GhostRetained {
+				continue // intentionally preserved — not drift
+			}
+			if kind == msync.GhostLeak {
 				slog.Warn("auto-verify: filter leak", "mirror", proj.Name, "path", remotePath)
 			} else {
-				slog.Debug("auto-verify: orphan remote", "mirror", proj.Name, "path", remotePath)
+				slog.Debug("auto-verify: ghost", "mirror", proj.Name, "path", remotePath, "kind", kind)
 			}
 			drift++
 		}
@@ -1706,14 +1716,14 @@ func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, fil
 				continue
 			}
 			if !localFiles[remotePath] {
-				kind := "ORPHAN"
-				if fe != nil && fe.IsExcluded(remotePath) {
-					kind = "LEAK" // excluded file still on remote
+				kind := msync.ClassifyGhost(fe, st, proj.Name, remotePath, proj.DeletePolicy(cfg))
+				if kind == msync.GhostRetained {
+					continue // intentionally preserved — don't report as ghost
 				}
 				slog.Warn("ghost file on remote",
 					"mirror", proj.Name,
 					"path", remotePath,
-					"kind", kind,
+					"kind", string(kind),
 					"size", rf.Size)
 				ghostDetails = append(ghostDetails, fmt.Sprintf("[%s] %s: %s (%d bytes)",
 					kind, proj.Name, remotePath, rf.Size))
@@ -1821,7 +1831,7 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 				// FR-SYNC-09: Adaptive reconciliation interval.
 				driftFound := false
 				for _, proj := range cfg.Projects {
-					if verifyProjectQuiet(cfg, proj, filters[proj.Name]) > 0 {
+					if verifyProjectQuiet(cfg, proj, filters[proj.Name], st) > 0 {
 						driftFound = true
 						break
 					}
@@ -1851,7 +1861,7 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 					continue
 				}
 
-				drift := verifyProjectQuiet(cfg, proj, filters[proj.Name])
+				drift := verifyProjectQuiet(cfg, proj, filters[proj.Name], st)
 				totalDrift += drift
 				if drift > 0 {
 					slog.Warn("auto-verify: drift detected", "mirror", proj.Name, "drift", drift)
