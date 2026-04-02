@@ -1,0 +1,35 @@
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - gosec
+    - errcheck
+    - ineffassign
+    - gocyclo
+    - unconvert
+    - misspell
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  gosec:
+    excludes:
+      - G104  # unhandled errors on Close (covered by errcheck)
+      - G304  # file path from variable (inherent to file sync tool)
+      - G204  # subprocess with variable args (rclone invocation is intentional)
+      - G306  # WriteFile 0644 — non-sensitive files (status.json, heartbeat, crash logs)
+      - G401  # MD5 used for rclone checksum compatibility, not cryptographic security
+      - G501  # MD5 import — same as G401
+
+issues:
+  exclude-dirs:
+    - vendor
+    - internal/telemetry  # not yet integrated
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck  # test files don't need exhaustive error checks
+        - gosec
+    - linters:
+        - errcheck
+      text: "SetMeta|LogAction|Truncate|Seek|Sync|Rename|Disconnect|Sscanf|WriteFile|os\\.Remove"  # best-effort operations where error is logged or irrelevant
