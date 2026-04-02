@@ -4,14 +4,12 @@ import (
 	"golang.org/x/sys/windows/svc/eventlog"
 )
 
-// Event IDs for Windows Event Log entries.
-const (
-	EventServiceStarted  = 1000
-	EventServiceStopped  = 1001
-	EventServiceError    = 1002
-	EventSyncNowReceived = 1003
-	EventPanicRecovered  = 1004
-)
+// Event ID for all smirror events. Using ID 1 because InstallAsEventCreate
+// registers %1 as the format string for the default message DLL, which
+// correctly displays the full message text for event ID 1.
+// Higher IDs (1000+) show "description cannot be found" warnings because
+// the generic message DLL doesn't have format strings for those IDs.
+const EventID = 1
 
 // EventLog wraps the Windows Event Log for smirror service events.
 // Nil-safe: methods are no-ops when receiver is nil.
