@@ -15,7 +15,7 @@ const syncNowEventName = "Global\\SmirrorSyncNow"
 // CreateSyncNowEvent creates the named event that the service waits on.
 // Returns the event handle. The caller should close it on shutdown.
 // The event is auto-reset (resets after one waiter is released).
-// The security descriptor allows any authenticated user to signal the event
+// The security descriptor grants EVENT_MODIFY_STATE to Authenticated Users
 // (necessary because the service runs in Session 0 and the user is in Session 1+).
 func CreateSyncNowEvent() (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(syncNowEventName)
@@ -25,7 +25,7 @@ func CreateSyncNowEvent() (windows.Handle, error) {
 
 	// Build a security descriptor that grants Everyone EVENT_MODIFY_STATE.
 	// SDDL: D:(A;;0x0002;;;WD) = DACL Allow EVENT_MODIFY_STATE to World (Everyone)
-	sa, err := securityAttributesForEveryone()
+	sa, err := securityAttributesForAuthUsers()
 	if err != nil {
 		// Fall back to default security (will work for admin callers only)
 		h, createErr := windows.CreateEvent(nil, 0, 0, name)
@@ -42,15 +42,15 @@ func CreateSyncNowEvent() (windows.Handle, error) {
 	return h, nil
 }
 
-// securityAttributesForEveryone creates a SecurityAttributes with a DACL that
+// securityAttributesForAuthUsers creates a SecurityAttributes with a DACL that
 // grants EVENT_MODIFY_STATE (0x0002) to Everyone (WD).
-func securityAttributesForEveryone() (*windows.SecurityAttributes, error) {
-	// SDDL string: D:(A;;0x0002;;;WD)
+func securityAttributesForAuthUsers() (*windows.SecurityAttributes, error) {
+	// SDDL string: D:(A;;0x0002;;;AU)
 	// D: = DACL
 	// A = Allow
 	// 0x0002 = EVENT_MODIFY_STATE
-	// WD = World (Everyone)
-	sddl := "D:(A;;0x0002;;;WD)"
+	// AU = Authenticated Users (excludes anonymous/unauthenticated sessions)
+	sddl := "D:(A;;0x0002;;;AU)"
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
 		return nil, fmt.Errorf("parse SDDL: %w", err)
