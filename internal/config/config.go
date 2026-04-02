@@ -21,6 +21,8 @@ type Project struct {
 	MaxFileSizeMB    int      `yaml:"max_file_size_mb"`
 	SyncIgnorePath   string   `yaml:"syncignore_path"`    // override; default: <local_path>/.syncignore
 	RcloneExtraFlags []string `yaml:"rclone_extra_flags"` // per-mirror rclone flags (appended after global)
+	DeletePolicyStr  string   `yaml:"delete_policy"`      // per-mirror override (empty = use global)
+	QuarantineDays   int      `yaml:"quarantine_days"`    // per-mirror override (0 = use global)
 }
 
 // DebounceDuration returns the quiet-window interval as a time.Duration.
@@ -118,10 +120,10 @@ func (g Global) Workers() int {
 	return g.SyncWorkers
 }
 
-// DeletePolicy returns the parsed delete policy (defaults to "ignore").
-// Accepts both "delete" (preferred) and "mirror" (deprecated alias).
-func (g Global) DeletePolicy() DeletePolicy {
-	switch DeletePolicy(g.DeletePolicyStr) {
+// parseDeletePolicy converts a string to a DeletePolicy value.
+// Handles the "mirror" → "delete" deprecation.
+func parseDeletePolicy(s string) DeletePolicy {
+	switch DeletePolicy(s) {
 	case DeleteDelete:
 		return DeleteDelete
 	case DeleteMirror:
@@ -134,12 +136,33 @@ func (g Global) DeletePolicy() DeletePolicy {
 	}
 }
 
+// DeletePolicy returns the parsed global delete policy (defaults to "ignore").
+func (g Global) DeletePolicy() DeletePolicy {
+	return parseDeletePolicy(g.DeletePolicyStr)
+}
+
 // QuarantineRetention returns the quarantine retention in days (default 30).
 func (g Global) QuarantineRetention() int {
 	if g.QuarantineDays <= 0 {
 		return 30
 	}
 	return g.QuarantineDays
+}
+
+// DeletePolicy returns the per-mirror delete policy, falling back to global.
+func (p Project) DeletePolicy(global *Global) DeletePolicy {
+	if p.DeletePolicyStr != "" {
+		return parseDeletePolicy(p.DeletePolicyStr)
+	}
+	return global.DeletePolicy()
+}
+
+// QuarantineRetention returns the per-mirror quarantine retention, falling back to global.
+func (p Project) QuarantineRetention(global *Global) int {
+	if p.QuarantineDays > 0 {
+		return p.QuarantineDays
+	}
+	return global.QuarantineRetention()
 }
 
 // VerifyInterval returns the periodic verify interval (default 6 hours, 0 = disabled).
@@ -255,6 +278,16 @@ func (g *Global) Validate() error {
 		}
 		if !info.IsDir() {
 			return fmt.Errorf("mirror %q: local_path %q is not a directory", p.Name, p.LocalPath)
+		}
+
+		// Validate per-mirror delete policy if set
+		if p.DeletePolicyStr != "" {
+			switch DeletePolicy(p.DeletePolicyStr) {
+			case DeleteIgnore, DeleteDelete, DeleteMirror, DeleteQuarantine:
+				// valid
+			default:
+				return fmt.Errorf("mirror %q: invalid delete_policy %q (must be ignore, delete, or quarantine)", p.Name, p.DeletePolicyStr)
+			}
 		}
 
 		// Apply defaults (DebounceSec 0 = dynamic debounce, don't override)

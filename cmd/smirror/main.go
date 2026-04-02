@@ -36,7 +36,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.4.1-dev"
+var version = "0.5.0"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -277,10 +277,17 @@ func cmdStart(configPath string, args []string) {
 	// before acquiring lock or starting any services.
 	if errs := preflight(cfg); len(errs) > 0 {
 		fmt.Fprintln(os.Stderr, "Pre-flight checks failed:")
+		allRclone := true
 		for _, e := range errs {
 			fmt.Fprintf(os.Stderr, "  • %s\n", e)
+			if !strings.HasPrefix(e, "rclone:") {
+				allRclone = false
+			}
 		}
-		os.Exit(1)
+		if allRclone {
+			os.Exit(ExitRcloneError)
+		}
+		os.Exit(ExitError)
 	}
 
 	// Acquire single-instance lock (in same dir as state DB)
@@ -891,7 +898,7 @@ func cmdTestMirrors(configPath string, args []string) {
 	}
 
 	if failed > 0 || totalDrift > 0 {
-		os.Exit(1)
+		os.Exit(ExitRcloneError)
 	}
 }
 

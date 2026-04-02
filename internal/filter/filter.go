@@ -97,6 +97,22 @@ func (e *Engine) loadProjectIgnore() error {
 		}
 	}
 
+	// Lint: warn about unanchored negation patterns that match at any depth.
+	// Patterns like !hooks/* will match hooks/ directories anywhere in the tree
+	// (including .git/hooks/, node_modules/.cache/hooks/, etc.).
+	// Anchored patterns like !/hooks/* only match at the project root.
+	for _, rule := range e.projectRules {
+		if strings.HasPrefix(rule, "!") && !strings.HasPrefix(rule, "!/") {
+			pattern := rule[1:]
+			if !strings.Contains(pattern, "/") || strings.HasSuffix(pattern, "/") {
+				slog.Warn("unanchored negation pattern matches at any directory depth",
+					"syncignore", e.syncIgnorePath,
+					"pattern", rule,
+					"hint", "use !/"+pattern+" to anchor to project root")
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -204,16 +220,42 @@ func (e *Engine) EffectiveRules() []string {
 // highest priority. Reversing this combined order gives correct rclone
 // semantics: the highest-priority rule (last in gitignore) becomes the
 // first match in rclone (SM-037).
+//
+// Global directory exclusions (e.g., .git/, node_modules/) are hoisted to the
+// top of the filter file so they cannot be overridden by unanchored project
+// negation patterns (e.g., !hooks/*). This enforces gitignore's excluded-parent
+// constraint: once a directory is excluded, files inside it cannot be re-included
+// by patterns that don't explicitly negate the directory itself.
+// File-pattern exclusions (e.g., *.log) are NOT hoisted, so project negation
+// (e.g., !important.log) can still override them as intended.
 func (e *Engine) GenerateRcloneFilterFile() (string, error) {
 	e.mu.RLock()
 
-	// Build combined rules in gitignore order (global first, project second)
+	// Separate global directory exclusions (to hoist) from other global rules
+	var globalDirExcludes []string
+	var otherGlobalRules []string
+	for _, r := range e.globalRules {
+		if strings.HasSuffix(r, "/") && !strings.HasPrefix(r, "!") {
+			globalDirExcludes = append(globalDirExcludes, r)
+		} else {
+			otherGlobalRules = append(otherGlobalRules, r)
+		}
+	}
+
+	// Build combined rules WITHOUT global dir excludes (they go to the top)
 	var combined []string
-	combined = append(combined, e.globalRules...)
+	combined = append(combined, otherGlobalRules...)
 	combined = append(combined, e.projectRules...)
 
 	// Reverse so last-match-wins becomes first-match-wins
 	var lines []string
+
+	// Hoist global directory exclusions at the top (highest priority).
+	// These cannot be overridden by project negation patterns.
+	for _, d := range globalDirExcludes {
+		lines = append(lines, toRcloneFilter(d))
+	}
+
 	for i := len(combined) - 1; i >= 0; i-- {
 		lines = append(lines, toRcloneFilter(combined[i]))
 	}

@@ -1,6 +1,7 @@
 package filter
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -617,6 +618,207 @@ func TestToRcloneFilter_WhitespaceOnly(t *testing.T) {
 	if result != "-" && result != "- " {
 		// After TrimSpace, pattern is "", so "- " + "" = "- "
 		t.Logf("whitespace pattern produces: %q", result)
+	}
+}
+
+// =============================================================================
+// Excluded-parent constraint: global dir exclusions block unanchored negations
+// =============================================================================
+
+// Global .git/ exclusion must block unanchored !hooks/* from including .git/hooks/ files
+// in the rclone filter. This is the bug that caused .git/hooks/*.sample orphans.
+func TestRcloneFilter_GlobalDirExcludeBlocksUnanchoredNegation(t *testing.T) {
+	dir := t.TempDir()
+	ignorePath := filepath.Join(dir, ".syncignore")
+	os.WriteFile(ignorePath, []byte("*\n!hooks/\n!hooks/*\n"), 0644)
+
+	fe, err := New([]string{".git/", "node_modules/"}, ignorePath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	filterFile, err := fe.GenerateRcloneFilterFile()
+	if err != nil {
+		t.Fatalf("GenerateRcloneFilterFile: %v", err)
+	}
+	defer os.Remove(filterFile)
+
+	data, _ := os.ReadFile(filterFile)
+	content := string(data)
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+
+	// .git/** must appear BEFORE + hooks/* in the rclone filter
+	gitExcludeIdx := -1
+	hooksIncludeIdx := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "- .git/**" {
+			gitExcludeIdx = i
+		}
+		if trimmed == "+ hooks/*" {
+			hooksIncludeIdx = i
+		}
+	}
+
+	if gitExcludeIdx < 0 {
+		t.Fatalf("missing '- .git/**' in filter file:\n%s", content)
+	}
+	if hooksIncludeIdx < 0 {
+		t.Fatalf("missing '+ hooks/*' in filter file:\n%s", content)
+	}
+	if gitExcludeIdx > hooksIncludeIdx {
+		t.Errorf("EXCLUDED-PARENT BUG: '- .git/**' (line %d) appears after '+ hooks/*' (line %d).\n"+
+			"rclone would include .git/hooks/ files. Filter file:\n%s",
+			gitExcludeIdx, hooksIncludeIdx, content)
+	}
+}
+
+// Anchored negation !/hooks/* should still work — it only matches root-level hooks/,
+// not .git/hooks/, so the global .git/ exclusion doesn't conflict.
+func TestRcloneFilter_GlobalDirExcludeDoesNotBlockAnchoredNegation(t *testing.T) {
+	dir := t.TempDir()
+	ignorePath := filepath.Join(dir, ".syncignore")
+	os.WriteFile(ignorePath, []byte("*\n!/hooks/\n!/hooks/*\n"), 0644)
+
+	fe, err := New([]string{".git/"}, ignorePath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	filterFile, err := fe.GenerateRcloneFilterFile()
+	if err != nil {
+		t.Fatalf("GenerateRcloneFilterFile: %v", err)
+	}
+	defer os.Remove(filterFile)
+
+	data, _ := os.ReadFile(filterFile)
+	content := string(data)
+
+	// /hooks/* is anchored — should appear as include
+	if !strings.Contains(content, "+ /hooks/*") {
+		t.Errorf("expected anchored '+ /hooks/*' in filter, got:\n%s", content)
+	}
+	// .git/** should also be present (hoisted)
+	if !strings.Contains(content, "- .git/**") {
+		t.Errorf("expected '- .git/**' in filter, got:\n%s", content)
+	}
+}
+
+// File-pattern exclusions (*.log) should still be overridable by project negation
+func TestRcloneFilter_GlobalFileExcludeStillOverridableByNegation(t *testing.T) {
+	dir := t.TempDir()
+	ignorePath := filepath.Join(dir, ".syncignore")
+	os.WriteFile(ignorePath, []byte("!important.log\n"), 0644)
+
+	fe, err := New([]string{"*.log", ".git/"}, ignorePath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	filterFile, err := fe.GenerateRcloneFilterFile()
+	if err != nil {
+		t.Fatalf("GenerateRcloneFilterFile: %v", err)
+	}
+	defer os.Remove(filterFile)
+
+	data, _ := os.ReadFile(filterFile)
+	content := string(data)
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+
+	// + important.log must come before - *.log (so project negation overrides global)
+	includeIdx := -1
+	excludeIdx := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "+ important.log" {
+			includeIdx = i
+		}
+		if trimmed == "- *.log" {
+			excludeIdx = i
+		}
+	}
+
+	if includeIdx < 0 {
+		t.Fatalf("missing '+ important.log' in filter:\n%s", content)
+	}
+	if excludeIdx < 0 {
+		t.Fatalf("missing '- *.log' in filter:\n%s", content)
+	}
+	if includeIdx > excludeIdx {
+		t.Errorf("project negation '+ important.log' (line %d) should come before '- *.log' (line %d).\n"+
+			"Filter file:\n%s", includeIdx, excludeIdx, content)
+	}
+
+	// .git/** should be hoisted to top (before both)
+	gitIdx := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "- .git/**" {
+			gitIdx = i
+			break
+		}
+	}
+	if gitIdx < 0 || gitIdx > includeIdx {
+		t.Errorf("hoisted '- .git/**' should be at top of filter, got index %d (include at %d):\n%s",
+			gitIdx, includeIdx, content)
+	}
+}
+
+// =============================================================================
+// Lint warning: unanchored negation patterns
+// =============================================================================
+
+func TestLintWarning_UnanchoredNegation(t *testing.T) {
+	dir := t.TempDir()
+	ignorePath := filepath.Join(dir, ".syncignore")
+	// Mix of anchored and unanchored negation patterns
+	os.WriteFile(ignorePath, []byte("*\n!hooks/\n!/settings.json\n!.gitignore\n"), 0644)
+
+	// Capture slog output
+	var buf strings.Builder
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(oldLogger)
+
+	_, err := New(nil, ignorePath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Unanchored patterns should trigger warnings
+	if !strings.Contains(output, "!hooks/") {
+		t.Errorf("expected warning for unanchored '!hooks/', got:\n%s", output)
+	}
+	if !strings.Contains(output, "!.gitignore") {
+		t.Errorf("expected warning for unanchored '!.gitignore', got:\n%s", output)
+	}
+
+	// Anchored pattern should NOT trigger warning
+	if strings.Contains(output, "!/settings.json") {
+		t.Errorf("should NOT warn for anchored '!/settings.json', got:\n%s", output)
+	}
+}
+
+func TestLintWarning_NoWarningWhenAllAnchored(t *testing.T) {
+	dir := t.TempDir()
+	ignorePath := filepath.Join(dir, ".syncignore")
+	os.WriteFile(ignorePath, []byte("*\n!/hooks/\n!/hooks/*\n!/.gitignore\n"), 0644)
+
+	var buf strings.Builder
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	oldLogger := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(oldLogger)
+
+	_, err := New(nil, ignorePath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	if strings.Contains(buf.String(), "unanchored") {
+		t.Errorf("should NOT warn when all patterns are anchored, got:\n%s", buf.String())
 	}
 }
 

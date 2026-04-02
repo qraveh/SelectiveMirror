@@ -322,10 +322,12 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 	start := time.Now()
 	exitCode := e.runRclone(ctx, args)
 
-	// FR-SYNC-16: Retry once on transient failure (exit code 1 = general error).
-	// Don't retry: exit 3 (dir not found), exit 9 (cancelled), negative (timeout/exec failure).
-	if exitCode == 1 {
-		e.log.Info("transient failure, retrying once", "project", proj.Name, "path", relPath)
+	// FR-SYNC-16: Retry once on transient failure.
+	// Exit 1 = general error (often transient network), exit 5 = temporary error (rclone docs:
+	// "more retries might fix it" — API rate limits, server-side throttling).
+	// Don't retry: exit 3 (dir not found), exit 9 (no transfer), negative (timeout/exec failure).
+	if exitCode == 1 || exitCode == 5 {
+		e.log.Info("transient failure, retrying once", "project", proj.Name, "path", relPath, "exit", exitCode)
 		time.Sleep(2 * time.Second)
 		exitCode = e.runRclone(ctx, args)
 	}
@@ -431,7 +433,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 	// including deleting remote-only files (orphans from WSL renames, etc.).
 	// Use "copy" otherwise — upload-only, safe default.
 	verb := "copy"
-	if e.cfg.DeletePolicy() == config.DeleteDelete {
+	if proj.DeletePolicy(e.cfg) == config.DeleteDelete {
 		verb = "sync"
 	}
 	args := []string{verb, proj.LocalPath, proj.Remote, "--checksum", "--filter-from", filterFile}
@@ -460,7 +462,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 // of the configured policy. This is used for rename cleanup: when a file is
 // renamed, the old remote path is an orphan that must be removed.
 func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relPath string, force bool) {
-	policy := e.cfg.DeletePolicy()
+	policy := proj.DeletePolicy(e.cfg)
 	if force {
 		policy = config.DeleteDelete
 	}
@@ -554,7 +556,7 @@ func (e *Engine) deleteFlags(proj config.Project) []string {
 // (which fails and retries for 30s, blocking the sync engine).
 func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPath string, force bool) {
 	start := time.Now()
-	policy := e.cfg.DeletePolicy()
+	policy := proj.DeletePolicy(e.cfg)
 	if force {
 		policy = config.DeleteDelete
 	}
@@ -890,14 +892,11 @@ func parseExpiredQuarantineEntries(entries []quarantineEntry, cutoff time.Time) 
 // retention period. Called during reconciliation when delete_policy=quarantine.
 // Returns the number of files purged.
 func (e *Engine) PurgeExpiredQuarantine(ctx context.Context, proj config.Project) int {
-	if e.cfg.DeletePolicy() != config.DeleteQuarantine {
+	if proj.DeletePolicy(e.cfg) != config.DeleteQuarantine {
 		return 0
 	}
 
-	retentionDays := e.cfg.QuarantineDays
-	if retentionDays <= 0 {
-		retentionDays = 30
-	}
+	retentionDays := proj.QuarantineRetention(e.cfg)
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 
 	// List quarantine directory via rclone lsjson
@@ -912,7 +911,16 @@ func (e *Engine) PurgeExpiredQuarantine(ctx context.Context, proj config.Project
 	cmd := exec.CommandContext(ctx, rclonePath, allArgs...)
 	out, err := cmd.Output()
 	if err != nil {
-		e.log.Debug("quarantine listing skipped (no .quarantine dir or error)", "project", proj.Name)
+		// Distinguish "no quarantine dir" (exit 3/4 = expected) from real errors
+		exitCode := -1
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+		if exitCode == 3 || exitCode == 4 {
+			e.log.Debug("quarantine listing skipped (no .quarantine dir)", "project", proj.Name)
+		} else {
+			e.log.Warn("quarantine listing failed, auto-purge skipped", "project", proj.Name, "exit", exitCode, "error", err)
+		}
 		return 0
 	}
 

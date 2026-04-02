@@ -226,6 +226,57 @@ func TestQuarantineRetention(t *testing.T) {
 	}
 }
 
+// --- FR-ASP-06: Per-mirror delete policy ---
+
+func TestProjectDeletePolicy_Override(t *testing.T) {
+	g := &Global{DeletePolicyStr: "ignore"}
+	p := Project{DeletePolicyStr: "delete"}
+	if got := p.DeletePolicy(g); got != DeleteDelete {
+		t.Errorf("expected per-mirror 'delete', got %q", got)
+	}
+}
+
+func TestProjectDeletePolicy_FallbackToGlobal(t *testing.T) {
+	g := &Global{DeletePolicyStr: "quarantine"}
+	p := Project{} // empty = use global
+	if got := p.DeletePolicy(g); got != DeleteQuarantine {
+		t.Errorf("expected global fallback 'quarantine', got %q", got)
+	}
+}
+
+func TestProjectDeletePolicy_MirrorDeprecation(t *testing.T) {
+	g := &Global{DeletePolicyStr: "ignore"}
+	p := Project{DeletePolicyStr: "mirror"}
+	if got := p.DeletePolicy(g); got != DeleteDelete {
+		t.Errorf("expected 'mirror' → 'delete', got %q", got)
+	}
+}
+
+func TestProjectDeletePolicy_InvalidFallsBack(t *testing.T) {
+	g := &Global{DeletePolicyStr: "quarantine"}
+	p := Project{DeletePolicyStr: "bogus"}
+	// Invalid per-mirror value falls to parseDeletePolicy default (ignore), not global
+	if got := p.DeletePolicy(g); got != DeleteIgnore {
+		t.Errorf("expected invalid → 'ignore', got %q", got)
+	}
+}
+
+func TestProjectQuarantineRetention_Override(t *testing.T) {
+	g := &Global{QuarantineDays: 30}
+	p := Project{QuarantineDays: 7}
+	if got := p.QuarantineRetention(g); got != 7 {
+		t.Errorf("expected per-mirror 7, got %d", got)
+	}
+}
+
+func TestProjectQuarantineRetention_FallbackToGlobal(t *testing.T) {
+	g := &Global{QuarantineDays: 14}
+	p := Project{}
+	if got := p.QuarantineRetention(g); got != 14 {
+		t.Errorf("expected global 14, got %d", got)
+	}
+}
+
 func TestFindProject(t *testing.T) {
 	g := &Global{
 		Projects: []Project{

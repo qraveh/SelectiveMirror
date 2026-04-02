@@ -13,6 +13,8 @@ mirrors:
   #   local_path: C:\Projects\Another
   #   remote: "s3:my-bucket/another"
   #   syncignore_path: ""           # Override .syncignore location (default: <local_path>/.syncignore)
+  #   delete_policy: ""             # Per-mirror override: ignore, delete, or quarantine (empty = use global)
+  #   quarantine_days: 0            # Per-mirror quarantine retention (0 = use global)
 
 # Patterns applied to ALL mirrors (in addition to per-mirror .syncignore)
 # Uses .gitignore syntax
@@ -32,6 +34,7 @@ global_excludes:
   - "~$*"          # Office temp files
   - "*.tmp"
   - ".~lock.*"     # LibreOffice lock files
+  - "*~"           # Backup files (editors, OS file replacement)
 
 # State and log locations (default: ~/.selectivemirror/)
 # state_db: ~/.selectivemirror/state.db

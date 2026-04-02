@@ -321,21 +321,109 @@ dist/              # Exclude distribution output
 
 ### Pattern Rules
 
-| Pattern | Matches |
-|---|---|
-| `*.ext` | Files with the given extension in any directory |
-| `dirname/` | Directories with that name (trailing slash required) |
-| `path/to/file` | A specific file relative to the project root |
-| `!pattern` | Negation: re-include a previously excluded pattern |
-| `**/pattern` | Match in any directory depth |
+| Pattern | Matches | Scope |
+|---|---|---|
+| `*.ext` | Files ending in `.ext` | Any directory (unanchored) |
+| `dirname/` | Directories named `dirname` | Any depth (unanchored) |
+| `/dirname/` | Directory named `dirname` at root only | Root only (anchored) |
+| `path/to/file` | A specific file (patterns with `/` are anchored) | Relative to root |
+| `!pattern` | Negation: re-include a previously excluded pattern | Same scope as the pattern |
+| `**/pattern` | Match in any directory depth (explicit) | Any depth |
+| `*~` | Backup files (editor/OS artifacts) | Any directory |
+
+### Anchored vs. Unanchored Patterns
+
+This is the most important concept in `.syncignore`. A pattern is **anchored** (matches only at the project root) when it starts with `/`. Without the leading `/`, it matches at **any directory depth**.
+
+```
+# UNANCHORED -- matches logs/ at ANY depth:
+#   logs/, src/logs/, deep/nested/logs/
+logs/
+
+# ANCHORED -- matches logs/ only at the project root:
+/logs/
+```
+
+This distinction applies equally to negation patterns:
+
+```
+# UNANCHORED negation -- re-includes ANY file named config.yaml:
+#   config.yaml, src/config.yaml, deep/nested/config.yaml
+!config.yaml
+
+# ANCHORED negation -- re-includes config.yaml only at root:
+!/config.yaml
+```
+
+**Rule of thumb**: When writing negation patterns (`!`), always ask "do I want this to match at any depth, or only at the root?" If only at the root, use a leading `/`.
 
 ### Negation Example
 
 ```
 # Exclude all log files...
 *.log
-# ...except the important one
+# ...except the important one AT THE ROOT
+!/important.log
+```
+
+### Whitelist Strategy (Include-Only)
+
+To sync only specific files, start with `*` to exclude everything, then use anchored negation patterns to selectively include:
+
+```
+# Exclude everything by default
+*
+
+# Include only these root-level items:
+!/src/
+!/src/**
+!/README.md
+!/config.yaml
+```
+
+**Common mistake**: Using unanchored negation in a whitelist. The pattern `!hooks/` will match ANY directory named `hooks` at any depth, including `.git/hooks/` or `node_modules/.cache/hooks/`. Always anchor with `/` when using a whitelist strategy:
+
+```
+# WRONG -- includes hooks/ directories inside .git/, node_modules/, etc.
+!hooks/
+!hooks/*
+
+# CORRECT -- includes only the root-level hooks/ directory
+!/hooks/
+!/hooks/*
+```
+
+### Interaction with global_excludes
+
+Patterns in `global_excludes` (from `config.yaml`) are evaluated **before** per-mirror `.syncignore` patterns. Per-mirror negation can override global excludes:
+
+```yaml
+# config.yaml
+global_excludes:
+  - "*.log"
+```
+
+```
+# .syncignore -- override global exclude for this mirror
 !important.log
+```
+
+The combined filter uses last-match-wins semantics: the most specific matching rule wins, regardless of which file it came from.
+
+### Debugging Filters
+
+Use `smirror explain` to check why a specific file is included or excluded:
+
+```
+smirror explain MyProject path/to/file.txt
+```
+
+This shows the matched rule and filter status. Use it whenever a file is unexpectedly syncing or not syncing.
+
+Use `smirror list-filters` to see all effective rules (global + per-mirror combined):
+
+```
+smirror list-filters MyProject
 ```
 
 ## File Location
@@ -364,7 +452,7 @@ Hot reload works because the watcher monitors `.syncignore` files alongside all 
 
 ## Relationship to rclone Filters
 
-Internally, `.syncignore` patterns are translated to rclone filter syntax when generating temporary filter files for full-project syncs. The translation rules are:
+Internally, `.syncignore` patterns are translated to rclone filter syntax for full-project syncs:
 
 | .syncignore | rclone filter |
 |---|---|
@@ -375,6 +463,8 @@ Internally, `.syncignore` patterns are translated to rclone filter syntax when g
 A final `+ **` line is appended to include everything not explicitly excluded.
 
 For single-file syncs (`copyto`), the filter is evaluated in-process using the `go-gitignore` library -- no temporary file is created, and no `--filter-from` flag is passed to rclone.
+
+**Note**: gitignore uses last-match-wins; rclone uses first-match-wins. SelectiveMirror reverses the rule order when generating rclone filters to preserve correct semantics. If you see unexpected behavior during full-project syncs, use `smirror explain` to verify the filter evaluation matches your expectations.
 
 
 # 5. Command Reference
