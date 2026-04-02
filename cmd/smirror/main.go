@@ -36,7 +36,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.3.16-dev"
+var version = "0.3.17-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1715,8 +1715,12 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	reconcileInterval := cfg.ReconcileInterval()
-	reconcileTicker := time.NewTicker(reconcileInterval)
+	baseReconcileInterval := cfg.ReconcileInterval()
+	currentReconcileInterval := baseReconcileInterval
+	maxReconcileInterval := 30 * time.Minute
+	cleanCycleCount := 0
+	cleanCyclesBeforeDoubling := 3
+	reconcileTicker := time.NewTicker(currentReconcileInterval)
 	defer reconcileTicker.Stop()
 
 	// Auto-verify ticker (default 6h; 0 = disabled)
@@ -1738,12 +1742,48 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 			// Periodic reconciliation: catch changes invisible to fsnotify
 			// (WSL operations, network drive edits, external tools).
 			if syncEngine != nil {
-				slog.Info("periodic reconciliation")
+				slog.Info("periodic reconciliation", "interval", currentReconcileInterval)
 				for _, proj := range cfg.Projects {
 					if ctx.Err() != nil {
 						return
 					}
 					syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
+				}
+
+				// FR-SYNC-09: Adaptive reconciliation interval.
+				// Check drift via lightweight verify. If clean for N consecutive
+				// cycles, double the interval (cap at 30min). Reset on any drift.
+				driftFound := false
+				for _, proj := range cfg.Projects {
+					if verifyProjectQuiet(cfg, proj, filters[proj.Name]) > 0 {
+						driftFound = true
+						break
+					}
+				}
+
+				if driftFound {
+					cleanCycleCount = 0
+					if currentReconcileInterval != baseReconcileInterval {
+						currentReconcileInterval = baseReconcileInterval
+						reconcileTicker.Reset(currentReconcileInterval)
+						slog.Info("reconciliation interval reset (drift detected)", "interval", currentReconcileInterval)
+					}
+				} else {
+					cleanCycleCount++
+					if cleanCycleCount >= cleanCyclesBeforeDoubling && currentReconcileInterval < maxReconcileInterval {
+						currentReconcileInterval *= 2
+						if currentReconcileInterval > maxReconcileInterval {
+							currentReconcileInterval = maxReconcileInterval
+						}
+						reconcileTicker.Reset(currentReconcileInterval)
+						cleanCycleCount = 0
+						slog.Info("reconciliation interval extended (no drift)", "interval", currentReconcileInterval)
+					}
+				}
+
+				// Prune old sync logs (30-day retention)
+				if pruned, err := st.PruneOldLogs(30); err == nil && pruned > 0 {
+					slog.Info("sync log pruned", "deleted", pruned)
 				}
 			}
 
