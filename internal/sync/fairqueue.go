@@ -26,16 +26,18 @@ type circuitState struct {
 // It replaces the plain chan Task used previously, which could not inspect
 // or reorder queued items.
 type FairQueue struct {
-	mu           gosync.Mutex
-	cond         *gosync.Cond
-	items        []Task
-	pending      map[string]bool          // tracks which keys are in items (for O(1) membership check)
-	cooldowns    map[string]time.Time     // key → earliest allowed dequeue time
-	circuits     map[string]*circuitState // mirror name → failure state
-	cooldownDur  time.Duration            // base cooldown (used by SetCooldown; legacy)
-	closed       bool
-	maxSize      int // 0 = unlimited
-	eventHistory map[string][]time.Time   // key → recent event timestamps (for adaptive cooldown)
+	mu             gosync.Mutex
+	cond           *gosync.Cond
+	items          []Task
+	pending        map[string]bool          // tracks which keys are in items (for O(1) membership check)
+	cooldowns      map[string]time.Time     // key → earliest allowed dequeue time
+	circuits       map[string]*circuitState // mirror name → failure state
+	cooldownDur    time.Duration            // base cooldown (used by SetCooldown; legacy)
+	closed         bool
+	maxSize        int // 0 = unlimited (dedup is the natural bound)
+	eventHistory   map[string][]time.Time   // key → recent event timestamps (for adaptive cooldown)
+	onOverflow     func()                   // called when queue exceeds warning threshold
+	overflowFired  bool                     // debounce: only fire once until queue drains
 }
 
 // NewFairQueue creates a FairQueue with an optional max size and cooldown duration.
@@ -60,6 +62,15 @@ func NewFairQueue(maxSize int, cooldownDur time.Duration) *FairQueue {
 	}
 	q.cond = gosync.NewCond(&q.mu)
 	return q
+}
+
+// SetOnOverflow registers a callback invoked when queue depth exceeds the
+// warning threshold (50K items). The callback fires once and resets when the
+// queue drains below 25K. Used to trigger accelerated reconciliation.
+func (q *FairQueue) SetOnOverflow(fn func()) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.onOverflow = fn
 }
 
 // queueKey returns the deduplication key for a task.
@@ -91,18 +102,27 @@ func (q *FairQueue) Enqueue(task Task) {
 		q.removeByKey(key)
 	}
 
-	// Max size enforcement: drop with warning if at capacity
-	if q.maxSize > 0 && len(q.items) >= q.maxSize {
-		// Already at capacity and couldn't dedup — drop the event
-		q.mu.Unlock()
-		q.mu.Lock()
-		return
-	}
-
 	q.items = append(q.items, task)
 	if key != "" {
 		q.pending[key] = true
 	}
+
+	// FR-QUEUE-08/10: No artificial limit — dedup is the natural bound.
+	// Log warning and fire overflow callback at 50K depth.
+	const overflowThreshold = 50000
+	const drainThreshold = 25000
+	depth := len(q.items)
+	if depth >= overflowThreshold && !q.overflowFired {
+		slog.Warn("queue depth exceeds warning threshold", "depth", depth)
+		q.overflowFired = true
+		if q.onOverflow != nil {
+			fn := q.onOverflow
+			go fn() // fire outside lock to prevent deadlock
+		}
+	} else if depth < drainThreshold && q.overflowFired {
+		q.overflowFired = false // reset when queue drains
+	}
+
 	q.cond.Signal()
 }
 

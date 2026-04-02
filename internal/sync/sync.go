@@ -72,7 +72,7 @@ func NewEngine(cfg *config.Global, st *state.Store, filters map[string]*filter.E
 		state:   st,
 		filters: filters,
 		metrics: m,
-		Queue:   NewFairQueue(10000, 30*time.Second),
+		Queue:   NewFairQueue(0, 30*time.Second),
 		log:     slog.Default().With("component", "sync"),
 	}
 	e.RunRcloneFunc = e.defaultRunRclone
