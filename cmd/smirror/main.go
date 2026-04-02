@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.22-dev"
+var version = "0.7.23-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1219,7 +1219,10 @@ func cmdExplain(configPath string, args []string) {
 				}
 				fmt.Println()
 			} else {
-				fmt.Printf("\nSync state: never synced\n")
+				fmt.Printf("\nSync state: no per-file record in state DB\n")
+				if !excluded {
+					fmt.Printf("  (file may have been synced by batch reconciliation, which does not record per-file state)\n")
+				}
 			}
 		}
 	}
