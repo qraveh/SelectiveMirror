@@ -26,6 +26,11 @@ type Manager struct {
 	deletePolicy config.DeletePolicy
 	log          *slog.Logger
 
+	// OnFilterChange is called when a .syncignore reload changes filter rules.
+	// The callback receives the project whose filter changed. Used by the sync engine
+	// to auto-clean LEAKs (files excluded by new rules but still on remote).
+	OnFilterChange func(proj config.Project)
+
 	// Health monitoring
 	lastEventTime   time.Time
 	lastEventMu     gosync.Mutex
@@ -675,11 +680,16 @@ func (m *Manager) reloadFilter(pw *projectWatcher) {
 	// Trigger full project reconciliation so that:
 	// - Newly included files get synced
 	// - Rclone filter file reflects updated rules
-	// Enqueue full-project reconciliation to apply updated filter rules.
 	pw.queue.Enqueue(msync.Task{
 		Project: pw.project,
 		RelPath: "", // empty = full project sync
 	})
+
+	// Clean LEAKs: files excluded by the new rules but still on remote.
+	// This runs asynchronously so it doesn't block the event loop.
+	if m.OnFilterChange != nil {
+		go m.OnFilterChange(pw.project)
+	}
 }
 
 // timerCleanupLoop waits for context cancellation and cleans up pending static-mode timers.

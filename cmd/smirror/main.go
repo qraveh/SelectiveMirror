@@ -356,6 +356,18 @@ func cmdStart(configPath string, args []string) {
 		os.Exit(1)
 	}
 
+	// Auto-clean LEAKs when .syncignore filter rules change.
+	// LEAKs are files excluded by current filters but still on remote —
+	// distinct from delete_policy which controls user-deleted files.
+	watchMgr.OnFilterChange = func(proj config.Project) {
+		cleaned, err := syncEngine.CleanupLeaks(context.Background(), proj)
+		if err != nil {
+			slog.Warn("leak cleanup after filter change failed", "mirror", proj.Name, "error", err)
+		} else if cleaned > 0 {
+			slog.Info("leak cleanup after filter change", "mirror", proj.Name, "cleaned", cleaned)
+		}
+	}
+
 	// Setup context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -2020,6 +2032,15 @@ func serviceMain() {
 		if err != nil {
 			slog.Error("watcher creation failed", "error", err)
 			return
+		}
+
+		watchMgr.OnFilterChange = func(proj config.Project) {
+			cleaned, cleanErr := syncEngine.CleanupLeaks(context.Background(), proj)
+			if cleanErr != nil {
+				slog.Warn("leak cleanup after filter change failed", "mirror", proj.Name, "error", cleanErr)
+			} else if cleaned > 0 {
+				slog.Info("leak cleanup after filter change", "mirror", proj.Name, "cleaned", cleaned)
+			}
 		}
 
 		var ctx context.Context

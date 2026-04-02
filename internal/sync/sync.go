@@ -834,6 +834,39 @@ func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, e
 	return deleted, nil
 }
 
+// CleanupLeaks removes LEAK files (excluded by filter but present on remote) for a project.
+// Unlike CleanupGhosts, this only removes LEAKs — not ORPHANs. LEAKs represent files that
+// the user explicitly excluded via .syncignore; they should be cleaned regardless of
+// delete_policy (which controls user-deleted files, a different intent).
+// Called automatically when .syncignore filter rules change.
+func (e *Engine) CleanupLeaks(ctx context.Context, proj config.Project) (int, error) {
+	ghosts, err := e.findGhosts(proj)
+	if err != nil {
+		return 0, err
+	}
+
+	deleted := 0
+	for _, g := range ghosts {
+		if !g.IsLeak {
+			continue // skip ORPHANs — those respect delete_policy
+		}
+		remotePath := proj.Remote + "/" + g.Path
+		args := []string{"deletefile", remotePath}
+		args = append(args, e.deleteFlags(proj)...)
+
+		exitCode := e.runRclone(ctx, args)
+		if exitCode == 0 {
+			e.log.Info("leak cleaned (filter exclusion)", "project", proj.Name, "path", g.Path)
+			e.state.LogAction(proj.Name, g.Path, "leak_cleanup", "filter_change", 0)
+			e.state.DeleteFileState(proj.Name, g.Path)
+			deleted++
+		} else {
+			e.log.Warn("leak cleanup failed", "project", proj.Name, "path", g.Path, "exit", exitCode)
+		}
+	}
+	return deleted, nil
+}
+
 // DryRunCleanup shows what ghost files would be cleaned up for a project.
 // Returns the number of ghost files found.
 func (e *Engine) DryRunCleanup(ctx context.Context, proj config.Project) (int, error) {

@@ -2271,6 +2271,75 @@ func TestCleanupGhosts_DeletesLeaks(t *testing.T) {
 	}
 }
 
+// --- SM-069: CleanupLeaks only removes LEAKs, not ORPHANs ---
+
+func TestCleanupLeaks_OnlyDeletesLeaks(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Two remote files: one LEAK (excluded), one ORPHAN (not excluded, just missing locally)
+	remoteFiles := []RemoteFile{
+		{Path: "results/test.log", Size: 500, IsDir: false}, // LEAK: excluded by *.log
+		{Path: "old-file.txt", Size: 100, IsDir: false},     // ORPHAN: not excluded, not local
+	}
+
+	var rcloneCalls [][]string
+	runner := func(_ context.Context, args []string) int {
+		rcloneCalls = append(rcloneCalls, args)
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilterWithExcludes(t, []string{"*.log"})
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupLeaks(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupLeaks: %v", err)
+	}
+	if cleaned != 1 {
+		t.Errorf("cleaned = %d, want 1 (only the LEAK)", cleaned)
+	}
+	if len(rcloneCalls) != 1 {
+		t.Fatalf("expected 1 rclone call (LEAK only), got %d", len(rcloneCalls))
+	}
+	if rcloneCalls[0][0] != "deletefile" {
+		t.Errorf("verb = %q, want 'deletefile'", rcloneCalls[0][0])
+	}
+	// The ORPHAN (old-file.txt) should NOT be deleted
+}
+
+func TestCleanupLeaks_NoLeaks(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Only an ORPHAN, no LEAKs
+	remoteFiles := []RemoteFile{
+		{Path: "orphan.txt", Size: 100, IsDir: false},
+	}
+
+	called := false
+	runner := func(_ context.Context, args []string) int {
+		called = true
+		return 0
+	}
+
+	e := testEngineWithRemoteLister(t, cfg, runner, remoteFiles)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	cleaned, err := e.CleanupLeaks(context.Background(), proj)
+	if err != nil {
+		t.Fatalf("CleanupLeaks: %v", err)
+	}
+	if cleaned != 0 {
+		t.Errorf("cleaned = %d, want 0 (no LEAKs)", cleaned)
+	}
+	if called {
+		t.Error("rclone should NOT be called when there are no LEAKs")
+	}
+}
+
 // TestCleanupGhosts_NoGhosts verifies zero cleanup when remote matches local.
 func TestCleanupGhosts_NoGhosts(t *testing.T) {
 	proj := testProject(t)
