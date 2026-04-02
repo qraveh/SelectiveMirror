@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.21-dev"
+var version = "0.7.22-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1085,16 +1085,65 @@ func cmdExplain(configPath string, args []string) {
 		fe, _ = filter.New(cfg.GlobalExcludes, "")
 	}
 
-	// Check exclusion
-	excluded := fe.IsExcluded(relPath)
+	// Detect whether the path is a directory (locally or by trailing slash)
+	localPath := filepath.Join(proj.LocalPath, filepath.FromSlash(relPath))
+	info, statErr := os.Stat(localPath)
+	isDir := (statErr == nil && info.IsDir()) || strings.HasSuffix(relPath, "/")
+
+	// For filter checking, directories need a trailing slash
+	filterPath := relPath
+	if isDir && !strings.HasSuffix(filterPath, "/") {
+		filterPath = filterPath + "/"
+	}
+
+	excluded := fe.IsExcluded(filterPath)
 	matchedRule := ""
 
 	fmt.Printf("=== Explain: %s / %s ===\n\n", projName, relPath)
 
+	// Detect filesystem object type
+	if statErr == nil {
+		linfo, lerr := os.Lstat(localPath)
+		if lerr == nil {
+			mode := linfo.Mode()
+			switch {
+			case mode&os.ModeSymlink != 0:
+				target, _ := os.Readlink(localPath)
+				if isDir {
+					fmt.Printf("Type: SYMLINK (directory) -> %s\n", target)
+				} else {
+					fmt.Printf("Type: SYMLINK (file) -> %s\n", target)
+				}
+			case isDir:
+				// Check for Windows reparse points (junctions, mount points)
+				if mode&os.ModeIrregular != 0 {
+					fmt.Printf("Type: JUNCTION/REPARSE POINT\n")
+				} else {
+					fmt.Printf("Type: DIRECTORY\n")
+				}
+			case mode&os.ModeNamedPipe != 0:
+				fmt.Printf("Type: NAMED PIPE (cannot sync)\n")
+			case mode&os.ModeSocket != 0:
+				fmt.Printf("Type: SOCKET (cannot sync)\n")
+			case mode&os.ModeDevice != 0:
+				fmt.Printf("Type: DEVICE (cannot sync)\n")
+			case mode&os.ModeCharDevice != 0:
+				fmt.Printf("Type: CHAR DEVICE (cannot sync)\n")
+			case mode&os.ModeIrregular != 0:
+				fmt.Printf("Type: IRREGULAR FILE (may not sync correctly)\n")
+			case mode.IsRegular():
+				// normal file — don't print type, it's the default
+			default:
+				fmt.Printf("Type: UNKNOWN (%s)\n", mode)
+			}
+		}
+	} else if isDir {
+		fmt.Printf("Type: DIRECTORY\n")
+	}
+
 	if excluded {
 		fmt.Printf("Status: EXCLUDED\n")
-		// Find which rule matched
-		matchedRule = findMatchingRule(fe, relPath)
+		matchedRule = findMatchingRule(fe, filterPath)
 		if matchedRule != "" {
 			fmt.Printf("Matched rule: %s\n", matchedRule)
 		}
@@ -1106,11 +1155,38 @@ func cmdExplain(configPath string, args []string) {
 	remotePath := proj.Remote + "/" + relPath
 	fmt.Printf("Remote path: %s\n", remotePath)
 
-	// Local file info
-	localPath := filepath.Join(proj.LocalPath, filepath.FromSlash(relPath))
-	info, err := os.Stat(localPath)
-	if err != nil {
-		fmt.Printf("Local file: does not exist (%v)\n", err)
+	// Local info
+	if statErr != nil {
+		fmt.Printf("Local path: does not exist (%v)\n", statErr)
+	} else if isDir {
+		fmt.Printf("Local path: %s\n", localPath)
+		fmt.Printf("  Modified: %s\n", info.ModTime().Local().Format(time.RFC3339))
+
+		// Count contents
+		entries, err := os.ReadDir(localPath)
+		if err == nil {
+			files, dirs := 0, 0
+			for _, e := range entries {
+				if e.IsDir() {
+					dirs++
+				} else {
+					files++
+				}
+			}
+			fmt.Printf("  Contents: %d files, %d subdirs\n", files, dirs)
+		}
+
+		// Check if any children are synced
+		st, err := state.Open(cfg.StateDB)
+		if err == nil {
+			defer st.Close()
+			syncedFiles, _ := st.GetFilesUnderDir(proj.Name, relPath)
+			if len(syncedFiles) > 0 {
+				fmt.Printf("  Synced children: %d files tracked in state DB\n", len(syncedFiles))
+			} else {
+				fmt.Printf("  Synced children: none\n")
+			}
+		}
 	} else {
 		fmt.Printf("Local file: %s\n", localPath)
 		fmt.Printf("  Size: %d bytes\n", info.Size())
@@ -1120,32 +1196,31 @@ func cmdExplain(configPath string, args []string) {
 			fmt.Printf("  WARNING: exceeds max file size (%dMB)\n", proj.MaxFileSizeMB)
 		}
 
-		// Compute current hash
 		hash, _, err := hashFile(localPath)
 		if err == nil {
 			fmt.Printf("  MD5: %s\n", hash)
 		}
-	}
 
-	// State DB info
-	st, err := state.Open(cfg.StateDB)
-	if err == nil {
-		defer st.Close()
-		fs, err := st.GetFileState(proj.Name, relPath)
-		if err == nil && fs != nil {
-			fmt.Printf("\nSync state:\n")
-			fmt.Printf("  Last synced: %s\n", fs.SyncedAt.Local().Format(time.RFC3339))
-			fmt.Printf("  Synced hash: %s\n", fs.LocalHash)
-			fmt.Printf("  Synced size: %d bytes\n", fs.FileSize)
-			fmt.Printf("  rclone exit: %d", fs.RcloneExit)
-			if fs.RcloneExit == 0 {
-				fmt.Printf(" (success)")
+		// State DB info
+		st, err := state.Open(cfg.StateDB)
+		if err == nil {
+			defer st.Close()
+			fs, err := st.GetFileState(proj.Name, relPath)
+			if err == nil && fs != nil {
+				fmt.Printf("\nSync state:\n")
+				fmt.Printf("  Last synced: %s\n", fs.SyncedAt.Local().Format(time.RFC3339))
+				fmt.Printf("  Synced hash: %s\n", fs.LocalHash)
+				fmt.Printf("  Synced size: %d bytes\n", fs.FileSize)
+				fmt.Printf("  rclone exit: %d", fs.RcloneExit)
+				if fs.RcloneExit == 0 {
+					fmt.Printf(" (success)")
+				} else {
+					fmt.Printf(" (FAILED)")
+				}
+				fmt.Println()
 			} else {
-				fmt.Printf(" (FAILED)")
+				fmt.Printf("\nSync state: never synced\n")
 			}
-			fmt.Println()
-		} else {
-			fmt.Printf("\nSync state: never synced\n")
 		}
 	}
 }
