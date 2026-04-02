@@ -590,7 +590,7 @@ func (m *Manager) handleRename(event fsnotify.Event) {
 func (m *Manager) queueFilesInDir(pw *projectWatcher, dirPath string) {
 	start := time.Now()
 	queued := 0
-	filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
+	if walkErr := filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -630,7 +630,9 @@ func (m *Manager) queueFilesInDir(pw *projectWatcher, dirPath string) {
 		})
 		queued++
 		return nil
-	})
+	}); walkErr != nil {
+		m.log.Warn("error walking new directory", "path", dirPath, "err", walkErr)
+	}
 	elapsed := time.Since(start)
 	if queued > 0 {
 		m.log.Debug("queued files from new/renamed dir", "path", dirPath, "files", queued, "ms", elapsed.Milliseconds())

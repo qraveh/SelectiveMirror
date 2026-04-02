@@ -36,7 +36,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.3.20-dev"
+var version = "0.4.0"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -294,7 +294,7 @@ func cmdStart(configPath string, args []string) {
 		}
 		os.Exit(ExitLockConflict)
 	}
-	defer lk.Release()
+	defer func() { _ = lk.Release() }()
 
 	// Setup logging (foreground: console + file)
 	rw, err := logging.Setup(cfg.LogLevel, cfg.LogFile, true)
@@ -393,7 +393,9 @@ func cmdStart(configPath string, args []string) {
 
 func cmdSyncNow(configPath string, args []string) {
 	cfg := loadConfig(configPath)
-	logging.Setup(cfg.LogLevel, "", true)
+	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
+	}
 
 	st, err := state.Open(cfg.StateDB)
 	if err != nil {
@@ -453,7 +455,9 @@ func cmdSyncNow(configPath string, args []string) {
 
 func cmdDryRun(configPath string, args []string) {
 	cfg := loadConfig(configPath)
-	logging.Setup(cfg.LogLevel, "", true)
+	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
+	}
 
 	st, err := state.Open(cfg.StateDB)
 	if err != nil {
@@ -1050,7 +1054,7 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 	leaksCounted := make(map[string]bool) // LEAKs found during local walk, to avoid double-counting in remote iteration
 	drift := 0
 
-	filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
+	if walkErr := filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -1100,7 +1104,9 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine) i
 		}
 
 		return nil
-	})
+	}); walkErr != nil {
+		fmt.Fprintf(os.Stderr, "  Warning: error walking %s: %v\n", proj.LocalPath, walkErr)
+	}
 
 	// Check for unexpected remote files (ORPHANs + LEAKs not already counted during local walk).
 	// LEAKs from excluded files that exist locally are caught during the local walk above.
@@ -1157,7 +1163,7 @@ func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engi
 	leaksCounted := make(map[string]bool) // avoid double-counting LEAKs (SM-053)
 	drift := 0
 
-	filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -1332,7 +1338,7 @@ func cmdReportBug(configPath string, args []string) {
 		fmt.Print(report)
 		fmt.Println("\n--- Opening browser ---")
 		url := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
-		exec.Command("cmd", "/c", "start", url).Start()
+		_ = exec.Command("cmd", "/c", "start", url).Start()
 		return
 	}
 
@@ -1349,7 +1355,9 @@ func cmdReportBug(configPath string, args []string) {
 
 func cmdStats(configPath string) {
 	cfg := loadConfig(configPath)
-	logging.Setup(cfg.LogLevel, "", true)
+	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
+	}
 	filters := buildFilters(cfg)
 
 	type category struct {
@@ -1400,7 +1408,7 @@ func cmdStats(configPath string) {
 			byCat: make(map[string]catCount),
 		}
 
-		filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -1645,7 +1653,7 @@ func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, fil
 
 		// Build set of local files (non-excluded, non-dir)
 		localFiles := make(map[string]bool)
-		filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, walkErr error) error {
+		_ = filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return nil
 			}
@@ -1955,7 +1963,7 @@ func serviceMain() {
 			}
 			return
 		}
-		defer lk.Release()
+		defer func() { _ = lk.Release() }()
 
 		rw, err := logging.Setup(cfg.LogLevel, cfg.LogFile, false)
 		if err != nil {

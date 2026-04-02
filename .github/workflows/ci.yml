@@ -32,6 +32,22 @@ jobs:
           go test -v ./internal/... -coverprofile=coverage.out -covermode=count
           go tool cover -func=coverage.out | findstr "total:"
 
+      - name: Coverage gate (fail if below 35%)
+        shell: pwsh
+        run: |
+          $line = go tool cover -func=coverage.out | Select-String "total:"
+          if ($line -match '(\d+\.\d+)%') {
+            $pct = [double]$Matches[1]
+            Write-Host "Coverage: ${pct}%"
+            if ($pct -lt 35.0) {
+              Write-Error "Coverage ${pct}% is below 35% threshold"
+              exit 1
+            }
+          } else {
+            Write-Error "Could not parse coverage"
+            exit 1
+          }
+
       - name: Race detection (CGO-free packages)
         run: |
           go test -race -v ./internal/filter/ ./internal/logging/ ./internal/lock/ ./internal/metrics/ ./internal/watcher/

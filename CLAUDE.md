@@ -158,6 +158,7 @@ powershell -ExecutionPolicy Bypass -File test\run_tests.ps1
 |------|-------|-----------|
 | Unit | All packages, no I/O | `go test ./internal/...` |
 | Local integration | Real watcher + local rclone remote | `go test ./test/ -tags integration` |
+| SLA smoke | Latency, integrity, throughput, memory | `powershell -ExecutionPolicy Bypass -File test\sla_smoke.ps1` |
 | Backend integration | Real Google Drive | `go test ./test/ -tags e2e` (manual) |
 
 ---

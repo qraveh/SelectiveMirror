@@ -755,7 +755,7 @@ func (e *Engine) findGhosts(proj config.Project) ([]GhostFile, error) {
 
 	// Build set of local non-excluded files
 	localFiles := make(map[string]bool)
-	filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, walkErr error) error {
+	if err := filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
@@ -773,7 +773,9 @@ func (e *Engine) findGhosts(proj config.Project) ([]GhostFile, error) {
 		}
 		localFiles[relPath] = true
 		return nil
-	})
+	}); err != nil {
+		return nil, fmt.Errorf("walking local path: %w", err)
+	}
 
 	var ghosts []GhostFile
 	for _, rf := range remoteFiles {

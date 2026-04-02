@@ -32,4 +32,4 @@ issues:
         - gosec
     - linters:
         - errcheck
-      text: "SetMeta|LogAction|Truncate|Seek|Sync|Rename|Disconnect|Sscanf|WriteFile|os\\.Remove"  # best-effort operations where error is logged or irrelevant
+      text: "SetMeta|LogAction|UpdateFileState|UpdateMtimeOnly|DeleteFileState|Truncate|Seek|Sync|Rename|Disconnect|Sscanf|WriteFile|os\\.Remove"  # best-effort operations where error is logged or irrelevant

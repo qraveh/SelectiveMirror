@@ -40,7 +40,7 @@ func lockFile(f *os.File) error {
 func unlockFile(f *os.File) {
 	var ol syscall.Overlapped
 	handle := syscall.Handle(f.Fd())
-	procUnlockFileEx.Call(
+	_, _, _ = procUnlockFileEx.Call(
 		uintptr(handle),
 		0,
 		1, 0,
