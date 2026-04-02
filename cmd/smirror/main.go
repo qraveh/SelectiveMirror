@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.10-dev"
+var version = "0.7.11-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
