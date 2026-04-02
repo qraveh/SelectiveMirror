@@ -3,12 +3,15 @@ package watcher
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/qraveh/SelectiveMirror/internal/config"
+	"github.com/qraveh/SelectiveMirror/internal/filter"
 	msync "github.com/qraveh/SelectiveMirror/internal/sync"
 )
 
@@ -767,4 +770,177 @@ func TestTrackDeleteBurst_WindowExpiry_ResetsCounter(t *testing.T) {
 		t.Errorf("expected deleteCount=1 after window expiry, got %d", pw.deleteCount)
 	}
 	pw.mu.Unlock()
+}
+
+// --- Extracted helper tests (helpers.go) ---
+
+func TestClassifyEvent_Create(t *testing.T) {
+	tests := []struct {
+		name   string
+		op     fsnotify.Op
+		expect EventAction
+	}{
+		{"Create", fsnotify.Create, ActionSyncFile},
+		{"Write", fsnotify.Write, ActionSyncFile},
+		{"Remove", fsnotify.Remove, ActionDeleteFile},
+		{"Rename", fsnotify.Rename, ActionDeleteFile},
+		{"Chmod", fsnotify.Chmod, ActionIgnore},
+		{"Create|Write", fsnotify.Create | fsnotify.Write, ActionSyncFile},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ClassifyEvent(tt.op)
+			if got != tt.expect {
+				t.Errorf("ClassifyEvent(%v) = %d, want %d", tt.op, got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestShouldSync_Excluded(t *testing.T) {
+	fe, err := filter.New([]string{"*.log"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a real temp file to get a valid FileInfo
+	dir := t.TempDir()
+	fpath := filepath.Join(dir, "test.log")
+	os.WriteFile(fpath, []byte("data"), 0644)
+	info, _ := os.Stat(fpath)
+
+	if ShouldSync("test.log", fe, info, 100*1024*1024) {
+		t.Error("expected excluded file to return false")
+	}
+}
+
+func TestShouldSync_Included(t *testing.T) {
+	fe, err := filter.New([]string{"*.log"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	fpath := filepath.Join(dir, "test.go")
+	os.WriteFile(fpath, []byte("data"), 0644)
+	info, _ := os.Stat(fpath)
+
+	if !ShouldSync("test.go", fe, info, 100*1024*1024) {
+		t.Error("expected included file to return true")
+	}
+}
+
+func TestShouldSync_TooLarge(t *testing.T) {
+	dir := t.TempDir()
+	fpath := filepath.Join(dir, "big.bin")
+	os.WriteFile(fpath, make([]byte, 1000), 0644)
+	info, _ := os.Stat(fpath)
+
+	if ShouldSync("big.bin", nil, info, 500) {
+		t.Error("expected file over size limit to return false")
+	}
+}
+
+func TestShouldSync_NilInfo(t *testing.T) {
+	if ShouldSync("gone.txt", nil, nil, 100*1024*1024) {
+		t.Error("expected nil info to return false")
+	}
+}
+
+func TestShouldSync_NilFilter(t *testing.T) {
+	dir := t.TempDir()
+	fpath := filepath.Join(dir, "test.txt")
+	os.WriteFile(fpath, []byte("data"), 0644)
+	info, _ := os.Stat(fpath)
+
+	if !ShouldSync("test.txt", nil, info, 100*1024*1024) {
+		t.Error("expected nil filter to return true (no exclusion)")
+	}
+}
+
+func TestComputeRelPath(t *testing.T) {
+	tests := []struct {
+		absPath string
+		root    string
+		want    string
+		ok      bool
+	}{
+		{filepath.Join("C:", "proj", "src", "main.go"), filepath.Join("C:", "proj"), "src/main.go", true},
+		{filepath.Join("C:", "proj", "file.txt"), filepath.Join("C:", "proj"), "file.txt", true},
+		{filepath.Join("C:", "proj"), filepath.Join("C:", "proj"), ".", true},
+	}
+
+	for _, tt := range tests {
+		got, ok := ComputeRelPath(tt.absPath, tt.root)
+		if ok != tt.ok {
+			t.Errorf("ComputeRelPath(%q, %q) ok=%v, want %v", tt.absPath, tt.root, ok, tt.ok)
+		}
+		if ok && got != tt.want {
+			t.Errorf("ComputeRelPath(%q, %q) = %q, want %q", tt.absPath, tt.root, got, tt.want)
+		}
+	}
+}
+
+func TestIsSymlinkToDir_RegularFile(t *testing.T) {
+	dir := t.TempDir()
+	fpath := filepath.Join(dir, "file.txt")
+	os.WriteFile(fpath, []byte("data"), 0644)
+	info, _ := os.Lstat(fpath)
+
+	if IsSymlinkToDir(fpath, info) {
+		t.Error("regular file should not be detected as symlink-to-dir")
+	}
+}
+
+func TestIsSymlinkToDir_NilInfo(t *testing.T) {
+	if IsSymlinkToDir("/nonexistent", nil) {
+		t.Error("nil info should return false")
+	}
+}
+
+func TestIsSymlinkToDir_Directory(t *testing.T) {
+	dir := t.TempDir()
+	info, _ := os.Lstat(dir)
+
+	if IsSymlinkToDir(dir, info) {
+		t.Error("regular directory should not be detected as symlink-to-dir")
+	}
+}
+
+func TestIsSyncIgnoreFile_Match(t *testing.T) {
+	dir := t.TempDir()
+	syncignore := filepath.Join(dir, ".syncignore")
+	os.WriteFile(syncignore, []byte("*.log\n"), 0644)
+
+	fe, err := filter.New(nil, syncignore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !IsSyncIgnoreFile(syncignore, fe) {
+		t.Error("expected .syncignore path to match")
+	}
+}
+
+func TestIsSyncIgnoreFile_NoMatch(t *testing.T) {
+	dir := t.TempDir()
+	syncignore := filepath.Join(dir, ".syncignore")
+	os.WriteFile(syncignore, []byte("*.log\n"), 0644)
+
+	fe, err := filter.New(nil, syncignore)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	other := filepath.Join(dir, "other.txt")
+	if IsSyncIgnoreFile(other, fe) {
+		t.Error("expected non-syncignore path to not match")
+	}
+}
+
+func TestIsSyncIgnoreFile_NilFilter(t *testing.T) {
+	if IsSyncIgnoreFile("/some/path", nil) {
+		t.Error("nil filter should return false")
+	}
 }
