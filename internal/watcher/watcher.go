@@ -31,6 +31,9 @@ type Manager struct {
 	// to auto-clean LEAKs (files excluded by new rules but still on remote).
 	OnFilterChange func(proj config.Project)
 
+	// clock abstracts time operations for testability. Defaults to realClock.
+	clock Clock
+
 	// Health monitoring
 	lastEventTime   time.Time
 	lastEventMu     gosync.Mutex
@@ -49,7 +52,7 @@ type projectWatcher struct {
 	project  config.Project
 	filter   *filter.Engine
 	queue   *msync.FairQueue
-	pending map[string]*time.Timer // per-file debounce timers (static mode only)
+	pending map[string]Timer // per-file debounce timers (static mode only)
 	mu      gosync.Mutex
 
 	// Burst-delete detection: count deletes within a rolling window.
@@ -70,6 +73,7 @@ func NewManager(projects []config.Project, filters map[string]*filter.Engine, qu
 		fsw:          fsw,
 		deletePolicy: deletePolicy,
 		log:          slog.Default().With("component", "watcher"),
+		clock:        realClock{},
 	}
 
 	for _, proj := range projects {
@@ -78,7 +82,7 @@ func NewManager(projects []config.Project, filters map[string]*filter.Engine, qu
 			project: proj,
 			filter:  fe,
 			queue:   queue,
-			pending: make(map[string]*time.Timer),
+			pending: make(map[string]Timer),
 		}
 		m.projects = append(m.projects, pw)
 	}
@@ -433,7 +437,7 @@ func (m *Manager) handleEvent(event fsnotify.Event) {
 			t.Reset(debounceDur)
 		} else {
 			rp := relPath
-			pw.pending[relPath] = time.AfterFunc(debounceDur, func() {
+			pw.pending[relPath] = m.clock.AfterFunc(debounceDur, func() {
 				pw.mu.Lock()
 				delete(pw.pending, rp)
 				pw.mu.Unlock()

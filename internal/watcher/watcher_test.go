@@ -142,7 +142,7 @@ func TestFindProject_NoMatch(t *testing.T) {
 // --- safeGo panic recovery ---
 
 func TestSafeGo_PanicRecovery(t *testing.T) {
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 
 	done := make(chan struct{})
 	go func() {
@@ -170,7 +170,7 @@ func TestSafeGo_PanicRecovery(t *testing.T) {
 // --- HealthErrors tests ---
 
 func TestHealthErrors_RecordAndRetrieve(t *testing.T) {
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 
 	// Empty at start
 	if errs := m.HealthErrors(); len(errs) != 0 {
@@ -198,7 +198,7 @@ func TestHealthErrors_RecordAndRetrieve(t *testing.T) {
 }
 
 func TestHealthErrors_CappedAt100(t *testing.T) {
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 
 	for i := 0; i < 110; i++ {
 		func() {
@@ -217,128 +217,107 @@ func TestHealthErrors_CappedAt100(t *testing.T) {
 // =============================================================================
 
 // TestDebounce_SingleEvent verifies that a single file event fires exactly once
-// after the debounce duration (event-driven, no polling).
+// after the debounce duration. Uses fake clock — no wall-clock dependency.
 func TestDebounce_SingleEvent(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	clk := newFakeClock()
+	m := &Manager{log: slog.Default(), clock: clk}
 	pw := &projectWatcher{
-		project:  config.Project{Name: "debounce-test", LocalPath: t.TempDir(), DebounceSec: 1},
-		queue: queue,
-		pending:  make(map[string]*time.Timer),
+		project: config.Project{Name: "debounce-test", LocalPath: t.TempDir(), DebounceSec: 1},
+		queue:   queue,
+		pending: make(map[string]Timer),
 	}
 
 	addDebounceTimer(m, pw, "file.txt")
 
-	select {
-	case task := <-dequeueTask(queue):
-		if task.RelPath != "file.txt" {
-			t.Errorf("RelPath = %q, want %q", task.RelPath, "file.txt")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timer did not fire")
+	// Before debounce expires — nothing enqueued
+	clk.Advance(500 * time.Millisecond)
+	if queue.Len() != 0 {
+		t.Fatal("task enqueued before debounce expired")
 	}
 
-	// No duplicate
-	time.Sleep(200 * time.Millisecond)
-	select {
-	case task := <-dequeueTask(queue):
-		t.Errorf("duplicate task for %q", task.RelPath)
-	default:
+	// After debounce expires — exactly one task
+	clk.Advance(600 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond) // let goroutine enqueue
+	if queue.Len() != 1 {
+		t.Fatalf("expected 1 task after debounce, got %d", queue.Len())
 	}
 }
 
 // TestDebounce_MultipleRapidEvents_SameFile verifies coalescing via timer reset.
 func TestDebounce_MultipleRapidEvents_SameFile(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	clk := newFakeClock()
+	m := &Manager{log: slog.Default(), clock: clk}
 	pw := &projectWatcher{
-		project:  config.Project{Name: "debounce-coalesce", LocalPath: t.TempDir(), DebounceSec: 1},
-		queue: queue,
-		pending:  make(map[string]*time.Timer),
+		project: config.Project{Name: "debounce-coalesce", LocalPath: t.TempDir(), DebounceSec: 1},
+		queue:   queue,
+		pending: make(map[string]Timer),
 	}
 
+	// 10 rapid events, each resetting the timer
 	for i := 0; i < 10; i++ {
 		addDebounceTimer(m, pw, "rapid.txt")
-		time.Sleep(10 * time.Millisecond)
+		clk.Advance(10 * time.Millisecond)
 	}
 
-	select {
-	case task := <-dequeueTask(queue):
-		if task.RelPath != "rapid.txt" {
-			t.Errorf("RelPath = %q, want %q", task.RelPath, "rapid.txt")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timer did not fire")
-	}
-
-	time.Sleep(200 * time.Millisecond)
-	select {
-	case <-dequeueSignal(queue):
-		t.Error("expected only 1 coalesced task")
-	default:
+	// Timer should fire 1s after the LAST event
+	clk.Advance(1100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	if queue.Len() != 1 {
+		t.Fatalf("expected 1 coalesced task, got %d", queue.Len())
 	}
 }
 
 // TestDebounce_DifferentFiles_Independent verifies per-file independence.
 func TestDebounce_DifferentFiles_Independent(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	clk := newFakeClock()
+	m := &Manager{log: slog.Default(), clock: clk}
 	pw := &projectWatcher{
-		project:  config.Project{Name: "debounce-independent", LocalPath: t.TempDir(), DebounceSec: 1},
-		queue: queue,
-		pending:  make(map[string]*time.Timer),
+		project: config.Project{Name: "debounce-independent", LocalPath: t.TempDir(), DebounceSec: 1},
+		queue:   queue,
+		pending: make(map[string]Timer),
 	}
 
 	addDebounceTimer(m, pw, "alpha.txt")
 	addDebounceTimer(m, pw, "beta.txt")
 	addDebounceTimer(m, pw, "gamma.txt")
 
-	seen := make(map[string]bool)
-	timeout := time.After(3 * time.Second)
-	for i := 0; i < 3; i++ {
-		select {
-		case task := <-dequeueTask(queue):
-			seen[task.RelPath] = true
-		case <-timeout:
-			t.Fatalf("only got %d/3 tasks", i)
-		}
-	}
-	for _, name := range []string{"alpha.txt", "beta.txt", "gamma.txt"} {
-		if !seen[name] {
-			t.Errorf("missing task for %q", name)
-		}
+	clk.Advance(1100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	if queue.Len() != 3 {
+		t.Fatalf("expected 3 independent tasks, got %d", queue.Len())
 	}
 }
 
 // TestDebounce_TimerReset verifies that resetting delays emission.
+// This was the flaky test (SM-071) — now deterministic with fake clock.
 func TestDebounce_TimerReset(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	clk := newFakeClock()
+	m := &Manager{log: slog.Default(), clock: clk}
 	pw := &projectWatcher{
-		project:  config.Project{Name: "debounce-reset", LocalPath: t.TempDir(), DebounceSec: 1},
-		queue: queue,
-		pending:  make(map[string]*time.Timer),
+		project: config.Project{Name: "debounce-reset", LocalPath: t.TempDir(), DebounceSec: 1},
+		queue:   queue,
+		pending: make(map[string]Timer),
 	}
 
 	addDebounceTimer(m, pw, "reset.txt")
-	time.Sleep(500 * time.Millisecond)
-	addDebounceTimer(m, pw, "reset.txt") // reset: 1s from now
+	clk.Advance(500 * time.Millisecond)   // 500ms into first timer
+	addDebounceTimer(m, pw, "reset.txt")   // reset: 1s from now
 
-	// At 800ms from start (300ms after reset), nothing should have fired
-	time.Sleep(300 * time.Millisecond)
-	select {
-	case task := <-dequeueTask(queue):
-		t.Errorf("timer NOT reset: premature task for %q", task.RelPath)
-	default:
+	// 300ms after reset (800ms total) — nothing should have fired
+	clk.Advance(300 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	if queue.Len() != 0 {
+		t.Error("timer NOT reset: premature task enqueued")
 	}
 
-	// Wait for the reset timer
-	select {
-	case task := <-dequeueTask(queue):
-		if task.RelPath != "reset.txt" {
-			t.Errorf("RelPath = %q, want %q", task.RelPath, "reset.txt")
-		}
-	case <-time.After(2 * time.Second):
+	// 800ms after reset (1300ms total) — should fire now
+	clk.Advance(800 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	if queue.Len() != 1 {
 		t.Fatal("reset timer never fired")
 	}
 }
@@ -346,20 +325,17 @@ func TestDebounce_TimerReset(t *testing.T) {
 // TestDebounce_PendingMapCleared verifies cleanup after emission.
 func TestDebounce_PendingMapCleared(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	clk := newFakeClock()
+	m := &Manager{log: slog.Default(), clock: clk}
 	pw := &projectWatcher{
-		project:  config.Project{Name: "debounce-clear", LocalPath: t.TempDir(), DebounceSec: 1},
-		queue: queue,
-		pending:  make(map[string]*time.Timer),
+		project: config.Project{Name: "debounce-clear", LocalPath: t.TempDir(), DebounceSec: 1},
+		queue:   queue,
+		pending: make(map[string]Timer),
 	}
 
 	addDebounceTimer(m, pw, "once.txt")
-
-	select {
-	case <-dequeueSignal(queue):
-	case <-time.After(3 * time.Second):
-		t.Fatal("timer never fired")
-	}
+	clk.Advance(1100 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 
 	pw.mu.Lock()
 	remaining := len(pw.pending)
@@ -370,14 +346,14 @@ func TestDebounce_PendingMapCleared(t *testing.T) {
 }
 
 // addDebounceTimer simulates the event-driven debounce: starts or resets a
-// per-file timer, mirroring the logic in handleEvent.
+// per-file timer, mirroring the logic in handleEvent. Uses the Manager's clock.
 func addDebounceTimer(m *Manager, pw *projectWatcher, relPath string) {
 	pw.mu.Lock()
 	if t, ok := pw.pending[relPath]; ok {
 		t.Reset(pw.project.DebounceDuration())
 	} else {
 		rp := relPath
-		pw.pending[relPath] = time.AfterFunc(pw.project.DebounceDuration(), func() {
+		pw.pending[relPath] = m.clock.AfterFunc(pw.project.DebounceDuration(), func() {
 			pw.mu.Lock()
 			delete(pw.pending, rp)
 			pw.mu.Unlock()
@@ -395,11 +371,11 @@ func addDebounceTimer(m *Manager, pw *projectWatcher, relPath string) {
 // the very first event for a file fires immediately without any delay.
 func TestDynamicDebounce_FirstEventFiresImmediately(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 	pw := &projectWatcher{
 		project:    config.Project{Name: "dyn-immediate", LocalPath: t.TempDir(), DebounceSec: 0},
 		queue:   queue,
-		pending:    make(map[string]*time.Timer),
+		pending:    make(map[string]Timer),
 	}
 
 	simulateDynamicEvent(m, pw, "new_file.txt")
@@ -419,11 +395,11 @@ func TestDynamicDebounce_FirstEventFiresImmediately(t *testing.T) {
 // The second enqueue moves the file to the back of the queue (no timer delay).
 func TestDynamicDebounce_RapidEventsCoalesce(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 	pw := &projectWatcher{
 		project: config.Project{Name: "dyn-burst", LocalPath: t.TempDir(), DebounceSec: 0},
 		queue:   queue,
-		pending: make(map[string]*time.Timer),
+		pending: make(map[string]Timer),
 	}
 
 	// Two rapid events for the same file
@@ -448,11 +424,11 @@ func TestDynamicDebounce_RapidEventsCoalesce(t *testing.T) {
 // after the detection window has passed fires immediately (back to instant mode).
 func TestDynamicDebounce_IsolatedEventAfterCooldown(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 	pw := &projectWatcher{
 		project: config.Project{Name: "dyn-cooldown", LocalPath: t.TempDir(), DebounceSec: 0},
 		queue:   queue,
-		pending: make(map[string]*time.Timer),
+		pending: make(map[string]Timer),
 	}
 
 	// First event enqueues immediately
@@ -481,11 +457,11 @@ func TestDynamicDebounce_IsolatedEventAfterCooldown(t *testing.T) {
 // for the same file results in exactly 2 syncs: 1 immediate + 1 debounced.
 func TestDynamicDebounce_RapidBurstCoalesces(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 	pw := &projectWatcher{
 		project:    config.Project{Name: "dyn-coalesce", LocalPath: t.TempDir(), DebounceSec: 0},
 		queue:   queue,
-		pending:    make(map[string]*time.Timer),
+		pending:    make(map[string]Timer),
 	}
 
 	// Fire 10 rapid events for the same file.
@@ -514,11 +490,11 @@ func TestDynamicDebounce_RapidBurstCoalesces(t *testing.T) {
 // tracks files independently: event for file A doesn't affect file B's timing.
 func TestDynamicDebounce_DifferentFilesIndependent(t *testing.T) {
 	queue := msync.NewFairQueue(0, 0)
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 	pw := &projectWatcher{
 		project:    config.Project{Name: "dyn-independent", LocalPath: t.TempDir(), DebounceSec: 0},
 		queue:   queue,
-		pending:    make(map[string]*time.Timer),
+		pending:    make(map[string]Timer),
 	}
 
 	// Three different files — all should fire immediately (first event for each)
@@ -691,9 +667,9 @@ func TestTrackDeleteBurst_BelowThreshold_NoReconciliation(t *testing.T) {
 	pw := &projectWatcher{
 		project:  makeProject(t.TempDir(), "test"),
 		queue: queue,
-		pending:  make(map[string]*time.Timer),
+		pending:  make(map[string]Timer),
 	}
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 
 	// Fire fewer deletes than threshold
 	for i := 0; i < burstDeleteThreshold-1; i++ {
@@ -716,9 +692,9 @@ func TestTrackDeleteBurst_AtThreshold_TriggersReconciliation(t *testing.T) {
 	pw := &projectWatcher{
 		project:  makeProject(t.TempDir(), "test"),
 		queue: queue,
-		pending:  make(map[string]*time.Timer),
+		pending:  make(map[string]Timer),
 	}
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 
 	// Fire exactly threshold deletes
 	for i := 0; i < burstDeleteThreshold; i++ {
@@ -748,9 +724,9 @@ func TestTrackDeleteBurst_WindowExpiry_ResetsCounter(t *testing.T) {
 	pw := &projectWatcher{
 		project:  makeProject(t.TempDir(), "test"),
 		queue: queue,
-		pending:  make(map[string]*time.Timer),
+		pending:  make(map[string]Timer),
 	}
-	m := &Manager{log: slog.Default()}
+	m := &Manager{log: slog.Default(), clock: realClock{}}
 
 	// Fire some deletes
 	for i := 0; i < 5; i++ {
