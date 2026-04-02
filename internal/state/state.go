@@ -15,15 +15,13 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = "2"
-
-const createSchema = `
+// baseSchema creates the core tables. Applied once when the database is first created.
+const baseSchema = `
 CREATE TABLE IF NOT EXISTS sync_state (
     project     TEXT NOT NULL,
     rel_path    TEXT NOT NULL,
     local_hash  TEXT,
     file_size   INTEGER,
-    mtime_ns    INTEGER NOT NULL DEFAULT 0,
     synced_at   TEXT NOT NULL,
     rclone_exit INTEGER,
     PRIMARY KEY (project, rel_path)
@@ -44,6 +42,24 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 `
+
+// migrations is the ordered list of schema migrations. Each function is
+// idempotent (safe to re-run). The framework tracks which migrations have
+// been applied via the "schema_version" key in the meta table.
+var migrations = []func(db *sql.DB) error{
+	// Migration 0: add mtime_ns column (was manual ALTER TABLE in v0.3.x)
+	func(db *sql.DB) error {
+		_, err := db.Exec(`ALTER TABLE sync_state ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`)
+		if err != nil {
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "duplicate column name") || strings.Contains(errMsg, "already exists") {
+				return nil // already applied — idempotent
+			}
+			return err
+		}
+		return nil
+	},
+}
 
 // Store wraps a SQLite database for sync state management.
 type Store struct {
@@ -80,29 +96,55 @@ func Open(dbPath string) (*Store, error) {
 	// gives safe concurrent goroutine access via database/sql's internal mutex (SM-047).
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec(createSchema); err != nil {
+	if _, err := db.Exec(baseSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
 
-	// Migration: add mtime_ns column to existing databases.
-	// "duplicate column name" means column already exists — expected and safe to ignore.
-	// Any other error (I/O, corruption, lock) must be surfaced.
-	if _, err := db.Exec(`ALTER TABLE sync_state ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`); err != nil {
-		errMsg := err.Error()
-		if !strings.Contains(errMsg, "duplicate column name") && !strings.Contains(errMsg, "already exists") {
-			db.Close()
-			return nil, fmt.Errorf("migration (add mtime_ns): %w", err)
-		}
+	// Run auto-migration framework
+	if err := runMigrations(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migration: %w", err)
 	}
 
 	s := &Store{db: db}
-
-	// Set schema version if not present
-	s.SetMeta("schema_version", schemaVersion)
+	s.SetMeta("schema_version", fmt.Sprintf("%d", len(migrations)))
 	s.SetMeta("last_startup", time.Now().UTC().Format(time.RFC3339))
 
 	return s, nil
+}
+
+// runMigrations applies pending schema migrations. Reads the current version
+// from the meta table, runs all migrations from currentVersion onward, and
+// updates the version. Each migration is idempotent.
+func runMigrations(db *sql.DB) error {
+	currentVersion := 0
+
+	// Read current schema version (may not exist on first run)
+	row := db.QueryRow("SELECT value FROM meta WHERE key = 'schema_version'")
+	var vStr string
+	if err := row.Scan(&vStr); err == nil {
+		fmt.Sscanf(vStr, "%d", &currentVersion)
+	}
+
+	for i := currentVersion; i < len(migrations); i++ {
+		if err := migrations[i](db); err != nil {
+			return fmt.Errorf("migration %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// PruneOldLogs deletes sync_log entries older than retentionDays.
+// Returns the number of rows deleted.
+func (s *Store) PruneOldLogs(retentionDays int) (int64, error) {
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339)
+	result, err := s.db.Exec("DELETE FROM sync_log WHERE timestamp < ?", cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // Close closes the database connection.

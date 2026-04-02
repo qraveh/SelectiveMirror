@@ -29,8 +29,9 @@ func TestOpenAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMeta failed: %v", err)
 	}
-	if v != "2" {
-		t.Errorf("expected schema version 2, got %s", v)
+	expected := fmt.Sprintf("%d", len(migrations))
+	if v != expected {
+		t.Errorf("expected schema version %s, got %s", expected, v)
 	}
 }
 
@@ -531,5 +532,51 @@ func TestGetPendingFiles_NegativeExitCode(t *testing.T) {
 	}
 	if len(pending) != 2 {
 		t.Errorf("expected 2 pending (negative exit codes), got %d: %v", len(pending), pending)
+	}
+}
+
+func TestPruneOldLogs(t *testing.T) {
+	st := tempStore(t)
+
+	// Insert logs with different timestamps
+	old := time.Now().UTC().AddDate(0, 0, -60).Format(time.RFC3339)  // 60 days ago
+	recent := time.Now().UTC().AddDate(0, 0, -10).Format(time.RFC3339) // 10 days ago
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	st.db.Exec("INSERT INTO sync_log (timestamp, project, rel_path, action) VALUES (?, 'proj', 'old.txt', 'copy')", old)
+	st.db.Exec("INSERT INTO sync_log (timestamp, project, rel_path, action) VALUES (?, 'proj', 'recent.txt', 'copy')", recent)
+	st.db.Exec("INSERT INTO sync_log (timestamp, project, rel_path, action) VALUES (?, 'proj', 'now.txt', 'copy')", now)
+
+	// Prune entries older than 30 days
+	deleted, err := st.PruneOldLogs(30)
+	if err != nil {
+		t.Fatalf("PruneOldLogs: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 row deleted (60-day-old entry), got %d", deleted)
+	}
+
+	// Verify remaining rows
+	var count int
+	st.db.QueryRow("SELECT COUNT(*) FROM sync_log").Scan(&count)
+	if count != 2 {
+		t.Errorf("expected 2 remaining log entries, got %d", count)
+	}
+}
+
+func TestAutoMigration_FreshDB(t *testing.T) {
+	st := tempStore(t)
+
+	// Verify schema version matches migration count
+	v, _ := st.GetMeta("schema_version")
+	expected := fmt.Sprintf("%d", len(migrations))
+	if v != expected {
+		t.Errorf("fresh DB schema_version = %q, want %q", v, expected)
+	}
+
+	// Verify mtime_ns column exists (added by migration 0)
+	_, err := st.db.Exec("SELECT mtime_ns FROM sync_state LIMIT 1")
+	if err != nil {
+		t.Errorf("mtime_ns column should exist after migration: %v", err)
 	}
 }
