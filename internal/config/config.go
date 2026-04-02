@@ -23,6 +23,24 @@ type Project struct {
 	RcloneExtraFlags []string `yaml:"rclone_extra_flags"` // per-mirror rclone flags (appended after global)
 	DeletePolicyStr  string   `yaml:"delete_policy"`      // per-mirror override (empty = use global)
 	QuarantineDays   int      `yaml:"quarantine_days"`    // per-mirror override (0 = use global)
+	PreSyncHook      string   `yaml:"pre_sync_hook"`      // shell command to run before sync (empty = none)
+	PostSyncHook     string   `yaml:"post_sync_hook"`     // shell command to run after sync (empty = none)
+}
+
+// EffectivePreSyncHook returns the per-mirror hook, falling back to global.
+func (p Project) EffectivePreSyncHook(global *Global) string {
+	if p.PreSyncHook != "" {
+		return p.PreSyncHook
+	}
+	return global.PreSyncHook
+}
+
+// EffectivePostSyncHook returns the per-mirror hook, falling back to global.
+func (p Project) EffectivePostSyncHook(global *Global) string {
+	if p.PostSyncHook != "" {
+		return p.PostSyncHook
+	}
+	return global.PostSyncHook
 }
 
 // DebounceDuration returns the quiet-window interval as a time.Duration.
@@ -82,6 +100,8 @@ type Global struct {
 	VerifyIntervalS    int          `yaml:"verify_interval_sec"`  // periodic verify interval (default 21600 = 6h, 0 = disabled)
 	NotifyEnabled      *bool        `yaml:"notify_enabled"`       // Windows toast notifications (default true)
 	AnomalyDetectionEnabled     *bool        `yaml:"anomaly_detection_enabled"`      // Anomaly detection and recording (default true)
+	PreSyncHook                string       `yaml:"pre_sync_hook"`                  // global default pre-sync hook (empty = none)
+	PostSyncHook               string       `yaml:"post_sync_hook"`                 // global default post-sync hook (empty = none)
 }
 
 // IsAnomalyDetectionEnabled returns whether anomaly detection is enabled (default true).

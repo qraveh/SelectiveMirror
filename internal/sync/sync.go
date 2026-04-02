@@ -16,6 +16,7 @@ import (
 
 	"github.com/qraveh/SelectiveMirror/internal/anomaly"
 	"github.com/qraveh/SelectiveMirror/internal/config"
+	"github.com/qraveh/SelectiveMirror/internal/hooks"
 	"github.com/qraveh/SelectiveMirror/internal/filter"
 	"github.com/qraveh/SelectiveMirror/internal/metrics"
 	"github.com/qraveh/SelectiveMirror/internal/state"
@@ -63,6 +64,9 @@ type Engine struct {
 
 	// Anomaly is the optional anomaly recorder. Nil-safe (no-op when nil).
 	Anomaly *anomaly.Recorder
+
+	// Hooks is the optional hook runner. Nil-safe (no-op when nil).
+	Hooks *hooks.Runner
 
 	// Per-file locks prevent two workers from syncing the same file simultaneously.
 	// Key: "project:relPath". Full-project syncs (relPath="") use project name as key.
@@ -173,6 +177,17 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 		}
 	}()
 
+	// Pre-sync hook (FR-ASP-17)
+	if task.Type != TaskDelete && task.RelPath != "" {
+		hookCmd := task.Project.EffectivePreSyncHook(e.cfg)
+		e.Hooks.Run(ctx, hookCmd, hooks.Env{
+			Project: task.Project.Name,
+			File:    task.RelPath,
+			Remote:  task.Project.Remote,
+			Event:   "pre_sync",
+		})
+	}
+
 	switch task.Type {
 	case TaskDelete:
 		e.deleteRemoteFile(ctx, task.Project, task.RelPath, task.ForceDelete)
@@ -182,6 +197,17 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 		} else {
 			e.syncSingleFile(ctx, task.Project, task.RelPath)
 		}
+	}
+
+	// Post-sync hook (FR-ASP-17)
+	if task.Type != TaskDelete && task.RelPath != "" {
+		hookCmd := task.Project.EffectivePostSyncHook(e.cfg)
+		e.Hooks.Run(ctx, hookCmd, hooks.Env{
+			Project: task.Project.Name,
+			File:    task.RelPath,
+			Remote:  task.Project.Remote,
+			Event:   "post_sync",
+		})
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 
 	"github.com/qraveh/SelectiveMirror/internal/anomaly"
 	"github.com/qraveh/SelectiveMirror/internal/config"
+	"github.com/qraveh/SelectiveMirror/internal/hooks"
 	"github.com/qraveh/SelectiveMirror/internal/filter"
 	"github.com/qraveh/SelectiveMirror/internal/lock"
 	"github.com/qraveh/SelectiveMirror/internal/logging"
@@ -37,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.5.12-dev"
+var version = "0.5.13-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -189,6 +190,16 @@ func buildFilters(cfg *config.Global) map[string]*filter.Engine {
 // dataDir returns the directory containing the state DB — used for lock, heartbeat, status.json.
 func dataDir(cfg *config.Global) string {
 	return filepath.Dir(cfg.StateDB)
+}
+
+// hasProjectHooks returns true if any project has per-mirror hooks configured.
+func hasProjectHooks(cfg *config.Global) bool {
+	for _, p := range cfg.Projects {
+		if p.PreSyncHook != "" || p.PostSyncHook != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // preflight checks that all mirror local paths exist and rclone is usable.
@@ -360,9 +371,12 @@ func cmdStart(configPath string, args []string) {
 		slog.Info("anomaly detection enabled", "dir", anomalyDir)
 	}
 
-	// Create sync engine (with metrics + anomaly recorder)
+	// Create sync engine (with metrics, anomaly recorder, and hooks)
 	syncEngine := msync.NewEngine(cfg, st, filters, m)
 	syncEngine.Anomaly = anomalyRecorder
+	if cfg.PreSyncHook != "" || cfg.PostSyncHook != "" || hasProjectHooks(cfg) {
+		syncEngine.Hooks = hooks.New(30 * time.Second)
+	}
 
 	// Create watcher manager (with delete policy)
 	watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.Queue, cfg.DeletePolicy())
@@ -2085,6 +2099,9 @@ func serviceMain() {
 
 		syncEngine := msync.NewEngine(cfg, st, filters, m)
 		syncEngine.Anomaly = anomalyRecorder
+		if cfg.PreSyncHook != "" || cfg.PostSyncHook != "" || hasProjectHooks(cfg) {
+			syncEngine.Hooks = hooks.New(30 * time.Second)
+		}
 
 		watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.Queue, cfg.DeletePolicy())
 		if err != nil {
