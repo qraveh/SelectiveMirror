@@ -15,18 +15,51 @@ const syncNowEventName = "Global\\SmirrorSyncNow"
 // CreateSyncNowEvent creates the named event that the service waits on.
 // Returns the event handle. The caller should close it on shutdown.
 // The event is auto-reset (resets after one waiter is released).
+// The security descriptor allows any authenticated user to signal the event
+// (necessary because the service runs in Session 0 and the user is in Session 1+).
 func CreateSyncNowEvent() (windows.Handle, error) {
 	name, err := windows.UTF16PtrFromString(syncNowEventName)
 	if err != nil {
 		return 0, fmt.Errorf("invalid event name: %w", err)
 	}
 
-	// CreateEvent: auto-reset (0), initially non-signaled (0)
-	h, err := windows.CreateEvent(nil, 0, 0, name)
+	// Build a security descriptor that grants Everyone EVENT_MODIFY_STATE.
+	// SDDL: D:(A;;0x0002;;;WD) = DACL Allow EVENT_MODIFY_STATE to World (Everyone)
+	sa, err := securityAttributesForEveryone()
+	if err != nil {
+		// Fall back to default security (will work for admin callers only)
+		h, createErr := windows.CreateEvent(nil, 0, 0, name)
+		if createErr != nil {
+			return 0, fmt.Errorf("CreateEvent: %w", createErr)
+		}
+		return h, nil
+	}
+
+	h, err := windows.CreateEvent(sa, 0, 0, name)
 	if err != nil {
 		return 0, fmt.Errorf("CreateEvent: %w", err)
 	}
 	return h, nil
+}
+
+// securityAttributesForEveryone creates a SecurityAttributes with a DACL that
+// grants EVENT_MODIFY_STATE (0x0002) to Everyone (WD).
+func securityAttributesForEveryone() (*windows.SecurityAttributes, error) {
+	// SDDL string: D:(A;;0x0002;;;WD)
+	// D: = DACL
+	// A = Allow
+	// 0x0002 = EVENT_MODIFY_STATE
+	// WD = World (Everyone)
+	sddl := "D:(A;;0x0002;;;WD)"
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		return nil, fmt.Errorf("parse SDDL: %w", err)
+	}
+	sa := &windows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+		SecurityDescriptor: sd,
+	}
+	return sa, nil
 }
 
 // SignalSyncNow opens the named event and signals it.
