@@ -1,12 +1,15 @@
 package state
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	gosync "sync"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func tempStore(t *testing.T) *Store {
@@ -578,5 +581,69 @@ func TestAutoMigration_FreshDB(t *testing.T) {
 	_, err := st.db.Exec("SELECT mtime_ns FROM sync_state LIMIT 1")
 	if err != nil {
 		t.Errorf("mtime_ns column should exist after migration: %v", err)
+	}
+}
+
+func TestAutoMigration_Incremental(t *testing.T) {
+	// Create a DB at "version 0" (base schema without mtime_ns column)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Create base schema WITHOUT mtime_ns
+	_, err = db.Exec(`
+		CREATE TABLE sync_state (
+			project TEXT NOT NULL, rel_path TEXT NOT NULL,
+			local_hash TEXT, file_size INTEGER,
+			synced_at TEXT NOT NULL, rclone_exit INTEGER,
+			PRIMARY KEY (project, rel_path)
+		);
+		CREATE TABLE sync_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			timestamp TEXT NOT NULL, project TEXT NOT NULL,
+			rel_path TEXT NOT NULL, action TEXT NOT NULL,
+			detail TEXT, duration_ms INTEGER
+		);
+		CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Set version to 0 (pre-migration)
+	db.Exec("INSERT INTO meta (key, value) VALUES ('schema_version', '0')")
+	// Insert a row to verify migration doesn't break existing data
+	db.Exec("INSERT INTO sync_state (project, rel_path, local_hash, file_size, synced_at, rclone_exit) VALUES ('proj', 'file.txt', 'abc', 100, '2026-01-01', 0)")
+	db.Close()
+
+	// Now open with our Store (should run migration 0 → add mtime_ns)
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open on v0 DB should succeed: %v", err)
+	}
+	defer st.Close()
+
+	// Verify migration ran: schema_version should be updated
+	v, _ := st.GetMeta("schema_version")
+	expected := fmt.Sprintf("%d", len(migrations))
+	if v != expected {
+		t.Errorf("schema_version after migration = %q, want %q", v, expected)
+	}
+
+	// Verify mtime_ns column exists
+	_, err = st.db.Exec("SELECT mtime_ns FROM sync_state LIMIT 1")
+	if err != nil {
+		t.Errorf("mtime_ns column should exist after incremental migration: %v", err)
+	}
+
+	// Verify existing data survived
+	fs, err := st.GetFileState("proj", "file.txt")
+	if err != nil || fs == nil {
+		t.Fatal("pre-existing row should survive migration")
+	}
+	if fs.LocalHash != "abc" {
+		t.Errorf("hash = %q, want 'abc'", fs.LocalHash)
 	}
 }

@@ -852,6 +852,38 @@ func (e *Engine) DryRunCleanup(ctx context.Context, proj config.Project) (int, e
 	return len(ghosts), nil
 }
 
+// quarantineEntry represents a file in the .quarantine/ directory.
+type quarantineEntry struct {
+	Path  string `json:"Path"`
+	Name  string `json:"Name"`
+	IsDir bool   `json:"IsDir"`
+	Size  int64  `json:"Size"`
+}
+
+// parseExpiredQuarantineEntries filters quarantine entries to those older than cutoff.
+// Returns the paths of expired entries. Pure function — no I/O.
+func parseExpiredQuarantineEntries(entries []quarantineEntry, cutoff time.Time) []string {
+	var expired []string
+	for _, entry := range entries {
+		if entry.IsDir {
+			continue
+		}
+		name := entry.Name
+		if len(name) < 17 {
+			continue
+		}
+		tsSuffix := name[len(name)-16:] // "20060102T150405Z"
+		ts, err := time.Parse("20060102T150405Z", tsSuffix)
+		if err != nil {
+			continue
+		}
+		if ts.Before(cutoff) {
+			expired = append(expired, entry.Path)
+		}
+	}
+	return expired
+}
+
 // PurgeExpiredQuarantine removes quarantined files older than the configured
 // retention period. Called during reconciliation when delete_policy=quarantine.
 // Returns the number of files purged.
@@ -866,65 +898,40 @@ func (e *Engine) PurgeExpiredQuarantine(ctx context.Context, proj config.Project
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
 
-	// List quarantine directory
+	// List quarantine directory via rclone lsjson
 	quarantineRemote := proj.Remote + "/.quarantine/"
-	args := []string{"lsjson", quarantineRemote, "--recursive", "--no-mimetype", "--no-modtime"}
-	args = append(args, e.commonFlags(proj)...)
-
-	type lsjsonEntry struct {
-		Path  string `json:"Path"`
-		Name  string `json:"Name"`
-		IsDir bool   `json:"IsDir"`
-		Size  int64  `json:"Size"`
-	}
-
-	// Run lsjson and capture output
 	rclonePath := e.cfg.RclonePath
 	if rclonePath == "" {
 		rclonePath = "rclone"
 	}
+	args := []string{"lsjson", quarantineRemote, "--recursive", "--no-mimetype", "--no-modtime"}
+	args = append(args, e.commonFlags(proj)...)
 	allArgs := append(e.cfg.RcloneArgs(), args...)
 	cmd := exec.CommandContext(ctx, rclonePath, allArgs...)
 	out, err := cmd.Output()
 	if err != nil {
-		// No quarantine directory is normal — just means nothing was ever quarantined
 		e.log.Debug("quarantine listing skipped (no .quarantine dir or error)", "project", proj.Name)
 		return 0
 	}
 
-	var entries []lsjsonEntry
+	var entries []quarantineEntry
 	if err := json.Unmarshal(out, &entries); err != nil {
 		e.log.Warn("failed to parse quarantine listing", "project", proj.Name, "error", err)
 		return 0
 	}
 
+	expired := parseExpiredQuarantineEntries(entries, cutoff)
+
 	purged := 0
-	for _, entry := range entries {
-		if entry.IsDir {
-			continue
-		}
+	for _, path := range expired {
+		remotePath := quarantineRemote + path
+		delArgs := []string{"deletefile", remotePath}
+		delArgs = append(delArgs, e.deleteFlags(proj)...)
 
-		// Parse timestamp from filename suffix (format: .20060102T150405Z)
-		name := entry.Name
-		if len(name) < 17 { // minimum: ".20060102T150405Z"
-			continue
-		}
-		tsSuffix := name[len(name)-16:] // "20060102T150405Z"
-		ts, err := time.Parse("20060102T150405Z", tsSuffix)
-		if err != nil {
-			continue // not a quarantine-stamped file
-		}
-
-		if ts.Before(cutoff) {
-			remotePath := quarantineRemote + entry.Path
-			delArgs := []string{"deletefile", remotePath}
-			delArgs = append(delArgs, e.deleteFlags(proj)...)
-
-			exitCode := e.runRclone(ctx, delArgs)
-			if exitCode == 0 {
-				e.log.Info("quarantine purged (expired)", "project", proj.Name, "path", entry.Path, "age_days", int(time.Since(ts).Hours()/24))
-				purged++
-			}
+		exitCode := e.runRclone(ctx, delArgs)
+		if exitCode == 0 {
+			e.log.Info("quarantine purged (expired)", "project", proj.Name, "path", path)
+			purged++
 		}
 	}
 

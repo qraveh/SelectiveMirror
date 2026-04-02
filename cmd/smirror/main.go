@@ -36,7 +36,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.3.19-dev"
+var version = "0.3.20-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1710,17 +1710,54 @@ func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, fil
 	slog.Info("ghost scan complete", "ghosts", totalGhosts, "ms", time.Since(start).Milliseconds())
 }
 
+// reconcileAdapter manages adaptive reconciliation interval.
+// Exported fields and method for testability.
+type reconcileAdapter struct {
+	base              time.Duration
+	max               time.Duration
+	current           time.Duration
+	cleanCount        int
+	doublingThreshold int
+}
+
+// adapt adjusts the reconciliation interval based on drift detection.
+// Returns true if the interval changed (caller should reset the ticker).
+func (ra *reconcileAdapter) adapt(driftFound bool) bool {
+	if driftFound {
+		ra.cleanCount = 0
+		if ra.current != ra.base {
+			ra.current = ra.base
+			slog.Info("reconciliation interval reset (drift detected)", "interval", ra.current)
+			return true
+		}
+		return false
+	}
+
+	ra.cleanCount++
+	if ra.cleanCount >= ra.doublingThreshold && ra.current < ra.max {
+		ra.current *= 2
+		if ra.current > ra.max {
+			ra.current = ra.max
+		}
+		ra.cleanCount = 0
+		slog.Info("reconciliation interval extended (no drift)", "interval", ra.current)
+		return true
+	}
+	return false
+}
+
 func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *metrics.Collector, watchMgr *watcher.Manager, syncEngine *msync.Engine, filters map[string]*filter.Engine, notifier *notify.Notifier) {
 	interval := cfg.HeartbeatInterval()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	baseReconcileInterval := cfg.ReconcileInterval()
-	currentReconcileInterval := baseReconcileInterval
-	maxReconcileInterval := 30 * time.Minute
-	cleanCycleCount := 0
-	cleanCyclesBeforeDoubling := 3
-	reconcileTicker := time.NewTicker(currentReconcileInterval)
+	ra := &reconcileAdapter{
+		base:  cfg.ReconcileInterval(),
+		max:   30 * time.Minute,
+		doublingThreshold: 3,
+	}
+	ra.current = ra.base
+	reconcileTicker := time.NewTicker(ra.current)
 	defer reconcileTicker.Stop()
 
 	// Auto-verify ticker (default 6h; 0 = disabled)
@@ -1742,7 +1779,7 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 			// Periodic reconciliation: catch changes invisible to fsnotify
 			// (WSL operations, network drive edits, external tools).
 			if syncEngine != nil {
-				slog.Info("periodic reconciliation", "interval", currentReconcileInterval)
+				slog.Info("periodic reconciliation", "interval", ra.current)
 				for _, proj := range cfg.Projects {
 					if ctx.Err() != nil {
 						return
@@ -1751,8 +1788,6 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 				}
 
 				// FR-SYNC-09: Adaptive reconciliation interval.
-				// Check drift via lightweight verify. If clean for N consecutive
-				// cycles, double the interval (cap at 30min). Reset on any drift.
 				driftFound := false
 				for _, proj := range cfg.Projects {
 					if verifyProjectQuiet(cfg, proj, filters[proj.Name]) > 0 {
@@ -1761,24 +1796,8 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 					}
 				}
 
-				if driftFound {
-					cleanCycleCount = 0
-					if currentReconcileInterval != baseReconcileInterval {
-						currentReconcileInterval = baseReconcileInterval
-						reconcileTicker.Reset(currentReconcileInterval)
-						slog.Info("reconciliation interval reset (drift detected)", "interval", currentReconcileInterval)
-					}
-				} else {
-					cleanCycleCount++
-					if cleanCycleCount >= cleanCyclesBeforeDoubling && currentReconcileInterval < maxReconcileInterval {
-						currentReconcileInterval *= 2
-						if currentReconcileInterval > maxReconcileInterval {
-							currentReconcileInterval = maxReconcileInterval
-						}
-						reconcileTicker.Reset(currentReconcileInterval)
-						cleanCycleCount = 0
-						slog.Info("reconciliation interval extended (no drift)", "interval", currentReconcileInterval)
-					}
+				if changed := ra.adapt(driftFound); changed {
+					reconcileTicker.Reset(ra.current)
 				}
 
 				// Prune old sync logs (30-day retention)

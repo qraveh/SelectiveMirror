@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qraveh/SelectiveMirror/internal/config"
 )
@@ -187,5 +188,80 @@ func TestPreflight_AllGood_NoErrors(t *testing.T) {
 
 	if len(pathErrors) > 0 {
 		t.Errorf("expected no path errors, got: %v", pathErrors)
+	}
+}
+
+// --- P1: reconcileAdapter tests ---
+
+func TestReconcileAdapter_ExtendsOnCleanCycles(t *testing.T) {
+	ra := &reconcileAdapter{
+		base:              5 * time.Minute,
+		max:               30 * time.Minute,
+		current:           5 * time.Minute,
+		doublingThreshold: 3,
+	}
+
+	// 3 clean cycles → should double
+	for i := 0; i < 2; i++ {
+		if ra.adapt(false) {
+			t.Errorf("should not change before threshold (cycle %d)", i+1)
+		}
+	}
+	if !ra.adapt(false) {
+		t.Error("3rd clean cycle should trigger interval extension")
+	}
+	if ra.current != 10*time.Minute {
+		t.Errorf("expected 10m after first doubling, got %v", ra.current)
+	}
+}
+
+func TestReconcileAdapter_ResetsOnDrift(t *testing.T) {
+	ra := &reconcileAdapter{
+		base:              5 * time.Minute,
+		max:               30 * time.Minute,
+		current:           20 * time.Minute, // already extended
+		doublingThreshold: 3,
+		cleanCount:        2,
+	}
+
+	if !ra.adapt(true) {
+		t.Error("drift should reset interval")
+	}
+	if ra.current != 5*time.Minute {
+		t.Errorf("expected reset to 5m, got %v", ra.current)
+	}
+	if ra.cleanCount != 0 {
+		t.Errorf("clean count should reset to 0, got %d", ra.cleanCount)
+	}
+}
+
+func TestReconcileAdapter_CapsAtMax(t *testing.T) {
+	ra := &reconcileAdapter{
+		base:              5 * time.Minute,
+		max:               30 * time.Minute,
+		current:           20 * time.Minute,
+		doublingThreshold: 3,
+	}
+
+	// 3 clean cycles → would double to 40m, but cap at 30m
+	for i := 0; i < 3; i++ {
+		ra.adapt(false)
+	}
+	if ra.current != 30*time.Minute {
+		t.Errorf("expected cap at 30m, got %v", ra.current)
+	}
+}
+
+func TestReconcileAdapter_NoChangeWhenAlreadyAtBase(t *testing.T) {
+	ra := &reconcileAdapter{
+		base:              5 * time.Minute,
+		max:               30 * time.Minute,
+		current:           5 * time.Minute,
+		doublingThreshold: 3,
+	}
+
+	// Drift when already at base → no change
+	if ra.adapt(true) {
+		t.Error("should not report change when already at base interval")
 	}
 }

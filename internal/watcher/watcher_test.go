@@ -944,3 +944,48 @@ func TestIsSyncIgnoreFile_NilFilter(t *testing.T) {
 		t.Error("nil filter should return false")
 	}
 }
+
+// mockFileInfo implements os.FileInfo for testing symlink detection without OS symlink support.
+type mockFileInfo struct {
+	name string
+	size int64
+	mode os.FileMode
+}
+
+func (m mockFileInfo) Name() string      { return m.name }
+func (m mockFileInfo) Size() int64       { return m.size }
+func (m mockFileInfo) Mode() os.FileMode { return m.mode }
+func (m mockFileInfo) ModTime() time.Time { return time.Time{} }
+func (m mockFileInfo) IsDir() bool       { return m.mode.IsDir() }
+func (m mockFileInfo) Sys() interface{}  { return nil }
+
+func TestIsSymlinkToDir_MockSymlinkBroken(t *testing.T) {
+	// Mock FileInfo with ModeSymlink set, pointing to nonexistent path (broken symlink)
+	info := mockFileInfo{name: "link", mode: os.ModeSymlink}
+	// os.Stat on nonexistent path will fail → treated as dir-like (rejected)
+	if !IsSymlinkToDir("/nonexistent/path/broken_link", info) {
+		t.Error("broken symlink should be treated as symlink-to-dir (rejected)")
+	}
+}
+
+func TestIsSymlinkToDir_MockSymlinkToFile(t *testing.T) {
+	// Create a real file, then pass mock FileInfo with ModeSymlink
+	dir := t.TempDir()
+	target := filepath.Join(dir, "realfile.txt")
+	os.WriteFile(target, []byte("data"), 0644)
+
+	info := mockFileInfo{name: "link", mode: os.ModeSymlink}
+	// os.Stat on the real file will succeed and show it's a regular file
+	if IsSymlinkToDir(target, info) {
+		t.Error("symlink to regular file should return false")
+	}
+}
+
+func TestIsSymlinkToDir_MockSymlinkToDir(t *testing.T) {
+	dir := t.TempDir()
+	info := mockFileInfo{name: "link", mode: os.ModeSymlink}
+	// os.Stat on the real directory will succeed and show it's a dir
+	if !IsSymlinkToDir(dir, info) {
+		t.Error("symlink to directory should return true")
+	}
+}

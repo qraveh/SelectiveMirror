@@ -2807,3 +2807,110 @@ func TestAdaptiveCooldown_DeleteBypassesCooldown(t *testing.T) {
 		t.Errorf("expected TaskDelete, got %v", task.Type)
 	}
 }
+
+// --- P0: parseExpiredQuarantineEntries tests ---
+
+func TestParseExpiredQuarantineEntries_FiltersExpired(t *testing.T) {
+	cutoff := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	entries := []quarantineEntry{
+		{Path: "old/file.txt.20260201T120000Z", Name: "file.txt.20260201T120000Z", IsDir: false}, // Feb 1 — expired
+		{Path: "new/file.txt.20260315T120000Z", Name: "file.txt.20260315T120000Z", IsDir: false}, // Mar 15 — not expired
+		{Path: "ancient.txt.20250101T000000Z", Name: "ancient.txt.20250101T000000Z", IsDir: false}, // Jan 2025 — expired
+	}
+
+	expired := parseExpiredQuarantineEntries(entries, cutoff)
+	if len(expired) != 2 {
+		t.Fatalf("expected 2 expired entries, got %d: %v", len(expired), expired)
+	}
+	if expired[0] != "old/file.txt.20260201T120000Z" {
+		t.Errorf("expected first expired to be old/file.txt, got %q", expired[0])
+	}
+}
+
+func TestParseExpiredQuarantineEntries_SkipsDirs(t *testing.T) {
+	cutoff := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	entries := []quarantineEntry{
+		{Path: "somedir", Name: "somedir", IsDir: true},
+		{Path: "file.txt.20260101T000000Z", Name: "file.txt.20260101T000000Z", IsDir: false},
+	}
+
+	expired := parseExpiredQuarantineEntries(entries, cutoff)
+	if len(expired) != 1 {
+		t.Fatalf("expected 1 expired (dirs skipped), got %d", len(expired))
+	}
+}
+
+func TestParseExpiredQuarantineEntries_SkipsInvalidTimestamp(t *testing.T) {
+	cutoff := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	entries := []quarantineEntry{
+		{Path: "no-timestamp.txt", Name: "no-timestamp.txt", IsDir: false},
+		{Path: "short.txt", Name: "short.txt", IsDir: false},
+		{Path: "bad.txt.NOTAVALIDTS!", Name: "bad.txt.NOTAVALIDTS!", IsDir: false},
+	}
+
+	expired := parseExpiredQuarantineEntries(entries, cutoff)
+	if len(expired) != 0 {
+		t.Fatalf("expected 0 expired (invalid timestamps), got %d: %v", len(expired), expired)
+	}
+}
+
+func TestParseExpiredQuarantineEntries_Empty(t *testing.T) {
+	expired := parseExpiredQuarantineEntries(nil, time.Now())
+	if len(expired) != 0 {
+		t.Fatalf("expected 0 for nil entries, got %d", len(expired))
+	}
+}
+
+// --- P0: SetOnOverflow test ---
+
+func TestSetOnOverflow_FiresAtThreshold(t *testing.T) {
+	q := NewFairQueue(0, 5*time.Second)
+
+	fired := 0
+	q.SetOnOverflow(func() { fired++ })
+
+	// Enqueue 50001 items with unique keys
+	for i := 0; i < 50001; i++ {
+		q.Enqueue(Task{
+			Project: config.Project{Name: "test"},
+			RelPath: fmt.Sprintf("file%d.txt", i),
+		})
+	}
+
+	// Give the goroutine a moment to fire
+	time.Sleep(50 * time.Millisecond)
+
+	if fired != 1 {
+		t.Errorf("expected overflow callback to fire exactly once, got %d", fired)
+	}
+}
+
+// --- P2: Cooldown decay test ---
+
+func TestAdaptiveCooldown_DecaysWhenQuiet(t *testing.T) {
+	q := NewFairQueue(0, 5*time.Second)
+
+	key := "proj:was-hot.txt"
+	// Simulate 10 rapid events (hot file)
+	for i := 0; i < 10; i++ {
+		q.SetAdaptiveCooldown(key, 1*time.Second)
+	}
+
+	// Now clear the event history to simulate 60s of quiet
+	q.mu.Lock()
+	q.eventHistory[key] = nil
+	q.mu.Unlock()
+
+	// Next event should get minimal cooldown (freq factor = 1)
+	q.SetAdaptiveCooldown(key, 1*time.Second)
+
+	q.mu.Lock()
+	expiry := q.cooldowns[key]
+	q.mu.Unlock()
+
+	cooldown := time.Until(expiry)
+	// With freq=1: max(5s*1, 1s*1.5) = 5s
+	if cooldown > 10*time.Second {
+		t.Errorf("expected ~5s cooldown after quiet period, got %v", cooldown)
+	}
+}
