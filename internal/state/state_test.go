@@ -646,4 +646,132 @@ func TestAutoMigration_Incremental(t *testing.T) {
 	if fs.LocalHash != "abc" {
 		t.Errorf("hash = %q, want 'abc'", fs.LocalHash)
 	}
+
+	// Verify remote verification columns exist (migration 1)
+	_, err = st.db.Exec("SELECT remote_verified_at, remote_hash, remote_size FROM sync_state LIMIT 1")
+	if err != nil {
+		t.Errorf("remote verification columns should exist after migration 1: %v", err)
+	}
+
+	// Verify existing row has empty remote verification (backfill hasn't run)
+	if fs.IsRemoteVerified() {
+		t.Error("pre-existing row should not be remote-verified after migration")
+	}
+}
+
+// --- SM-083: Remote verification trust model ---
+
+func TestUpdateRemoteVerification_SetsFields(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	// Create a file entry first
+	st.UpdateFileState("proj", "file.txt", "localhash", 100, 1234567890, 0)
+
+	// Update remote verification
+	err = st.UpdateRemoteVerification("proj", "file.txt", "remotehash", 100)
+	if err != nil {
+		t.Fatalf("UpdateRemoteVerification: %v", err)
+	}
+
+	fs, _ := st.GetFileState("proj", "file.txt")
+	if fs == nil {
+		t.Fatal("file state should exist")
+	}
+	if !fs.IsRemoteVerified() {
+		t.Error("expected remote-verified after UpdateRemoteVerification")
+	}
+	if fs.RemoteHash != "remotehash" {
+		t.Errorf("remote_hash = %q, want 'remotehash'", fs.RemoteHash)
+	}
+	if fs.RemoteSize != 100 {
+		t.Errorf("remote_size = %d, want 100", fs.RemoteSize)
+	}
+	if fs.RemoteVerifiedAt.IsZero() {
+		t.Error("remote_verified_at should be set")
+	}
+}
+
+func TestUpdateRemoteVerification_DoesNotTouchSyncedAt(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	st.UpdateFileState("proj", "file.txt", "hash1", 50, 0, 0)
+	fs1, _ := st.GetFileState("proj", "file.txt")
+	syncedAt1 := fs1.SyncedAt
+
+	// Small delay to ensure timestamps differ
+	time.Sleep(10 * time.Millisecond)
+
+	st.UpdateRemoteVerification("proj", "file.txt", "remotehash", 50)
+	fs2, _ := st.GetFileState("proj", "file.txt")
+
+	if !fs2.SyncedAt.Equal(syncedAt1) {
+		t.Errorf("synced_at changed from %v to %v — should be untouched", syncedAt1, fs2.SyncedAt)
+	}
+	if fs2.LocalHash != "hash1" {
+		t.Errorf("local_hash changed to %q — should be untouched", fs2.LocalHash)
+	}
+}
+
+func TestIsRemoteVerified_FalseWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	st.UpdateFileState("proj", "new.txt", "hash", 10, 0, 0)
+	fs, _ := st.GetFileState("proj", "new.txt")
+	if fs.IsRemoteVerified() {
+		t.Error("new file should not be remote-verified")
+	}
+}
+
+func TestGetFileState_IncludesRemoteFields(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	st.UpdateFileState("proj", "file.txt", "abc", 200, 999, 0)
+	st.UpdateRemoteVerification("proj", "file.txt", "def", 200)
+
+	fs, err := st.GetFileState("proj", "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Local fields
+	if fs.LocalHash != "abc" {
+		t.Errorf("local_hash = %q", fs.LocalHash)
+	}
+	if fs.FileSize != 200 {
+		t.Errorf("file_size = %d", fs.FileSize)
+	}
+	if fs.MtimeNs != 999 {
+		t.Errorf("mtime_ns = %d", fs.MtimeNs)
+	}
+
+	// Remote fields
+	if fs.RemoteHash != "def" {
+		t.Errorf("remote_hash = %q", fs.RemoteHash)
+	}
+	if fs.RemoteSize != 200 {
+		t.Errorf("remote_size = %d", fs.RemoteSize)
+	}
+	if fs.RemoteVerifiedAt.IsZero() {
+		t.Error("remote_verified_at should be set")
+	}
 }

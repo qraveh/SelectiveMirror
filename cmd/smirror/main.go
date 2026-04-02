@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.24-dev"
+var version = "0.7.25-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1223,6 +1223,27 @@ func cmdExplain(configPath string, args []string) {
 					fmt.Printf(" (FAILED)")
 				}
 				fmt.Println()
+
+				// SM-083: Show remote verification status
+				if fs.IsRemoteVerified() {
+					fmt.Printf("  Remote verified: %s", fs.RemoteVerifiedAt.Local().Format(time.RFC3339))
+					if fs.RemoteHash == fs.LocalHash {
+						fmt.Printf(" (hash match)")
+					} else if fs.RemoteHash != "" {
+						fmt.Printf(" (hash STALE: local=%s remote=%s)", fs.LocalHash[:8], fs.RemoteHash[:8])
+					}
+					fmt.Println()
+
+					// Check if file changed locally after last verification
+					if fs.MtimeNs > 0 {
+						localMtime := time.Unix(0, fs.MtimeNs)
+						if localMtime.After(fs.RemoteVerifiedAt) {
+							fmt.Printf("  WARNING: local file modified AFTER last remote verification\n")
+						}
+					}
+				} else {
+					fmt.Printf("  Remote verified: not yet (sync attempt only, use 'smirror test-mirrors' to verify)\n")
+				}
 			} else {
 				fmt.Printf("\nSync state: no per-file record in state DB\n")
 				if !excluded {
@@ -1321,6 +1342,11 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine, s
 			if err == nil && localHash != strings.ToLower(md5Hash) {
 				fmt.Printf("  HASH MISMATCH: %s (local=%s remote=%s)\n", relPath, localHash[:8], strings.ToLower(md5Hash)[:8])
 				drift++
+			} else if err == nil {
+				// SM-083: Hash matches — record remote verification
+				if st != nil {
+					st.UpdateRemoteVerification(proj.Name, relPath, strings.ToLower(md5Hash), rf.Size)
+				}
 			}
 		}
 
@@ -1431,6 +1457,11 @@ func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engi
 			if err == nil && localHash != strings.ToLower(md5Hash) {
 				slog.Debug("auto-verify: hash mismatch", "mirror", proj.Name, "path", relPath)
 				drift++
+			} else if err == nil {
+				// SM-083: Hash matches — record remote verification
+				if st != nil {
+					st.UpdateRemoteVerification(proj.Name, relPath, strings.ToLower(md5Hash), rf.Size)
+				}
 			}
 		}
 

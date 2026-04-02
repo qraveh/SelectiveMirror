@@ -53,9 +53,29 @@ var migrations = []func(db *sql.DB) error{
 		if err != nil {
 			errMsg := err.Error()
 			if strings.Contains(errMsg, "duplicate column name") || strings.Contains(errMsg, "already exists") {
-				return nil // already applied — idempotent
+				return nil
 			}
 			return err
+		}
+		return nil
+	},
+	// Migration 1: add remote verification columns (SM-083 trust model).
+	// Distinguishes local-wishful (synced_at = "we ran rclone") from
+	// remote-verified (remote_verified_at = "lsjson confirmed file exists").
+	func(db *sql.DB) error {
+		cols := []string{
+			`ALTER TABLE sync_state ADD COLUMN remote_verified_at TEXT DEFAULT ''`,
+			`ALTER TABLE sync_state ADD COLUMN remote_hash TEXT DEFAULT ''`,
+			`ALTER TABLE sync_state ADD COLUMN remote_size INTEGER DEFAULT 0`,
+		}
+		for _, stmt := range cols {
+			if _, err := db.Exec(stmt); err != nil {
+				errMsg := err.Error()
+				if strings.Contains(errMsg, "duplicate column name") || strings.Contains(errMsg, "already exists") {
+					continue
+				}
+				return err
+			}
 		}
 		return nil
 	},
@@ -73,8 +93,15 @@ type FileState struct {
 	LocalHash  string
 	FileSize   int64
 	MtimeNs    int64     // local file mtime at last successful sync (nanoseconds since epoch); 0 = not yet recorded
-	SyncedAt   time.Time
+	SyncedAt   time.Time // when we last ran rclone for this file (local-wishful)
 	RcloneExit int
+
+	// Remote verification (SM-083 trust model):
+	// These fields are populated by lsjson verification, NOT by rclone copy/copyto.
+	// Empty = file has not been independently verified on remote.
+	RemoteVerifiedAt time.Time // when lsjson last confirmed this file exists on remote
+	RemoteHash       string    // hash from remote (lsjson --hash)
+	RemoteSize       int64     // size from remote (lsjson)
 }
 
 // Open creates or opens the state database.
@@ -176,13 +203,16 @@ func (s *Store) Close() error {
 // GetFileState retrieves the sync state for a file.
 func (s *Store) GetFileState(project, relPath string) (*FileState, error) {
 	row := s.db.QueryRow(
-		"SELECT project, rel_path, local_hash, file_size, mtime_ns, synced_at, rclone_exit FROM sync_state WHERE project = ? AND rel_path = ?",
+		`SELECT project, rel_path, local_hash, file_size, mtime_ns, synced_at, rclone_exit,
+		        remote_verified_at, remote_hash, remote_size
+		 FROM sync_state WHERE project = ? AND rel_path = ?`,
 		project, relPath,
 	)
 
 	fs := &FileState{}
-	var syncedAt string
-	err := row.Scan(&fs.Project, &fs.RelPath, &fs.LocalHash, &fs.FileSize, &fs.MtimeNs, &syncedAt, &fs.RcloneExit)
+	var syncedAt, remoteVerifiedAt string
+	err := row.Scan(&fs.Project, &fs.RelPath, &fs.LocalHash, &fs.FileSize, &fs.MtimeNs,
+		&syncedAt, &fs.RcloneExit, &remoteVerifiedAt, &fs.RemoteHash, &fs.RemoteSize)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -190,7 +220,27 @@ func (s *Store) GetFileState(project, relPath string) (*FileState, error) {
 		return nil, err
 	}
 	fs.SyncedAt, _ = time.Parse(time.RFC3339, syncedAt)
+	if remoteVerifiedAt != "" {
+		fs.RemoteVerifiedAt, _ = time.Parse(time.RFC3339, remoteVerifiedAt)
+	}
 	return fs, nil
+}
+
+// IsRemoteVerified returns true if this file has been independently verified
+// on the remote via lsjson (not just locally "synced" via rclone copy).
+func (fs *FileState) IsRemoteVerified() bool {
+	return fs != nil && !fs.RemoteVerifiedAt.IsZero()
+}
+
+// UpdateRemoteVerification records that a file was verified on the remote
+// via lsjson --hash. Does NOT touch synced_at or other local fields.
+func (s *Store) UpdateRemoteVerification(project, relPath, remoteHash string, remoteSize int64) error {
+	_, err := s.db.Exec(
+		`UPDATE sync_state SET remote_verified_at = ?, remote_hash = ?, remote_size = ?
+		 WHERE project = ? AND rel_path = ?`,
+		time.Now().UTC().Format(time.RFC3339), remoteHash, remoteSize, project, relPath,
+	)
+	return err
 }
 
 // UpdateFileState inserts or updates the sync state for a file.
