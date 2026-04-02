@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.6-dev"
+var version = "0.7.7-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -2165,6 +2165,16 @@ func serviceMain() {
 		liveSyncEngine = syncEngine
 		liveCfg = cfg
 
+		// FR-SVC-08: Write lifecycle events to Windows Event Log
+		elog := service.OpenEventLog()
+		if elog != nil {
+			elog.Info(service.EventServiceStarted, "SelectiveMirror service started, version "+version)
+			defer func() {
+				elog.Info(service.EventServiceStopped, "SelectiveMirror service stopped")
+				elog.Close()
+			}()
+		}
+
 		// SM-078: Create named event for sync-now IPC (no admin required)
 		syncEvent, syncEventErr := service.CreateSyncNowEvent()
 		if syncEventErr != nil {
@@ -2305,12 +2315,17 @@ func cmdService(configPath string, args []string) {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+		// FR-SVC-08: Register Windows Event Log source
+		if err := service.InstallEventSource(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not register event log source: %v\n", err)
+		}
 		fmt.Println("Service 'smirror' installed successfully.")
 		fmt.Printf("Config: %s\n", configPath)
 		fmt.Println("Start with: smirror service start")
 		fmt.Println("Or: net start smirror")
 
 	case "uninstall":
+		_ = service.RemoveEventSource() // best-effort cleanup
 		if err := service.Uninstall(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

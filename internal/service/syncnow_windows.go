@@ -76,7 +76,7 @@ func SignalSyncNow() error {
 	if err != nil {
 		return fmt.Errorf("cannot open sync-now event (is the service running?): %w", err)
 	}
-	defer windows.CloseHandle(h)
+	defer func() { _ = windows.CloseHandle(h) }()
 
 	if err := windows.SetEvent(h); err != nil {
 		return fmt.Errorf("SetEvent: %w", err)
