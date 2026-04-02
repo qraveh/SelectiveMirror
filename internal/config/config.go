@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -55,7 +56,8 @@ type DeletePolicy string
 
 const (
 	DeleteIgnore     DeletePolicy = "ignore"     // default: do nothing on remote
-	DeleteMirror     DeletePolicy = "mirror"     // delete remote file too
+	DeleteDelete     DeletePolicy = "delete"     // immediately delete remote file
+	DeleteMirror     DeletePolicy = "mirror"     // deprecated alias for "delete"
 	DeleteQuarantine DeletePolicy = "quarantine" // move remote to .quarantine/
 )
 
@@ -117,10 +119,14 @@ func (g Global) Workers() int {
 }
 
 // DeletePolicy returns the parsed delete policy (defaults to "ignore").
+// Accepts both "delete" (preferred) and "mirror" (deprecated alias).
 func (g Global) DeletePolicy() DeletePolicy {
 	switch DeletePolicy(g.DeletePolicyStr) {
+	case DeleteDelete:
+		return DeleteDelete
 	case DeleteMirror:
-		return DeleteMirror
+		slog.Warn("delete_policy 'mirror' is deprecated, use 'delete' instead")
+		return DeleteDelete
 	case DeleteQuarantine:
 		return DeleteQuarantine
 	default:

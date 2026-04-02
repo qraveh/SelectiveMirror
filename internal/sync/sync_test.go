@@ -313,7 +313,7 @@ func TestRun_ChannelClose(t *testing.T) {
 func TestSyncFullProject_MirrorPolicy(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	var capturedArgs []string
 	e := testEngine(t, cfg, func(ctx context.Context, args []string) int {
@@ -381,7 +381,7 @@ func TestDeleteRemoteFile_IgnorePolicy(t *testing.T) {
 func TestDeleteRemoteFile_MirrorPolicy(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	var capturedArgs []string
 	e := testEngine(t, cfg, func(ctx context.Context, args []string) int {
@@ -481,7 +481,7 @@ func TestCommonFlags_ContainsSkipLinks(t *testing.T) {
 func TestDeleteRemoteFile_RcloneFailure_StatePreserved(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	e := testEngine(t, cfg, func(ctx context.Context, args []string) int {
 		return 1 // simulate rclone failure
@@ -505,7 +505,7 @@ func TestDeleteRemoteFile_RcloneFailure_StatePreserved(t *testing.T) {
 func TestDeleteRemoteFile_RcloneSuccess_StateDeleted(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	e := testEngine(t, cfg, func(ctx context.Context, args []string) int {
 		return 0 // rclone succeeds
@@ -544,11 +544,13 @@ func TestDeleteRemoteFile_QuarantineFailure_StatePreserved(t *testing.T) {
 func TestDeleteRemoteDir_NoDoubleDeleteState(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
-	deleteCount := 0
+	var capturedVerbs []string
 	e := testEngine(t, cfg, func(ctx context.Context, args []string) int {
-		deleteCount++
+		if len(args) > 0 {
+			capturedVerbs = append(capturedVerbs, args[0])
+		}
 		return 0
 	})
 
@@ -558,16 +560,19 @@ func TestDeleteRemoteDir_NoDoubleDeleteState(t *testing.T) {
 
 	e.deleteRemoteDir(context.Background(), proj, "dir", true)
 
-	// Both files should be deleted from remote
-	if deleteCount != 2 {
-		t.Errorf("expected 2 rclone calls, got %d", deleteCount)
+	// FR-DEL-07: should use atomic purge (1 rclone call) instead of per-file delete
+	if len(capturedVerbs) != 1 {
+		t.Errorf("expected 1 rclone call (atomic purge), got %d: %v", len(capturedVerbs), capturedVerbs)
+	}
+	if len(capturedVerbs) > 0 && capturedVerbs[0] != "purge" {
+		t.Errorf("expected 'purge' verb, got %q", capturedVerbs[0])
 	}
 
-	// Both state entries should be gone (exactly once each)
+	// Both state entries should be gone
 	fs1, _ := e.state.GetFileState(proj.Name, "dir/a.txt")
 	fs2, _ := e.state.GetFileState(proj.Name, "dir/b.txt")
 	if fs1 != nil || fs2 != nil {
-		t.Error("state entries should be deleted after successful dir cleanup")
+		t.Error("state entries should be deleted after successful dir purge")
 	}
 }
 
@@ -724,7 +729,7 @@ func TestSyncSingleFile_OneByteOverLimit(t *testing.T) {
 func TestDeleteRemoteFile_DBError_SilentlySkips(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	var deleteCalled atomic.Bool
 	runner := func(ctx context.Context, args []string) int {
@@ -755,7 +760,7 @@ func TestDeleteRemoteFile_DBError_SilentlySkips(t *testing.T) {
 func TestSyncFullProject_UsesGlobalDeletePolicy(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	var verb string
 	runner := func(ctx context.Context, args []string) int {
@@ -1153,7 +1158,7 @@ func TestRename_RapidChain(t *testing.T) {
 func TestRename_ExcludedFile_NoSync(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	var rcloneCalled atomic.Bool
 	runner := func(ctx context.Context, args []string) int {
@@ -1215,7 +1220,7 @@ func TestRename_ForceDelete_OverridesQuarantinePolicy(t *testing.T) {
 func TestRename_NeverSyncedFile_NoRemoteDelete(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	var rcloneCalled atomic.Bool
 	runner := func(ctx context.Context, args []string) int {
@@ -1242,13 +1247,12 @@ func TestRename_DirectoryRename_DeletesChildren(t *testing.T) {
 	cfg := testConfig(proj)
 	cfg.DeletePolicyStr = "ignore" // ForceDelete should still work
 
-	var deletedPaths []string
+	var capturedVerbs []string
 	var mu gosync.Mutex
 	runner := func(ctx context.Context, args []string) int {
 		mu.Lock()
-		if args[0] == "deletefile" {
-			// Extract the relative path from the remote path
-			deletedPaths = append(deletedPaths, args[1])
+		if len(args) > 0 {
+			capturedVerbs = append(capturedVerbs, args[0])
 		}
 		mu.Unlock()
 		return 0
@@ -1272,8 +1276,9 @@ func TestRename_DirectoryRename_DeletesChildren(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	if len(deletedPaths) != 3 {
-		t.Errorf("expected 3 remote deletes for directory children, got %d: %v", len(deletedPaths), deletedPaths)
+	// FR-DEL-07: ForceDelete uses atomic purge (1 call) instead of per-file delete (3 calls)
+	if len(capturedVerbs) != 1 || capturedVerbs[0] != "purge" {
+		t.Errorf("expected 1 'purge' call for directory rename, got %d: %v", len(capturedVerbs), capturedVerbs)
 	}
 
 	// All child states should be cleaned up
@@ -2462,7 +2467,7 @@ func TestDryRunCleanup_NoGhosts(t *testing.T) {
 func TestCleanupGhosts_MirrorPolicy_RedundantCheck(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	cfg.DeletePolicyStr = "mirror"
+	cfg.DeletePolicyStr = "delete"
 
 	// After rclone sync with delete_policy=mirror, remote should already be clean.
 	// But if rclone sync missed something (filter timing), CleanupGhosts catches it.

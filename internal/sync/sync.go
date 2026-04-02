@@ -431,7 +431,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 	// including deleting remote-only files (orphans from WSL renames, etc.).
 	// Use "copy" otherwise — upload-only, safe default.
 	verb := "copy"
-	if e.cfg.DeletePolicy() == config.DeleteMirror {
+	if e.cfg.DeletePolicy() == config.DeleteDelete {
 		verb = "sync"
 	}
 	args := []string{verb, proj.LocalPath, proj.Remote, "--checksum", "--filter-from", filterFile}
@@ -462,7 +462,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relPath string, force bool) {
 	policy := e.cfg.DeletePolicy()
 	if force {
-		policy = config.DeleteMirror
+		policy = config.DeleteDelete
 	}
 
 	// Check if this path was ever synced as a file.
@@ -490,7 +490,7 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 	remotePath := proj.Remote + "/" + filepath.ToSlash(relPath)
 
 	switch policy {
-	case config.DeleteMirror:
+	case config.DeleteDelete:
 		args := []string{"deletefile", remotePath}
 		args = append(args, e.deleteFlags(proj)...)
 
@@ -556,7 +556,7 @@ func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPa
 	start := time.Now()
 	policy := e.cfg.DeletePolicy()
 	if force {
-		policy = config.DeleteMirror
+		policy = config.DeleteDelete
 	}
 	if policy == config.DeleteIgnore {
 		e.log.Debug("dir delete ignored (policy=ignore)", "project", proj.Name, "path", dirPath)
@@ -575,8 +575,38 @@ func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPa
 	}
 
 	e.log.Info("cleaning remote dir", "project", proj.Name, "path", dirPath, "files", len(files))
+
+	// FR-DEL-07: Use rclone purge for atomic directory delete when policy=delete.
+	// Quarantine mode still needs per-file iteration (each file gets individual timestamp).
+	if policy == config.DeleteDelete {
+		remotePath := proj.Remote + "/" + filepath.ToSlash(dirPath)
+		args := []string{"purge", remotePath}
+		args = append(args, e.deleteFlags(proj)...)
+
+		exitCode := e.runRclone(ctx, args)
+		elapsed := time.Since(start)
+
+		if exitCode == 0 {
+			// Clean state DB for all files under the directory
+			for _, relPath := range files {
+				e.state.DeleteFileState(proj.Name, relPath)
+			}
+			e.log.Info("remote dir purged (atomic)", "project", proj.Name, "path", dirPath, "files", len(files), "ms", elapsed.Milliseconds())
+			e.state.LogAction(proj.Name, dirPath, "dir_purge", fmt.Sprintf("%d files, %dms", len(files), elapsed.Milliseconds()), elapsed.Milliseconds())
+		} else {
+			// Purge failed — fall back to per-file deletion
+			e.log.Warn("rclone purge failed, falling back to per-file delete", "project", proj.Name, "path", dirPath, "exit", exitCode)
+			for _, relPath := range files {
+				e.deleteRemoteFile(ctx, proj, relPath, force)
+			}
+			elapsed = time.Since(start)
+			e.log.Info("remote dir cleaned (per-file fallback)", "project", proj.Name, "path", dirPath, "files", len(files), "ms", elapsed.Milliseconds())
+		}
+		return
+	}
+
+	// Quarantine mode: per-file iteration (each needs individual timestamped path)
 	for _, relPath := range files {
-		// deleteRemoteFile handles state cleanup internally on success
 		e.deleteRemoteFile(ctx, proj, relPath, force)
 	}
 	elapsed := time.Since(start)
@@ -820,6 +850,88 @@ func (e *Engine) DryRunCleanup(ctx context.Context, proj config.Project) (int, e
 		fmt.Printf("  [%s] would delete: %s (%d bytes)\n", kind, g.Path, g.Size)
 	}
 	return len(ghosts), nil
+}
+
+// PurgeExpiredQuarantine removes quarantined files older than the configured
+// retention period. Called during reconciliation when delete_policy=quarantine.
+// Returns the number of files purged.
+func (e *Engine) PurgeExpiredQuarantine(ctx context.Context, proj config.Project) int {
+	if e.cfg.DeletePolicy() != config.DeleteQuarantine {
+		return 0
+	}
+
+	retentionDays := e.cfg.QuarantineDays
+	if retentionDays <= 0 {
+		retentionDays = 30
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+
+	// List quarantine directory
+	quarantineRemote := proj.Remote + "/.quarantine/"
+	args := []string{"lsjson", quarantineRemote, "--recursive", "--no-mimetype", "--no-modtime"}
+	args = append(args, e.commonFlags(proj)...)
+
+	type lsjsonEntry struct {
+		Path  string `json:"Path"`
+		Name  string `json:"Name"`
+		IsDir bool   `json:"IsDir"`
+		Size  int64  `json:"Size"`
+	}
+
+	// Run lsjson and capture output
+	rclonePath := e.cfg.RclonePath
+	if rclonePath == "" {
+		rclonePath = "rclone"
+	}
+	allArgs := append(e.cfg.RcloneArgs(), args...)
+	cmd := exec.CommandContext(ctx, rclonePath, allArgs...)
+	out, err := cmd.Output()
+	if err != nil {
+		// No quarantine directory is normal — just means nothing was ever quarantined
+		e.log.Debug("quarantine listing skipped (no .quarantine dir or error)", "project", proj.Name)
+		return 0
+	}
+
+	var entries []lsjsonEntry
+	if err := json.Unmarshal(out, &entries); err != nil {
+		e.log.Warn("failed to parse quarantine listing", "project", proj.Name, "error", err)
+		return 0
+	}
+
+	purged := 0
+	for _, entry := range entries {
+		if entry.IsDir {
+			continue
+		}
+
+		// Parse timestamp from filename suffix (format: .20060102T150405Z)
+		name := entry.Name
+		if len(name) < 17 { // minimum: ".20060102T150405Z"
+			continue
+		}
+		tsSuffix := name[len(name)-16:] // "20060102T150405Z"
+		ts, err := time.Parse("20060102T150405Z", tsSuffix)
+		if err != nil {
+			continue // not a quarantine-stamped file
+		}
+
+		if ts.Before(cutoff) {
+			remotePath := quarantineRemote + entry.Path
+			delArgs := []string{"deletefile", remotePath}
+			delArgs = append(delArgs, e.deleteFlags(proj)...)
+
+			exitCode := e.runRclone(ctx, delArgs)
+			if exitCode == 0 {
+				e.log.Info("quarantine purged (expired)", "project", proj.Name, "path", entry.Path, "age_days", int(time.Since(ts).Hours()/24))
+				purged++
+			}
+		}
+	}
+
+	if purged > 0 {
+		e.log.Info("quarantine auto-purge complete", "project", proj.Name, "purged", purged, "retention_days", retentionDays)
+	}
+	return purged
 }
 
 // Validate checks rclone availability and remote connectivity.

@@ -200,7 +200,8 @@ func TestDeletePolicy(t *testing.T) {
 	}{
 		{"", DeleteIgnore},
 		{"ignore", DeleteIgnore},
-		{"mirror", DeleteMirror},
+		{"delete", DeleteDelete},
+		{"mirror", DeleteDelete}, // deprecated alias — returns DeleteDelete with warning
 		{"quarantine", DeleteQuarantine},
 		{"invalid", DeleteIgnore},
 	}
