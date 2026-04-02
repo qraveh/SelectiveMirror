@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // Project defines a watched directory and its sync destination.

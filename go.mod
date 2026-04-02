@@ -5,8 +5,8 @@ go 1.26.1
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/git-pkgs/gitignore v1.1.1
+	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sys v0.42.0
-	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.47.0
 )
 
