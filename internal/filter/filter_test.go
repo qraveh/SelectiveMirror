@@ -619,3 +619,51 @@ func TestToRcloneFilter_WhitespaceOnly(t *testing.T) {
 		t.Logf("whitespace pattern produces: %q", result)
 	}
 }
+
+// FR-FILTER-11: Malformed .syncignore keeps previous rules
+func TestReload_MalformedSyncignore_KeepsPreviousRules(t *testing.T) {
+	dir := t.TempDir()
+	syncignorePath := filepath.Join(dir, ".syncignore")
+
+	// Start with valid rules
+	os.WriteFile(syncignorePath, []byte("*.log\n*.tmp\n"), 0644)
+	fe, err := New(nil, syncignorePath)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// Verify initial rules work
+	if !fe.IsExcluded("test.log") {
+		t.Fatal("expected test.log to be excluded initially")
+	}
+	if fe.IsExcluded("test.go") {
+		t.Fatal("expected test.go to be included initially")
+	}
+	gen1 := fe.Generation()
+
+	// Now corrupt the .syncignore by replacing it with a directory
+	// (which will cause CompileIgnoreFile to fail)
+	os.Remove(syncignorePath)
+	os.MkdirAll(syncignorePath, 0755) // a directory, not a file
+
+	changed, err := fe.Reload()
+	if err != nil {
+		t.Fatalf("Reload should not return error on malformed .syncignore, got: %v", err)
+	}
+	if changed {
+		t.Error("Reload should report no change when .syncignore is malformed")
+	}
+
+	// Previous rules should still work
+	if !fe.IsExcluded("test.log") {
+		t.Error("expected test.log to still be excluded after malformed .syncignore")
+	}
+	if fe.IsExcluded("test.go") {
+		t.Error("expected test.go to still be included after malformed .syncignore")
+	}
+
+	// Generation should not change
+	if fe.Generation() != gen1 {
+		t.Errorf("generation should not change on malformed .syncignore: got %d, want %d", fe.Generation(), gen1)
+	}
+}

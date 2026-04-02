@@ -36,7 +36,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.3.12-dev"
+var version = "0.3.13-dev"
 
 func main() {
 	// Emergency: write to a fixed path so we can diagnose service crashes.

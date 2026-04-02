@@ -2,6 +2,7 @@
 package filter
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,8 +116,20 @@ func (e *Engine) Reload() (changed bool, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// FR-FILTER-11: Save previous state before loading. If the .syncignore file
+	// is malformed, restore previous rules instead of leaving filter in a broken
+	// state (fail-open or fail-closed are both dangerous).
+	prevProjectIgnore := e.projectIgnore
+	prevProjectRules := make([]string, len(e.projectRules))
+	copy(prevProjectRules, e.projectRules)
+
 	if err := e.loadProjectIgnore(); err != nil {
-		return false, err
+		// Restore previous state — keep last-known-good filter rules
+		e.projectIgnore = prevProjectIgnore
+		e.projectRules = prevProjectRules
+		slog.Warn("malformed .syncignore, keeping previous rules",
+			"path", e.syncIgnorePath, "error", err)
+		return false, nil
 	}
 	e.rebuildMerged()
 
