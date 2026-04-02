@@ -140,7 +140,9 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // Stop closes the filesystem watcher.
 func (m *Manager) Stop() {
-	m.fsw.Close()
+	if err := m.fsw.Close(); err != nil {
+		m.log.Warn("watcher close error", "error", err)
+	}
 }
 
 // safeGo runs fn with panic recovery. If fn panics, the error is logged and

@@ -393,7 +393,8 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		}
 		if e.Queue.RecordFailure(proj.Name) {
 			e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, relPath,
-				fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold), "")
+				fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold),
+				fmt.Sprintf("last rclone exit code: %d", exitCode))
 		}
 	}
 }
@@ -500,7 +501,8 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 		}
 		if e.Queue.RecordFailure(proj.Name) {
 			e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, "",
-				fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold), "")
+				fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold),
+				fmt.Sprintf("last rclone exit code: %d (full sync)", exitCode))
 		}
 	}
 }
@@ -517,10 +519,20 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 
 	// Check if this path was ever synced as a file.
 	// If not, check if it's a directory with synced children underneath.
-	fileState, _ := e.state.GetFileState(proj.Name, relPath)
+	// SM-079: DB errors must NOT be silently ignored — proceeding with a delete
+	// when the DB is unavailable could cause incorrect remote deletions.
+	fileState, dbErr := e.state.GetFileState(proj.Name, relPath)
+	if dbErr != nil {
+		e.log.Error("state DB error in deleteRemoteFile, skipping delete", "project", proj.Name, "path", relPath, "error", dbErr)
+		return
+	}
 	if fileState == nil {
 		// Not a synced file — might be a directory that was renamed/deleted.
-		files, _ := e.state.GetFilesUnderDir(proj.Name, relPath)
+		files, dirErr := e.state.GetFilesUnderDir(proj.Name, relPath)
+		if dirErr != nil {
+			e.log.Error("state DB error in deleteRemoteFile, skipping delete", "project", proj.Name, "path", relPath, "error", dirErr)
+			return
+		}
 		if len(files) > 0 {
 			// Directory with synced children — delete them individually.
 			e.deleteRemoteDir(ctx, proj, relPath, force)

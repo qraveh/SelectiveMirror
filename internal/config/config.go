@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -251,8 +252,22 @@ func Load(path string) (*Global, error) {
 		HeartbeatIntervalS: 300,
 	}
 
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+	// SM-081: Use decoder with KnownFields to detect typos in config keys.
+	// Unknown fields (e.g., "delet_policy") cause a warning, not a hard error,
+	// so existing configs with forward-compatible fields still load.
+	dec := yaml.NewDecoder(strings.NewReader(string(data)))
+	dec.KnownFields(true)
+	if err := dec.Decode(cfg); err != nil {
+		// Check if it's an unknown field error — warn but don't fail
+		if strings.Contains(err.Error(), "not found") {
+			fmt.Fprintf(os.Stderr, "Warning: config %s: %v (check for typos)\n", path, err)
+			// Re-parse without strict mode so the config still loads
+			if err2 := yaml.Unmarshal(data, cfg); err2 != nil {
+				return nil, fmt.Errorf("parsing config %s: %w", path, err2)
+			}
+		} else {
+			return nil, fmt.Errorf("parsing config %s: %w", path, err)
+		}
 	}
 
 	// Apply defaults for paths — use the config file's own directory so that

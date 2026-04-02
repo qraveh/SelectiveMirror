@@ -189,7 +189,9 @@ func Uninstall() error {
 	// Try to stop it first if running
 	status, err := s.Query()
 	if err == nil && status.State != svc.Stopped {
-		_, _ = s.Control(svc.Stop)
+		if _, stopErr := s.Control(svc.Stop); stopErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not stop service before uninstall: %v\n", stopErr)
+		}
 		// Wait briefly for it to stop
 		for i := 0; i < 10; i++ {
 			time.Sleep(500 * time.Millisecond)

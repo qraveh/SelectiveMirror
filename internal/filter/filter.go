@@ -56,6 +56,12 @@ func (e *Engine) rebuildMerged() {
 	if len(all) > 0 {
 		m := gitignore.New("")
 		m.AddPatterns([]byte(strings.Join(all, "\n")), "")
+		// SM-080: Check for pattern parse errors that would otherwise be silently lost.
+		if errs := m.Errors(); len(errs) > 0 {
+			for _, e := range errs {
+				slog.Warn("pattern parse error in filter rules", "error", e)
+			}
+		}
 		e.merged = m
 	} else {
 		e.merged = nil

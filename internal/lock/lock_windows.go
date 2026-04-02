@@ -3,6 +3,7 @@
 package lock
 
 import (
+	"log/slog"
 	"os"
 	"syscall"
 	"unsafe"
@@ -40,11 +41,14 @@ func lockFile(f *os.File) error {
 func unlockFile(f *os.File) {
 	var ol syscall.Overlapped
 	handle := syscall.Handle(f.Fd())
-	_, _, _ = procUnlockFileEx.Call(
+	r1, _, err := procUnlockFileEx.Call(
 		uintptr(handle),
 		0,
 		1, 0,
 		uintptr(unsafe.Pointer(&ol)),
 	)
+	if r1 == 0 {
+		slog.Warn("UnlockFileEx failed", "error", err)
+	}
 }
 
