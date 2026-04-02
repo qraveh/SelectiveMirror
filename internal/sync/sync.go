@@ -703,19 +703,29 @@ func (e *Engine) defaultRunRclone(ctx context.Context, args []string) int {
 	defer cancel()
 
 	cmd := exec.CommandContext(rcloneCtx, rclonePath, args...)
-	cmd.Stdout = os.Stdout // Let rclone output flow through in foreground mode
-	cmd.Stderr = os.Stderr
+
+	// Capture stderr for diagnostics. Without this, rclone error messages
+	// are lost when running as a Windows service (SYSTEM has no console).
+	// 311 failures went undiagnosed because stderr went to os.Stderr = nowhere.
+	var stderrBuf strings.Builder
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = &stderrBuf
 
 	err := cmd.Run()
 	if err != nil {
+		stderrMsg := strings.TrimSpace(stderrBuf.String())
 		if rcloneCtx.Err() == context.DeadlineExceeded {
-			e.log.Error("rclone timed out after 5 minutes", "args", strings.Join(args, " "))
+			e.log.Error("rclone timed out after 5 minutes", "args", strings.Join(args, " "), "stderr", stderrMsg)
 			return -2
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode()
+			exitCode := exitErr.ExitCode()
+			if stderrMsg != "" {
+				e.log.Warn("rclone failed", "exit", exitCode, "stderr", stderrMsg, "args", strings.Join(args[:min(3, len(args))], " "))
+			}
+			return exitCode
 		}
-		e.log.Error("rclone exec failed", "error", err)
+		e.log.Error("rclone exec failed", "error", err, "stderr", stderrMsg)
 		return -1
 	}
 	return 0
