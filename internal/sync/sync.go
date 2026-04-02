@@ -349,11 +349,22 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		return
 	}
 
+	// Content-addressed skip: if the remote already has this exact content
+	// (verified by lsjson or optimistically set after prior sync), skip the
+	// rclone call entirely. This eliminates network I/O for files that changed
+	// metadata (mtime, permissions) but not content, and prevents "big cold area"
+	// re-uploads during batch reconciliation on backends that don't support mtime.
+	if existing != nil && existing.RemoteHash != "" && existing.RemoteHash == hash {
+		e.log.Debug("content-addressed skip: remote already has this hash",
+			"project", proj.Name, "path", relPath, "hash", hash[:8])
+		// Update local state to reflect current local file state
+		e.state.UpdateFileState(proj.Name, relPath, hash, size, info.ModTime().UnixNano(), 0)
+		e.state.LogAction(proj.Name, relPath, "skip_hash_match", "remote already has content", 0)
+		return
+	}
+
 	// Build rclone command for content sync
 	remotePath := proj.Remote + "/" + filepath.ToSlash(relPath)
-	// No --checksum here: single-file sync is triggered by fsnotify, meaning
-	// the file was touched. Use rclone's default mtime comparison so that
-	// mtime-only changes (e.g. touch) propagate to remote.
 	args := []string{"copyto", localPath, remotePath}
 	args = append(args, e.commonFlags(proj)...)
 
@@ -379,6 +390,10 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		if e.metrics != nil {
 			e.metrics.RecordSync(proj.Name, size, elapsed.Milliseconds())
 		}
+		// Optimistically set remote_hash: rclone succeeded, so remote now has
+		// this content. This enables content-addressed skip on the next sync
+		// and closes the A→B→A window (Case 4 in edge case analysis).
+		e.state.UpdateRemoteVerification(proj.Name, relPath, hash, size)
 		e.Queue.SetAdaptiveCooldown(proj.Name+":"+relPath, elapsed)
 		e.Queue.RecordSuccess(proj.Name)
 	} else {

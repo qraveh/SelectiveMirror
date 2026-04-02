@@ -3201,3 +3201,141 @@ func TestAdaptiveCooldown_DecaysWhenQuiet(t *testing.T) {
 		t.Errorf("expected ~5s cooldown after quiet period, got %v", cooldown)
 	}
 }
+
+// =============================================================================
+// Content-addressed sync skip tests (SM-083 trust model)
+// =============================================================================
+
+// Case 3: remote_hash empty → always sync (don't trust unverified state)
+func TestSyncSingleFile_EmptyRemoteHash_AlwaysSyncs(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	testFile := filepath.Join(proj.LocalPath, "new.txt")
+	os.WriteFile(testFile, []byte("new content"), 0644)
+
+	// State has local_hash but no remote_hash (backfill only, never verified)
+	called := false
+	e := testEngine(t, cfg, func(_ context.Context, args []string) int {
+		called = true
+		return 0
+	})
+	e.state.UpdateFileState(proj.Name, "new.txt", "differenthash", 50, 0, 0)
+	// remote_hash is empty (default) — should NOT skip
+
+	e.syncSingleFile(context.Background(), proj, "new.txt")
+
+	if !called {
+		t.Error("rclone should be called when remote_hash is empty (unverified)")
+	}
+}
+
+// Content-addressed skip: remote already has this hash → skip rclone
+func TestSyncSingleFile_ContentAddressedSkip(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	content := []byte("known content")
+	testFile := filepath.Join(proj.LocalPath, "known.txt")
+	os.WriteFile(testFile, content, 0644)
+
+	// Compute expected hash
+	hash, size, _ := state.HashFile(testFile)
+
+	called := false
+	e := testEngine(t, cfg, func(_ context.Context, args []string) int {
+		called = true
+		return 0
+	})
+
+	// Seed state with matching remote_hash (simulates prior verification)
+	e.state.UpdateFileState(proj.Name, "known.txt", "oldhash", size, 0, 1) // old failed sync
+	e.state.UpdateRemoteVerification(proj.Name, "known.txt", hash, size)    // but remote has current content
+
+	e.syncSingleFile(context.Background(), proj, "known.txt")
+
+	if called {
+		t.Error("rclone should NOT be called — remote already has this content (hash match)")
+	}
+
+	// Verify state was updated to reflect current local state
+	fs, _ := e.state.GetFileState(proj.Name, "known.txt")
+	if fs == nil {
+		t.Fatal("state should exist")
+	}
+	if fs.LocalHash != hash {
+		t.Errorf("local_hash should be updated to %s, got %s", hash[:8], fs.LocalHash[:8])
+	}
+	if fs.RcloneExit != 0 {
+		t.Errorf("rclone_exit should be 0 (skip counts as success), got %d", fs.RcloneExit)
+	}
+}
+
+// Case 4: A→B→A cycle — optimistic remote_hash update prevents stale skip
+func TestSyncSingleFile_OptimisticRemoteHashUpdate(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	testFile := filepath.Join(proj.LocalPath, "cycle.txt")
+	os.WriteFile(testFile, []byte("content A"), 0644)
+	hashA, _, _ := state.HashFile(testFile)
+
+	var lastArgs []string
+	e := testEngine(t, cfg, func(_ context.Context, args []string) int {
+		lastArgs = args
+		return 0
+	})
+
+	// Step 1: Sync content A → success
+	e.syncSingleFile(context.Background(), proj, "cycle.txt")
+
+	// After sync, remote_hash should be optimistically set to hashA
+	fs, _ := e.state.GetFileState(proj.Name, "cycle.txt")
+	if fs == nil || fs.RemoteHash != hashA {
+		t.Fatalf("after sync A: remote_hash should be %s, got %s", hashA[:8], fs.RemoteHash[:8])
+	}
+
+	// Step 2: Change to content B → syncs
+	os.WriteFile(testFile, []byte("content B"), 0644)
+	hashB, _, _ := state.HashFile(testFile)
+	e.syncSingleFile(context.Background(), proj, "cycle.txt")
+
+	fs, _ = e.state.GetFileState(proj.Name, "cycle.txt")
+	if fs == nil || fs.RemoteHash != hashB {
+		t.Fatalf("after sync B: remote_hash should be %s, got %s", hashB[:8], fs.RemoteHash[:8])
+	}
+
+	// Step 3: Change back to content A → should sync (remote has B, not A)
+	os.WriteFile(testFile, []byte("content A"), 0644)
+	lastArgs = nil
+	e.syncSingleFile(context.Background(), proj, "cycle.txt")
+
+	if lastArgs == nil {
+		t.Error("A→B→A: rclone should be called because remote has B, not A")
+	}
+}
+
+// Different hash → normal sync proceeds
+func TestSyncSingleFile_DifferentRemoteHash_Syncs(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	testFile := filepath.Join(proj.LocalPath, "changed.txt")
+	os.WriteFile(testFile, []byte("new version"), 0644)
+
+	called := false
+	e := testEngine(t, cfg, func(_ context.Context, args []string) int {
+		called = true
+		return 0
+	})
+
+	// Remote has a different hash
+	e.state.UpdateFileState(proj.Name, "changed.txt", "oldhash", 50, 0, 0)
+	e.state.UpdateRemoteVerification(proj.Name, "changed.txt", "differentremotehash", 50)
+
+	e.syncSingleFile(context.Background(), proj, "changed.txt")
+
+	if !called {
+		t.Error("rclone should be called — local hash differs from remote hash")
+	}
+}

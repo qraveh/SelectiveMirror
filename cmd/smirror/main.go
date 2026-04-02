@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.25-dev"
+var version = "0.7.26-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1345,7 +1345,7 @@ func verifyProject(cfg *config.Global, proj config.Project, fe *filter.Engine, s
 			} else if err == nil {
 				// SM-083: Hash matches — record remote verification
 				if st != nil {
-					st.UpdateRemoteVerification(proj.Name, relPath, strings.ToLower(md5Hash), rf.Size)
+					_ = st.UpdateRemoteVerification(proj.Name, relPath, strings.ToLower(md5Hash), rf.Size)
 				}
 			}
 		}
