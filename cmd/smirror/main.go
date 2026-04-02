@@ -36,7 +36,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.5.9-dev"
+var version = "0.5.10-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -324,13 +324,15 @@ func cmdStart(configPath string, args []string) {
 	}
 	defer st.Close()
 
-	// Record instance info so `smirror status` can report it
+	// Record instance info so `smirror status` can report it.
+	// Clear stale health errors from previous run (SM-074).
 	exePath, _ := os.Executable()
 	st.SetMeta("instance_pid", fmt.Sprintf("%d", os.Getpid()))
 	st.SetMeta("instance_exe", exePath)
 	st.SetMeta("instance_started", time.Now().Local().Format(time.RFC3339))
 	st.SetMeta("instance_mode", "foreground")
 	st.SetMeta("instance_user", currentUser())
+	st.SetMeta("last_health_error", "")
 	defer func() {
 		st.SetMeta("instance_pid", "")
 		st.SetMeta("instance_exe", "")
@@ -2035,13 +2037,15 @@ func serviceMain() {
 		}
 		defer st.Close()
 
-		// Record instance info so `smirror status` can report it
+		// Record instance info so `smirror status` can report it.
+		// Clear stale health errors from previous run (SM-074).
 		exePath, _ := os.Executable()
 		st.SetMeta("instance_pid", fmt.Sprintf("%d", os.Getpid()))
 		st.SetMeta("instance_exe", exePath)
 		st.SetMeta("instance_started", time.Now().Local().Format(time.RFC3339))
 		st.SetMeta("instance_mode", "service")
 		st.SetMeta("instance_user", currentUser())
+		st.SetMeta("last_health_error", "")
 		defer func() {
 			st.SetMeta("instance_pid", "")
 			st.SetMeta("instance_exe", "")
