@@ -27,10 +27,9 @@ func TestGitignoreConformance(t *testing.T) {
 		{"star matches deep nested", "*.log", "a/b/c/d.log", true},
 		{"star does not match partial", "*.log", "debug.log.bak", false},
 		{"star does not match different ext", "*.log", "debug.txt", false},
-		// NOTE: go-gitignore library does not support ? wildcard.
-		// These document the ACTUAL behavior, not the gitignore spec.
-		{"question mark NOT supported by library", "file?.txt", "file1.txt", false}, // spec says true; library limitation
-		{"question mark literal", "file?.txt", "file.txt", false},
+		{"question mark single char", "file?.txt", "file1.txt", true},
+		{"question mark does not match empty", "file?.txt", "file.txt", false},
+		{"question mark does not match two chars", "file?.txt", "file12.txt", false},
 
 		// === Character classes ===
 		{"char class digits", "test[0-9].txt", "test5.txt", true},
@@ -93,10 +92,7 @@ func TestGitignoreConformance(t *testing.T) {
 		{"dotenv does not match similar", ".env", ".environment", false},
 		{"tilde backup files", "*~", "file.txt~", true},
 		{"tilde backup exe", "*~", "smirror.exe~", true},
-		// NOTE: go-gitignore library treats $ as special. Use quoted pattern in YAML config.
-		// In practice, global_excludes passes "~$*" which works because config parsing handles it.
-		// Direct .syncignore file may not match due to library limitation.
-		{"Office temp files (library limitation)", "~$*", "~$document.docx", false}, // spec says true; $ handling issue
+		{"Office temp files", "~$*", "~$document.docx", true},
 
 		// === Edge cases ===
 		{"empty path", "*.log", "", false},
@@ -172,12 +168,8 @@ func TestGitignoreConformance_GlobalPlusProject(t *testing.T) {
 			[]string{".git/"}, "!/hooks/*", "hooks/post-commit", false,
 		},
 		{
-			// NOTE: go-gitignore library does not enforce the excluded-parent constraint.
-			// In gitignore spec, once .git/ is excluded, !hooks/* cannot re-include files inside.
-			// We enforce this in GenerateRcloneFilterFile (SM-062) but not in IsExcluded.
-			// IsExcluded uses the library directly, which allows the negation to override.
-			"global dir does NOT block unanchored negation in IsExcluded (library limitation)",
-			[]string{".git/"}, "!hooks/*", ".git/hooks/pre-commit", false, // spec says true; SM-062 handles this in rclone filter only
+			"global dir blocks unanchored negation inside it (excluded-parent)",
+			[]string{".git/"}, "!hooks/*", ".git/hooks/pre-commit", true,
 		},
 	}
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	ignore "github.com/sabhiram/go-gitignore"
+	"github.com/git-pkgs/gitignore"
 )
 
 // Engine evaluates file paths against global and per-project ignore patterns.
@@ -16,11 +16,9 @@ import (
 type Engine struct {
 	mu sync.RWMutex
 
-	globalIgnore  *ignore.GitIgnore
-	projectIgnore *ignore.GitIgnore
-	mergedIgnore  *ignore.GitIgnore // global + project rules merged for correct negation
-	globalRules   []string
-	projectRules  []string
+	merged      *gitignore.Matcher // global + project rules merged
+	globalRules []string
+	projectRules []string
 
 	// Stored for Reload()
 	globalExcludes []string
@@ -39,10 +37,6 @@ func New(globalExcludes []string, syncIgnorePath string) (*Engine, error) {
 		globalRules:    globalExcludes,
 	}
 
-	if len(globalExcludes) > 0 {
-		e.globalIgnore = ignore.CompileIgnoreLines(globalExcludes...)
-	}
-
 	if err := e.loadProjectIgnore(); err != nil {
 		return nil, err
 	}
@@ -51,7 +45,7 @@ func New(globalExcludes []string, syncIgnorePath string) (*Engine, error) {
 	return e, nil
 }
 
-// rebuildMerged creates a single GitIgnore from global rules first, then project rules.
+// rebuildMerged creates a single Matcher from global rules first, then project rules.
 // This preserves gitignore last-match-wins semantics so that project negation patterns
 // (e.g., !important.log) correctly override global exclusions (e.g., *.log).
 // Caller must hold e.mu for write (or be in constructor before sharing).
@@ -60,16 +54,17 @@ func (e *Engine) rebuildMerged() {
 	all = append(all, e.globalRules...)
 	all = append(all, e.projectRules...)
 	if len(all) > 0 {
-		e.mergedIgnore = ignore.CompileIgnoreLines(all...)
+		m := gitignore.New("")
+		m.AddPatterns([]byte(strings.Join(all, "\n")), "")
+		e.merged = m
 	} else {
-		e.mergedIgnore = nil
+		e.merged = nil
 	}
 }
 
 // loadProjectIgnore reads and compiles the project .syncignore file.
 // Caller must hold e.mu for write (or be in constructor before sharing).
 func (e *Engine) loadProjectIgnore() error {
-	e.projectIgnore = nil
 	e.projectRules = nil
 
 	if e.syncIgnorePath == "" {
@@ -80,27 +75,20 @@ func (e *Engine) loadProjectIgnore() error {
 		return nil // file doesn't exist — not an error, just no project rules
 	}
 
-	gi, err := ignore.CompileIgnoreFile(e.syncIgnorePath)
+	// Read raw lines for both pattern compilation and rclone filter generation
+	data, err := os.ReadFile(e.syncIgnorePath)
 	if err != nil {
 		return err
 	}
-	e.projectIgnore = gi
 
-	// Read raw lines for rclone filter generation
-	data, err := os.ReadFile(e.syncIgnorePath)
-	if err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "#") {
-				e.projectRules = append(e.projectRules, line)
-			}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			e.projectRules = append(e.projectRules, line)
 		}
 	}
 
 	// Lint: warn about unanchored negation patterns that match at any depth.
-	// Patterns like !hooks/* will match hooks/ directories anywhere in the tree
-	// (including .git/hooks/, node_modules/.cache/hooks/, etc.).
-	// Anchored patterns like !/hooks/* only match at the project root.
 	for _, rule := range e.projectRules {
 		if strings.HasPrefix(rule, "!") && !strings.HasPrefix(rule, "!/") {
 			pattern := rule[1:]
@@ -132,17 +120,15 @@ func (e *Engine) Reload() (changed bool, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// FR-FILTER-11: Save previous state before loading. If the .syncignore file
-	// is malformed, restore previous rules instead of leaving filter in a broken
-	// state (fail-open or fail-closed are both dangerous).
-	prevProjectIgnore := e.projectIgnore
+	// FR-FILTER-11: Save previous state before loading.
 	prevProjectRules := make([]string, len(e.projectRules))
 	copy(prevProjectRules, e.projectRules)
+	prevMerged := e.merged
 
 	if err := e.loadProjectIgnore(); err != nil {
 		// Restore previous state — keep last-known-good filter rules
-		e.projectIgnore = prevProjectIgnore
 		e.projectRules = prevProjectRules
+		e.merged = prevMerged
 		slog.Warn("malformed .syncignore, keeping previous rules",
 			"path", e.syncIgnorePath, "error", err)
 		return false, nil
@@ -175,9 +161,9 @@ func logFilterDiff(path string, oldRules, newRules []string) {
 	for _, r := range oldRules {
 		old[r] = true
 	}
-	new := make(map[string]bool, len(newRules))
+	newSet := make(map[string]bool, len(newRules))
 	for _, r := range newRules {
-		new[r] = true
+		newSet[r] = true
 	}
 
 	var added, removed []string
@@ -187,7 +173,7 @@ func logFilterDiff(path string, oldRules, newRules []string) {
 		}
 	}
 	for _, r := range oldRules {
-		if !new[r] {
+		if !newSet[r] {
 			removed = append(removed, r)
 		}
 	}
@@ -206,8 +192,6 @@ func (e *Engine) SyncIgnorePath() string {
 }
 
 // Generation returns the filter's generation counter (incremented on each rule change).
-// Used by the sync engine to detect if a filter was hot-reloaded between task
-// enqueue and execution (SM-044).
 func (e *Engine) Generation() uint64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -216,18 +200,15 @@ func (e *Engine) Generation() uint64 {
 
 // IsExcluded returns true if the relative path should be excluded from sync.
 // relPath should use forward slashes. Safe for concurrent use.
-// Uses a merged ignore instance (global rules first, project rules after) so
-// that project negation patterns (e.g., !important.log) correctly override
-// global exclusions (e.g., *.log) via gitignore last-match-wins semantics.
 func (e *Engine) IsExcluded(relPath string) bool {
-	// Normalize to forward slashes for consistent matching
 	relPath = filepath.ToSlash(relPath)
 
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	if e.mergedIgnore != nil {
-		return e.mergedIgnore.MatchesPath(relPath)
+	if e.merged != nil {
+		isDir := strings.HasSuffix(relPath, "/")
+		return e.merged.MatchPath(relPath, isDir)
 	}
 	return false
 }
@@ -261,14 +242,10 @@ func (e *Engine) EffectiveRules() []string {
 // Global directory exclusions (e.g., .git/, node_modules/) are hoisted to the
 // top of the filter file so they cannot be overridden by unanchored project
 // negation patterns (e.g., !hooks/*). This enforces gitignore's excluded-parent
-// constraint: once a directory is excluded, files inside it cannot be re-included
-// by patterns that don't explicitly negate the directory itself.
-// File-pattern exclusions (e.g., *.log) are NOT hoisted, so project negation
-// (e.g., !important.log) can still override them as intended.
+// constraint.
 func (e *Engine) GenerateRcloneFilterFile() (string, error) {
 	e.mu.RLock()
 
-	// Separate global directory exclusions (to hoist) from other global rules
 	var globalDirExcludes []string
 	var otherGlobalRules []string
 	for _, r := range e.globalRules {
@@ -279,26 +256,19 @@ func (e *Engine) GenerateRcloneFilterFile() (string, error) {
 		}
 	}
 
-	// Build combined rules WITHOUT global dir excludes (they go to the top)
 	var combined []string
 	combined = append(combined, otherGlobalRules...)
 	combined = append(combined, e.projectRules...)
 
-	// Reverse so last-match-wins becomes first-match-wins
 	var lines []string
-
-	// Hoist global directory exclusions at the top (highest priority).
-	// These cannot be overridden by project negation patterns.
 	for _, d := range globalDirExcludes {
 		lines = append(lines, toRcloneFilter(d))
 	}
-
 	for i := len(combined) - 1; i >= 0; i-- {
 		lines = append(lines, toRcloneFilter(combined[i]))
 	}
 	e.mu.RUnlock()
 
-	// Include everything else
 	lines = append(lines, "+ **")
 
 	f, err := os.CreateTemp("", "smirror-filter-*.txt")
@@ -321,16 +291,11 @@ func (e *Engine) GenerateRcloneFilterFile() (string, error) {
 func toRcloneFilter(pattern string) string {
 	pattern = strings.TrimSpace(pattern)
 
-	// Negation: !pattern -> + pattern
 	if strings.HasPrefix(pattern, "!") {
 		return "+ " + pattern[1:]
 	}
-
-	// Directory-only pattern: dir/ -> - dir/**
 	if strings.HasSuffix(pattern, "/") {
 		return "- " + pattern + "**"
 	}
-
-	// Regular exclusion
 	return "- " + pattern
 }
