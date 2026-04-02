@@ -170,21 +170,17 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 			e.Anomaly.Record(anomaly.KindPanic, task.Project.Name, task.RelPath,
 				fmt.Sprintf("panic: %v", r), stack)
 		}
+		// Task duration is logged at DEBUG level for observability.
+		// We do NOT emit warnings or anomalies based on duration alone — a slow
+		// sync with many files is normal, not anomalous. Real timeout anomalies
+		// are emitted when rclone hits the 5-minute deadline (exit -2), which
+		// means the process was killed — that's a genuine problem.
+		// Previous timer-based warnings (5s, then 30s/120s) produced thousands
+		// of false alarms because they measured wall clock without understanding
+		// the workload (file count, total bytes, filter changes, cold start).
 		elapsed := time.Since(taskStart)
-		// Warn only when sync takes abnormally long for its type:
-		// - Per-file sync > 30s: likely file lock, network stall, or huge file
-		// - Full-project reconciliation > 120s: API throttling or connectivity issue
-		// The previous 5s threshold caused 1700+ false alarms on normal batch reconciliation.
-		threshold := 30 * time.Second
-		if task.RelPath == "" {
-			threshold = 120 * time.Second // full-project syncs are inherently slow
-		}
-		if elapsed > threshold {
-			e.log.Warn("abnormally slow sync", "project", task.Project.Name, "path", task.RelPath,
-				"elapsed", elapsed.Round(time.Second), "threshold", threshold)
-			e.Anomaly.Record(anomaly.KindSyncTimeout, task.Project.Name, task.RelPath,
-				fmt.Sprintf("sync took %s (threshold %s)", elapsed.Round(time.Second), threshold), "")
-		}
+		e.log.Debug("task completed", "project", task.Project.Name, "path", task.RelPath,
+			"elapsed", elapsed.Round(time.Millisecond))
 	}()
 
 	// Pre-sync hook (FR-ASP-17)
