@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.15-dev"
+var version = "0.7.16-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -747,20 +747,38 @@ func cmdStatus(configPath string) {
 		fmt.Printf("Last Health Error: %s\n\n", lastHealthErr)
 	}
 
-	// Recent anomalies
-	recent, err := anomaly.ReadRecent(dataDir(cfg), 10)
+	// Recent anomalies — only from current service session
+	iStarted, _ := st.GetMeta("instance_started")
+	var startedAfter time.Time
+	if iStarted != "" {
+		startedAfter, _ = time.Parse(time.RFC3339, iStarted)
+	}
+
+	recent, err := anomaly.ReadRecent(dataDir(cfg), 100)
 	if err == nil && len(recent) > 0 {
-		fmt.Printf("Recent Anomalies (%d):\n", len(recent))
+		var current, older int
 		for _, a := range recent {
+			aTime, _ := time.Parse(time.RFC3339, a.Time)
+			if !startedAfter.IsZero() && aTime.Before(startedAfter) {
+				older++
+				continue
+			}
+			if current == 0 {
+				fmt.Println("Anomalies (this session):")
+			}
 			proj := a.Project
 			if proj == "" {
 				proj = "-"
 			}
-			ts := a.Time
-			if t, parseErr := time.Parse(time.RFC3339, a.Time); parseErr == nil {
-				ts = t.Local().Format("15:04:05")
-			}
+			ts := aTime.Local().Format("15:04:05")
 			fmt.Printf("  [%-8s] %s %-25s %-15s %s\n", a.Severity, ts, a.Kind, proj, a.Message)
+			current++
+		}
+		if current == 0 {
+			fmt.Println("Anomalies: none this session")
+		}
+		if older > 0 {
+			fmt.Printf("  (%d anomalies from previous sessions in log files)\n", older)
 		}
 		fmt.Println()
 	}
