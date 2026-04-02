@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.2-dev"
+var version = "0.7.3-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -399,6 +399,12 @@ func cmdStart(configPath string, args []string) {
 		}
 	}
 
+	// SM-078: Named event for sync-now IPC (foreground mode)
+	syncEvent, syncEventErr := service.CreateSyncNowEvent()
+	if syncEventErr != nil {
+		slog.Warn("cannot create sync-now event", "error", syncEventErr)
+	}
+
 	// Setup context with signal handling
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -429,6 +435,23 @@ func cmdStart(configPath string, args []string) {
 	// Start sync engine (has internal panic recovery per task)
 	go syncEngine.Run(ctx)
 
+	// SM-078: Listen for sync-now signals via named event
+	if syncEvent != 0 {
+		go func() {
+			for {
+				if ctx.Err() != nil {
+					return
+				}
+				if service.WaitForSyncNowSignal(syncEvent, 1000) {
+					slog.Info("sync-now signal received via named event")
+					for _, proj := range cfg.Projects {
+						syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
+					}
+				}
+			}
+		}()
+	}
+
 	// Start heartbeat (writes status.json + heartbeat to DB + health checks + periodic reconciliation + auto-verify)
 	go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine, filters, notifier)
 
@@ -452,21 +475,13 @@ func cmdSyncNow(configPath string, args []string) {
 	lk, err := lock.Acquire(dataDir(cfg))
 	if err != nil {
 		if err == lock.ErrAlreadyRunning {
-			// Service is running — try SCM signal (requires admin), fall back to state DB signal
-			fmt.Println("Service is running — requesting immediate sync...")
-			if signalErr := service.SendSyncNow(); signalErr == nil {
-				fmt.Println("Sync signal sent via Service Control Manager.")
-				return
-			}
-			// SCM failed (likely not admin) — fall back to state DB signal
-			stDB, stErr := state.Open(cfg.StateDB)
-			if stErr != nil {
-				fmt.Fprintf(os.Stderr, "Error: cannot signal service: %v\n", stErr)
+			// SM-078: Signal service via named kernel event (no admin required, instant)
+			fmt.Println("Service is running — sending sync-now signal...")
+			if signalErr := service.SignalSyncNow(); signalErr != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", signalErr)
 				os.Exit(ExitError)
 			}
-			stDB.SetMeta("sync_requested", time.Now().UTC().Format(time.RFC3339))
-			stDB.Close()
-			fmt.Println("Sync request written to state DB. Service will pick it up shortly.")
+			fmt.Println("Sync-now signal sent. The service will perform an immediate full sync.")
 			return
 		}
 		fmt.Fprintf(os.Stderr, "Error acquiring lock: %v\n", err)
@@ -1871,20 +1886,8 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 
 	dd := dataDir(cfg)
 
-	// Poll for sync_requested flag from non-admin sync-now (SM-076 fallback)
-	syncPollTicker := time.NewTicker(2 * time.Second)
-	defer syncPollTicker.Stop()
-
 	for {
 		select {
-		case <-syncPollTicker.C:
-			if req, _ := st.GetMeta("sync_requested"); req != "" {
-				st.SetMeta("sync_requested", "")
-				slog.Info("sync-now request detected via state DB")
-				for _, proj := range cfg.Projects {
-					syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
-				}
-			}
 		case <-reconcileTicker.C:
 			// Periodic reconciliation: catch changes invisible to fsnotify
 			// (WSL operations, network drive edits, external tools).
@@ -2161,6 +2164,28 @@ func serviceMain() {
 
 		liveSyncEngine = syncEngine
 		liveCfg = cfg
+
+		// SM-078: Create named event for sync-now IPC (no admin required)
+		syncEvent, syncEventErr := service.CreateSyncNowEvent()
+		if syncEventErr != nil {
+			slog.Warn("cannot create sync-now event", "error", syncEventErr)
+		} else {
+			go func() {
+				for {
+					if ctx.Err() != nil {
+						return
+					}
+					// Wait 1 second at a time, check context between waits
+					if service.WaitForSyncNowSignal(syncEvent, 1000) {
+						slog.Info("sync-now signal received via named event")
+						for _, proj := range cfg.Projects {
+							syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
+						}
+					}
+				}
+			}()
+			slog.Info("sync-now event listener started")
+		}
 
 		slog.Info("smirror service running", "mirrors", cfg.ProjectNames())
 		<-ctx.Done()
