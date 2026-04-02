@@ -28,16 +28,20 @@ jobs:
           golangci-lint run ./internal/... ./cmd/...
 
       - name: Unit tests with coverage
-        run: go test -v ./internal/... -coverprofile=coverage.out -covermode=count
-
-      - name: Coverage summary
         shell: pwsh
-        run: go tool cover -func=coverage.out | Select-String "total:"
+        run: |
+          go test -v ./internal/... -coverprofile="$env:GITHUB_WORKSPACE\coverage.out" -covermode=count
+          if (!(Test-Path "$env:GITHUB_WORKSPACE\coverage.out")) {
+            Write-Error "coverage.out not created"
+            exit 1
+          }
 
       - name: Coverage gate (fail if below 35%)
         shell: pwsh
         run: |
-          $line = go tool cover -func=coverage.out | Select-String "total:"
+          $output = & go tool cover "-func=$env:GITHUB_WORKSPACE\coverage.out"
+          $line = $output | Select-String "total:"
+          Write-Host $line
           if ($line -match '(\d+\.\d+)%') {
             $pct = [double]$Matches[1]
             Write-Host "Coverage: ${pct}%"
@@ -46,7 +50,7 @@ jobs:
               exit 1
             }
           } else {
-            Write-Error "Could not parse coverage"
+            Write-Error "Could not parse coverage from: $output"
             exit 1
           }
 
