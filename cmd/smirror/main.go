@@ -36,7 +36,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.3.15-dev"
+var version = "0.3.16-dev"
+
+// FR-CLI-07: Documented exit codes for script/CI integration.
+const (
+	ExitSuccess     = 0
+	ExitError       = 1 // general error
+	ExitConfigError = 2 // config load/validation failure
+	ExitRcloneError = 3 // rclone-related failure
+	ExitLockConflict = 4 // another instance is running
+)
 
 func main() {
 	// Emergency: write to a fixed path so we can diagnose service crashes.
@@ -157,7 +166,7 @@ func loadConfig(path string) *config.Global {
 	cfg, err := config.Load(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error loading config %s: %v\n", path, err)
-		os.Exit(1)
+		os.Exit(ExitConfigError)
 	}
 	return cfg
 }
@@ -283,7 +292,7 @@ func cmdStart(configPath string, args []string) {
 		} else {
 			fmt.Fprintf(os.Stderr, "Error acquiring lock: %v\n", err)
 		}
-		os.Exit(1)
+		os.Exit(ExitLockConflict)
 	}
 	defer lk.Release()
 
@@ -407,7 +416,7 @@ func cmdSyncNow(configPath string, args []string) {
 		proj := cfg.FindProject(args[0])
 		if proj == nil {
 			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
-			os.Exit(1)
+			os.Exit(ExitConfigError)
 		}
 		projects = []config.Project{*proj}
 	}
@@ -463,7 +472,7 @@ func cmdDryRun(configPath string, args []string) {
 		proj := cfg.FindProject(args[0])
 		if proj == nil {
 			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
-			os.Exit(1)
+			os.Exit(ExitConfigError)
 		}
 		projects = []config.Project{*proj}
 	}
@@ -669,7 +678,7 @@ func cmdTestMirrors(configPath string, args []string) {
 	})
 	if cfg == nil {
 		fmt.Printf("\nCannot continue without valid config. %d passed, %d failed.\n", passed, failed)
-		os.Exit(1)
+		os.Exit(ExitConfigError)
 	}
 
 	// Open state store for instance info lookups (best-effort)
@@ -684,7 +693,7 @@ func cmdTestMirrors(configPath string, args []string) {
 		proj := cfg.FindProject(args[0])
 		if proj == nil {
 			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
-			os.Exit(1)
+			os.Exit(ExitConfigError)
 		}
 		projects = []config.Project{*proj}
 	}
@@ -891,7 +900,7 @@ func cmdListFilters(configPath string, args []string) {
 		proj := cfg.FindProject(args[0])
 		if proj == nil {
 			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
-			os.Exit(1)
+			os.Exit(ExitConfigError)
 		}
 		projects = []config.Project{*proj}
 	}
@@ -915,7 +924,7 @@ func cmdExplain(configPath string, args []string) {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: smirror explain <mirror> <relative-path>")
 		fmt.Fprintln(os.Stderr, "Example: smirror explain Orch CLAUDE.md")
-		os.Exit(1)
+		os.Exit(ExitConfigError)
 	}
 
 	cfg := loadConfig(configPath)
@@ -925,7 +934,7 @@ func cmdExplain(configPath string, args []string) {
 	proj := cfg.FindProject(projName)
 	if proj == nil {
 		fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", projName, strings.Join(cfg.ProjectNames(), ", "))
-		os.Exit(1)
+		os.Exit(ExitConfigError)
 	}
 
 	// Build filter
@@ -2023,7 +2032,7 @@ func updateConfigKey(configPath, key, value string) error {
 func cmdService(configPath string, args []string) {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Usage: smirror service <install|uninstall|start|stop>")
-		os.Exit(1)
+		os.Exit(ExitConfigError)
 	}
 
 	switch args[0] {
@@ -2090,6 +2099,6 @@ func cmdService(configPath string, args []string) {
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown service action: %s\nUse: install, uninstall, start, stop\n", args[0])
-		os.Exit(1)
+		os.Exit(ExitConfigError)
 	}
 }
