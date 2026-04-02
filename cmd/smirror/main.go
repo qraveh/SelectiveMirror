@@ -36,7 +36,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.3.10-dev"
+var version = "0.3.11-dev"
 
 func main() {
 	// Emergency: write to a fixed path so we can diagnose service crashes.
@@ -1586,7 +1586,7 @@ func detectRemoteChanges(ctx context.Context, cfg *config.Global, st *state.Stor
 			slog.Info("remote path changed, migrating",
 				"mirror", proj.Name,
 				"old", stored, "new", proj.Remote)
-			if err := syncEngine.MigrateRemote(ctx, stored, proj.Remote); err != nil {
+			if err := syncEngine.MigrateRemote(ctx, proj, stored, proj.Remote); err != nil {
 				slog.Warn("remote migration failed, will re-sync",
 					"mirror", proj.Name, "error", err)
 			} else {

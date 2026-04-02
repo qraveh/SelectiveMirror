@@ -463,7 +463,7 @@ func TestCommonFlags_ContainsSkipLinks(t *testing.T) {
 	cfg := testConfig(proj)
 	e := testEngine(t, cfg, nil)
 
-	flags := e.commonFlags()
+	flags := e.commonFlags(proj)
 	found := false
 	for _, f := range flags {
 		if f == "--skip-links" {
@@ -577,7 +577,7 @@ func TestCommonFlags_BandwidthLimit(t *testing.T) {
 	cfg.BandwidthLimit = "10M"
 	e := testEngine(t, cfg, nil)
 
-	flags := e.commonFlags()
+	flags := e.commonFlags(proj)
 	foundBwlimit := false
 	for i, f := range flags {
 		if f == "--bwlimit" && i+1 < len(flags) && flags[i+1] == "10M" {
@@ -825,7 +825,7 @@ func TestDeleteFlags_BandwidthLimit(t *testing.T) {
 	cfg.BandwidthLimit = "5M"
 	e := testEngine(t, cfg, nil)
 
-	flags := e.deleteFlags()
+	flags := e.deleteFlags(proj)
 	found := false
 	for i, f := range flags {
 		if f == "--bwlimit" && i+1 < len(flags) && flags[i+1] == "5M" {
@@ -844,7 +844,7 @@ func TestDeleteFlags_ExtraFlags(t *testing.T) {
 	cfg.RcloneExtraFlags = []string{"--fast-list", "--no-traverse"}
 	e := testEngine(t, cfg, nil)
 
-	flags := e.deleteFlags()
+	flags := e.deleteFlags(proj)
 	flagStr := strings.Join(flags, " ")
 	if !strings.Contains(flagStr, "--fast-list") {
 		t.Errorf("deleteFlags missing --fast-list, got: %v", flags)
@@ -2536,7 +2536,7 @@ func TestMigrateRemote_Success(t *testing.T) {
 
 	e := testEngine(t, cfg, runner)
 
-	err := e.MigrateRemote(context.Background(), "gdrive:AI-hub/OldName", "gdrive:AI-hub/NewName")
+	err := e.MigrateRemote(context.Background(), proj, "gdrive:AI-hub/OldName", "gdrive:AI-hub/NewName")
 	if err != nil {
 		t.Fatalf("MigrateRemote: %v", err)
 	}
@@ -2568,7 +2568,7 @@ func TestMigrateRemote_Failure(t *testing.T) {
 
 	e := testEngine(t, cfg, runner)
 
-	err := e.MigrateRemote(context.Background(), "gdrive:old", "gdrive:new")
+	err := e.MigrateRemote(context.Background(), proj, "gdrive:old", "gdrive:new")
 	if err == nil {
 		t.Fatal("expected error on rclone failure")
 	}
@@ -2590,7 +2590,7 @@ func TestMigrateRemote_UsesCommonFlags(t *testing.T) {
 	}
 
 	e := testEngine(t, cfg, runner)
-	e.MigrateRemote(context.Background(), "gdrive:old", "gdrive:new")
+	e.MigrateRemote(context.Background(), proj, "gdrive:old", "gdrive:new")
 
 	// Common flags should include --skip-links
 	found := false
@@ -2602,5 +2602,203 @@ func TestMigrateRemote_UsesCommonFlags(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected --skip-links in args: %v", capturedArgs)
+	}
+}
+
+// --- FR-SYNC-14: Per-mirror rclone extra flags ---
+
+func TestPerMirrorRcloneExtraFlags(t *testing.T) {
+	proj := testProject(t)
+	proj.RcloneExtraFlags = []string{"--drive-chunk-size", "256M"}
+	cfg := testConfig(proj)
+	cfg.RcloneExtraFlags = []string{"--global-flag"}
+
+	var capturedArgs []string
+	runner := func(_ context.Context, args []string) int {
+		capturedArgs = args
+		return 0
+	}
+
+	e := testEngine(t, cfg, runner)
+	flags := e.commonFlags(proj)
+
+	// Global flag should be present
+	foundGlobal := false
+	foundPerMirror := false
+	for _, f := range flags {
+		if f == "--global-flag" {
+			foundGlobal = true
+		}
+		if f == "--drive-chunk-size" {
+			foundPerMirror = true
+		}
+	}
+	if !foundGlobal {
+		t.Error("global rclone extra flag not found in commonFlags")
+	}
+	if !foundPerMirror {
+		t.Error("per-mirror rclone extra flag not found in commonFlags")
+	}
+
+	// Verify per-mirror flags also appear in deleteFlags
+	dflags := e.deleteFlags(proj)
+	foundPerMirror = false
+	for _, f := range dflags {
+		if f == "--drive-chunk-size" {
+			foundPerMirror = true
+		}
+	}
+	if !foundPerMirror {
+		t.Error("per-mirror rclone extra flag not found in deleteFlags")
+	}
+
+	_ = runner
+	_ = capturedArgs
+}
+
+// --- FR-SYNC-16: Transient retry ---
+
+func TestSyncSingleFile_TransientRetry(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Create a file to sync
+	testFile := filepath.Join(proj.LocalPath, "retry-test.txt")
+	os.WriteFile(testFile, []byte("retry content"), 0644)
+
+	callCount := 0
+	runner := func(_ context.Context, args []string) int {
+		callCount++
+		if callCount == 1 {
+			return 1 // first call: transient failure
+		}
+		return 0 // second call: success
+	}
+
+	e := testEngine(t, cfg, runner)
+	e.syncSingleFile(context.Background(), proj, "retry-test.txt")
+
+	if callCount != 2 {
+		t.Errorf("expected 2 rclone calls (1 failure + 1 retry), got %d", callCount)
+	}
+}
+
+func TestSyncSingleFile_NoRetryOnExit3(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	testFile := filepath.Join(proj.LocalPath, "no-retry.txt")
+	os.WriteFile(testFile, []byte("no retry content"), 0644)
+
+	callCount := 0
+	runner := func(_ context.Context, args []string) int {
+		callCount++
+		return 3 // dir not found — should not retry
+	}
+
+	e := testEngine(t, cfg, runner)
+	e.syncSingleFile(context.Background(), proj, "no-retry.txt")
+
+	if callCount != 1 {
+		t.Errorf("expected 1 rclone call (no retry for exit 3), got %d", callCount)
+	}
+}
+
+// --- FR-SYNC-13: Adaptive cooldown ---
+
+func TestAdaptiveCooldown_FrequencyScaling(t *testing.T) {
+	q := NewFairQueue(0, 5*time.Second)
+
+	// Simulate 5 rapid events for the same file
+	key := "proj:hot-file.txt"
+	for i := 0; i < 5; i++ {
+		q.SetAdaptiveCooldown(key, 1*time.Second)
+	}
+
+	q.mu.Lock()
+	expiry, ok := q.cooldowns[key]
+	q.mu.Unlock()
+
+	if !ok {
+		t.Fatal("cooldown not set")
+	}
+
+	// With 5 events, freq factor = 5, freq cooldown = 5s * 5 = 25s
+	// Sync duration = 1s, duration cooldown = 1.5s
+	// Expected: max(25s, 1.5s) = 25s
+	cooldown := time.Until(expiry)
+	if cooldown < 20*time.Second || cooldown > 30*time.Second {
+		t.Errorf("expected ~25s cooldown for hot file, got %v", cooldown)
+	}
+}
+
+func TestAdaptiveCooldown_SyncDurationDominates(t *testing.T) {
+	q := NewFairQueue(0, 5*time.Second)
+
+	key := "proj:large-file.bin"
+	// Single event but large file took 60s to sync
+	q.SetAdaptiveCooldown(key, 60*time.Second)
+
+	q.mu.Lock()
+	expiry, ok := q.cooldowns[key]
+	q.mu.Unlock()
+
+	if !ok {
+		t.Fatal("cooldown not set")
+	}
+
+	// With 1 event: freq cooldown = 5s * 1 = 5s
+	// Sync duration = 60s, duration cooldown = 90s
+	// Expected: max(5s, 90s) = 90s
+	cooldown := time.Until(expiry)
+	if cooldown < 85*time.Second || cooldown > 95*time.Second {
+		t.Errorf("expected ~90s cooldown for large file, got %v", cooldown)
+	}
+}
+
+func TestAdaptiveCooldown_MaxCap(t *testing.T) {
+	q := NewFairQueue(0, 5*time.Second)
+
+	key := "proj:extreme.txt"
+	// Simulate many events AND long sync duration — should cap at 120s
+	for i := 0; i < 20; i++ {
+		q.SetAdaptiveCooldown(key, 200*time.Second)
+	}
+
+	q.mu.Lock()
+	expiry, ok := q.cooldowns[key]
+	q.mu.Unlock()
+
+	if !ok {
+		t.Fatal("cooldown not set")
+	}
+
+	cooldown := time.Until(expiry)
+	if cooldown > 125*time.Second {
+		t.Errorf("cooldown should be capped at 120s, got %v", cooldown)
+	}
+}
+
+func TestAdaptiveCooldown_DeleteBypassesCooldown(t *testing.T) {
+	q := NewFairQueue(0, 5*time.Second)
+
+	proj := config.Project{Name: "test"}
+
+	// Set a very long cooldown
+	key := "test:file.txt"
+	q.SetAdaptiveCooldown(key, 100*time.Second)
+
+	// Enqueue a delete for the same file
+	q.EnqueuePriority(Task{Project: proj, RelPath: "file.txt", Type: TaskDelete})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	task, ok := q.Dequeue(ctx)
+	if !ok {
+		t.Fatal("expected delete task to dequeue despite cooldown")
+	}
+	if task.Type != TaskDelete {
+		t.Errorf("expected TaskDelete, got %v", task.Type)
 	}
 }

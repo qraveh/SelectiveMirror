@@ -317,10 +317,18 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 	// the file was touched. Use rclone's default mtime comparison so that
 	// mtime-only changes (e.g. touch) propagate to remote.
 	args := []string{"copyto", localPath, remotePath}
-	args = append(args, e.commonFlags()...)
+	args = append(args, e.commonFlags(proj)...)
 
 	start := time.Now()
 	exitCode := e.runRclone(ctx, args)
+
+	// FR-SYNC-16: Retry once on transient failure (exit code 1 = general error).
+	// Don't retry: exit 3 (dir not found), exit 9 (cancelled), negative (timeout/exec failure).
+	if exitCode == 1 {
+		e.log.Info("transient failure, retrying once", "project", proj.Name, "path", relPath)
+		time.Sleep(2 * time.Second)
+		exitCode = e.runRclone(ctx, args)
+	}
 	elapsed := time.Since(start)
 
 	e.state.UpdateFileState(proj.Name, relPath, hash, size, info.ModTime().UnixNano(), exitCode)
@@ -331,7 +339,7 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		if e.metrics != nil {
 			e.metrics.RecordSync(proj.Name, size, elapsed.Milliseconds())
 		}
-		e.Queue.SetCooldown(proj.Name + ":" + relPath)
+		e.Queue.SetAdaptiveCooldown(proj.Name+":"+relPath, elapsed)
 		e.Queue.RecordSuccess(proj.Name)
 	} else {
 		e.log.Warn("sync failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
@@ -354,7 +362,7 @@ func (e *Engine) syncMtime(ctx context.Context, proj config.Project, relPath str
 	// rclone touch accepts ISO 8601 timestamp (UTC, second precision is sufficient for all backends)
 	ts := mtime.UTC().Format("2006-01-02T15:04:05")
 	args := []string{"touch", "--timestamp", ts, "--no-create", remotePath}
-	args = append(args, e.commonFlags()...)
+	args = append(args, e.commonFlags(proj)...)
 
 	start := time.Now()
 	exitCode := e.runRclone(ctx, args)
@@ -427,7 +435,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 		verb = "sync"
 	}
 	args := []string{verb, proj.LocalPath, proj.Remote, "--checksum", "--filter-from", filterFile}
-	args = append(args, e.commonFlags()...)
+	args = append(args, e.commonFlags(proj)...)
 
 	exitCode := e.runRclone(ctx, args)
 	elapsed := time.Since(start)
@@ -484,7 +492,7 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 	switch policy {
 	case config.DeleteMirror:
 		args := []string{"deletefile", remotePath}
-		args = append(args, e.deleteFlags()...)
+		args = append(args, e.deleteFlags(proj)...)
 
 		start := time.Now()
 		exitCode := e.runRclone(ctx, args)
@@ -503,7 +511,7 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 		ts := time.Now().UTC().Format("20060102T150405Z")
 		quarantinePath := proj.Remote + "/.quarantine/" + filepath.ToSlash(relPath) + "." + ts
 		args := []string{"moveto", remotePath, quarantinePath}
-		args = append(args, e.deleteFlags()...)
+		args = append(args, e.deleteFlags(proj)...)
 
 		start := time.Now()
 		exitCode := e.runRclone(ctx, args)
@@ -525,7 +533,7 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 // Uses minimal retries (1 attempt, no retry sleep) to avoid blocking the sync
 // engine for 30+ seconds on transient failures. Deletes are best-effort;
 // orphaned files will be caught by the next 'verify' or reconciliation.
-func (e *Engine) deleteFlags() []string {
+func (e *Engine) deleteFlags(proj config.Project) []string {
 	flags := []string{
 		"--retries", "1",
 		"--stats", "0",
@@ -536,6 +544,7 @@ func (e *Engine) deleteFlags() []string {
 		flags = append(flags, "--bwlimit", e.cfg.BandwidthLimit)
 	}
 	flags = append(flags, e.cfg.RcloneExtraFlags...)
+	flags = append(flags, proj.RcloneExtraFlags...)
 	return flags
 }
 
@@ -574,7 +583,7 @@ func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPa
 	e.log.Info("remote dir cleaned", "project", proj.Name, "path", dirPath, "files", len(files), "ms", elapsed.Milliseconds())
 }
 
-func (e *Engine) commonFlags() []string {
+func (e *Engine) commonFlags(proj config.Project) []string {
 	flags := []string{
 		"--retries", "3",
 		"--retries-sleep", "10s",
@@ -586,6 +595,7 @@ func (e *Engine) commonFlags() []string {
 		flags = append(flags, "--bwlimit", e.cfg.BandwidthLimit)
 	}
 	flags = append(flags, e.cfg.RcloneExtraFlags...)
+	flags = append(flags, proj.RcloneExtraFlags...)
 	return flags
 }
 
@@ -649,6 +659,8 @@ func (e *Engine) DryRun(ctx context.Context, proj config.Project) error {
 	if e.cfg.BandwidthLimit != "" {
 		args = append(args, "--bwlimit", e.cfg.BandwidthLimit)
 	}
+	args = append(args, e.cfg.RcloneExtraFlags...)
+	args = append(args, proj.RcloneExtraFlags...)
 
 	fmt.Printf("=== Dry run: %s ===\n", proj.Name)
 	fmt.Printf("Source: %s\n", proj.LocalPath)
@@ -665,12 +677,12 @@ func (e *Engine) DryRun(ctx context.Context, proj config.Project) error {
 // MigrateRemote performs a server-side move of all files from oldRemote to newRemote.
 // Used when a mirror's remote path changes in config — avoids re-uploading files.
 // On Google Drive, this is a server-side rename with no data transfer.
-func (e *Engine) MigrateRemote(ctx context.Context, oldRemote, newRemote string) error {
+func (e *Engine) MigrateRemote(ctx context.Context, proj config.Project, oldRemote, newRemote string) error {
 	e.log.Info("migrating remote", "old", oldRemote, "new", newRemote)
 	start := time.Now()
 
 	args := []string{"moveto", oldRemote, newRemote}
-	args = append(args, e.commonFlags()...)
+	args = append(args, e.commonFlags(proj)...)
 
 	exitCode := e.runRclone(ctx, args)
 	elapsed := time.Since(start)
@@ -769,7 +781,7 @@ func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, e
 	for _, g := range ghosts {
 		remotePath := proj.Remote + "/" + g.Path
 		args := []string{"deletefile", remotePath}
-		args = append(args, e.deleteFlags()...)
+		args = append(args, e.deleteFlags(proj)...)
 
 		exitCode := e.runRclone(ctx, args)
 		kind := "orphan"

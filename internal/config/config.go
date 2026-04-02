@@ -13,12 +13,13 @@ import (
 
 // Project defines a watched directory and its sync destination.
 type Project struct {
-	Name           string `yaml:"name"`
-	LocalPath      string `yaml:"local_path"`
-	Remote         string `yaml:"remote"`
-	DebounceSec    int    `yaml:"debounce_sec"`
-	MaxFileSizeMB  int    `yaml:"max_file_size_mb"`
-	SyncIgnorePath string `yaml:"syncignore_path"` // override; default: <local_path>/.syncignore
+	Name             string   `yaml:"name"`
+	LocalPath        string   `yaml:"local_path"`
+	Remote           string   `yaml:"remote"`
+	DebounceSec      int      `yaml:"debounce_sec"`
+	MaxFileSizeMB    int      `yaml:"max_file_size_mb"`
+	SyncIgnorePath   string   `yaml:"syncignore_path"`    // override; default: <local_path>/.syncignore
+	RcloneExtraFlags []string `yaml:"rclone_extra_flags"` // per-mirror rclone flags (appended after global)
 }
 
 // DebounceDuration returns the quiet-window interval as a time.Duration.

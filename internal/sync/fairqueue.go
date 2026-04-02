@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"log/slog"
 	gosync "sync"
 	"time"
 )
@@ -25,26 +26,37 @@ type circuitState struct {
 // It replaces the plain chan Task used previously, which could not inspect
 // or reorder queued items.
 type FairQueue struct {
-	mu          gosync.Mutex
-	cond        *gosync.Cond
-	items       []Task
-	pending     map[string]bool          // tracks which keys are in items (for O(1) membership check)
-	cooldowns   map[string]time.Time     // key → earliest allowed dequeue time
-	circuits    map[string]*circuitState // mirror name → failure state
-	cooldownDur time.Duration            // duration of cooldown after successful sync
-	closed      bool
-	maxSize     int // 0 = unlimited
+	mu           gosync.Mutex
+	cond         *gosync.Cond
+	items        []Task
+	pending      map[string]bool          // tracks which keys are in items (for O(1) membership check)
+	cooldowns    map[string]time.Time     // key → earliest allowed dequeue time
+	circuits     map[string]*circuitState // mirror name → failure state
+	cooldownDur  time.Duration            // base cooldown (used by SetCooldown; legacy)
+	closed       bool
+	maxSize      int // 0 = unlimited
+	eventHistory map[string][]time.Time   // key → recent event timestamps (for adaptive cooldown)
 }
 
 // NewFairQueue creates a FairQueue with an optional max size and cooldown duration.
 // If maxSize <= 0, the queue is unbounded. If cooldownDur <= 0, no cooldown is applied.
+// Adaptive cooldown constants.
+const (
+	adaptiveBaseCooldown = 5 * time.Second   // minimum cooldown
+	adaptiveMaxCooldown  = 120 * time.Second // maximum cooldown
+	adaptiveFreqWindow   = 60 * time.Second  // window for event frequency measurement
+	adaptiveMaxFreqFactor = 10               // cap on frequency multiplier
+	adaptiveSyncFactor   = 1.5               // multiplier on last sync duration
+)
+
 func NewFairQueue(maxSize int, cooldownDur time.Duration) *FairQueue {
 	q := &FairQueue{
-		pending:     make(map[string]bool),
-		cooldowns:   make(map[string]time.Time),
-		circuits:    make(map[string]*circuitState),
-		cooldownDur: cooldownDur,
-		maxSize:     maxSize,
+		pending:      make(map[string]bool),
+		cooldowns:    make(map[string]time.Time),
+		circuits:     make(map[string]*circuitState),
+		cooldownDur:  cooldownDur,
+		maxSize:      maxSize,
+		eventHistory: make(map[string][]time.Time),
 	}
 	q.cond = gosync.NewCond(&q.mu)
 	return q
@@ -122,6 +134,61 @@ func (q *FairQueue) SetCooldown(key string) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.cooldowns[key] = time.Now().Add(q.cooldownDur)
+}
+
+// SetAdaptiveCooldown sets a signal-based cooldown for a file after successful sync.
+// The cooldown is: max(baseCooldown * eventFrequency, syncDuration * 1.5)
+// This ensures hot files (frequent events) get longer cooldowns, and large files
+// (long sync times) aren't re-synced before their upload even completes.
+func (q *FairQueue) SetAdaptiveCooldown(key string, syncDuration time.Duration) {
+	if key == "" {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	now := time.Now()
+
+	// Trim event history to window, then append current event
+	cutoff := now.Add(-adaptiveFreqWindow)
+	history := q.eventHistory[key]
+	trimmed := history[:0]
+	for _, t := range history {
+		if t.After(cutoff) {
+			trimmed = append(trimmed, t)
+		}
+	}
+	trimmed = append(trimmed, now)
+	q.eventHistory[key] = trimmed
+
+	// Frequency-based component: base * min(eventCount, maxFactor)
+	freqFactor := len(trimmed)
+	if freqFactor > adaptiveMaxFreqFactor {
+		freqFactor = adaptiveMaxFreqFactor
+	}
+	freqCooldown := adaptiveBaseCooldown * time.Duration(freqFactor)
+
+	// Duration-based component: don't re-sync faster than the sync took
+	durationCooldown := time.Duration(float64(syncDuration) * adaptiveSyncFactor)
+
+	// Take the larger of the two
+	cooldown := freqCooldown
+	if durationCooldown > cooldown {
+		cooldown = durationCooldown
+	}
+
+	// Cap at maximum
+	if cooldown > adaptiveMaxCooldown {
+		cooldown = adaptiveMaxCooldown
+	}
+
+	q.cooldowns[key] = now.Add(cooldown)
+
+	slog.Debug("adaptive cooldown set",
+		"key", key,
+		"freq", len(trimmed),
+		"syncMs", syncDuration.Milliseconds(),
+		"cooldownMs", cooldown.Milliseconds())
 }
 
 // Circuit breaker constants.
