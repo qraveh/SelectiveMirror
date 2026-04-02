@@ -180,12 +180,14 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 	// Pre-sync hook (FR-ASP-17)
 	if task.Type != TaskDelete && task.RelPath != "" {
 		hookCmd := task.Project.EffectivePreSyncHook(e.cfg)
-		e.Hooks.Run(ctx, hookCmd, hooks.Env{
+		if err := e.Hooks.Run(ctx, hookCmd, hooks.Env{
 			Project: task.Project.Name,
 			File:    task.RelPath,
 			Remote:  task.Project.Remote,
 			Event:   "pre_sync",
-		})
+		}); err != nil {
+			e.log.Warn("pre-sync hook failed", "project", task.Project.Name, "path", task.RelPath, "err", err)
+		}
 	}
 
 	switch task.Type {
@@ -202,12 +204,14 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 	// Post-sync hook (FR-ASP-17)
 	if task.Type != TaskDelete && task.RelPath != "" {
 		hookCmd := task.Project.EffectivePostSyncHook(e.cfg)
-		e.Hooks.Run(ctx, hookCmd, hooks.Env{
+		if err := e.Hooks.Run(ctx, hookCmd, hooks.Env{
 			Project: task.Project.Name,
 			File:    task.RelPath,
 			Remote:  task.Project.Remote,
 			Event:   "post_sync",
-		})
+		}); err != nil {
+			e.log.Warn("post-sync hook failed", "project", task.Project.Name, "path", task.RelPath, "err", err)
+		}
 	}
 }
 
