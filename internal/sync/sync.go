@@ -171,9 +171,19 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 				fmt.Sprintf("panic: %v", r), stack)
 		}
 		elapsed := time.Since(taskStart)
-		if elapsed > 5*time.Second {
-			e.log.Warn("slow task", "project", task.Project.Name, "path", task.RelPath,
-				"type", task.Type, "ms", elapsed.Milliseconds())
+		// Warn only when sync takes abnormally long for its type:
+		// - Per-file sync > 30s: likely file lock, network stall, or huge file
+		// - Full-project reconciliation > 120s: API throttling or connectivity issue
+		// The previous 5s threshold caused 1700+ false alarms on normal batch reconciliation.
+		threshold := 30 * time.Second
+		if task.RelPath == "" {
+			threshold = 120 * time.Second // full-project syncs are inherently slow
+		}
+		if elapsed > threshold {
+			e.log.Warn("abnormally slow sync", "project", task.Project.Name, "path", task.RelPath,
+				"elapsed", elapsed.Round(time.Second), "threshold", threshold)
+			e.Anomaly.Record(anomaly.KindSyncTimeout, task.Project.Name, task.RelPath,
+				fmt.Sprintf("sync took %s (threshold %s)", elapsed.Round(time.Second), threshold), "")
 		}
 	}()
 
