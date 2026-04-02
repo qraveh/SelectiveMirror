@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.14-dev"
+var version = "0.7.15-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -745,6 +745,24 @@ func cmdStatus(configPath string) {
 	lastHealthErr, _ := st.GetMeta("last_health_error")
 	if lastHealthErr != "" {
 		fmt.Printf("Last Health Error: %s\n\n", lastHealthErr)
+	}
+
+	// Recent anomalies
+	recent, err := anomaly.ReadRecent(dataDir(cfg), 10)
+	if err == nil && len(recent) > 0 {
+		fmt.Printf("Recent Anomalies (%d):\n", len(recent))
+		for _, a := range recent {
+			proj := a.Project
+			if proj == "" {
+				proj = "-"
+			}
+			ts := a.Time
+			if t, parseErr := time.Parse(time.RFC3339, a.Time); parseErr == nil {
+				ts = t.Local().Format("15:04:05")
+			}
+			fmt.Printf("  [%-8s] %s %-25s %-15s %s\n", a.Severity, ts, a.Kind, proj, a.Message)
+		}
+		fmt.Println()
 	}
 }
 
