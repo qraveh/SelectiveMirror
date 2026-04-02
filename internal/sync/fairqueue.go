@@ -222,7 +222,9 @@ const (
 // consecutive failures, the mirror enters backoff — all its tasks are skipped
 // during dequeue until the backoff expires. Backoff doubles each time, capped
 // at circuitBreakerMaxBackoff.
-func (q *FairQueue) RecordFailure(mirrorName string) {
+// RecordFailure increments the failure counter for a mirror.
+// Returns true if this failure caused the circuit breaker to trip (threshold crossed).
+func (q *FairQueue) RecordFailure(mirrorName string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -241,7 +243,9 @@ func (q *FairQueue) RecordFailure(mirrorName string) {
 			backoff = circuitBreakerMaxBackoff
 		}
 		cs.backoffUntil = time.Now().Add(backoff)
+		return cs.consecutiveFailures == circuitBreakerThreshold // true only on first trip
 	}
+	return false
 }
 
 // RecordSuccess resets the failure counter for a mirror, clearing any backoff.

@@ -14,6 +14,7 @@ import (
 	gosync "sync"
 	"time"
 
+	"github.com/qraveh/SelectiveMirror/internal/anomaly"
 	"github.com/qraveh/SelectiveMirror/internal/config"
 	"github.com/qraveh/SelectiveMirror/internal/filter"
 	"github.com/qraveh/SelectiveMirror/internal/metrics"
@@ -59,6 +60,9 @@ type Engine struct {
 
 	// ListRemoteFunc lists files on the remote. If nil, uses the default rclone lsjson implementation.
 	ListRemoteFunc RemoteLister
+
+	// Anomaly is the optional anomaly recorder. Nil-safe (no-op when nil).
+	Anomaly *anomaly.Recorder
 
 	// Per-file locks prevent two workers from syncing the same file simultaneously.
 	// Key: "project:relPath". Full-project syncs (relPath="") use project name as key.
@@ -159,6 +163,8 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 				e.metrics.RecordError(task.Project.Name,
 					fmt.Sprintf("panic processing %s: %v", task.RelPath, r))
 			}
+			e.Anomaly.Record(anomaly.KindPanic, task.Project.Name, task.RelPath,
+				fmt.Sprintf("panic: %v", r), stack)
 		}
 		elapsed := time.Since(taskStart)
 		if elapsed > 5*time.Second {
@@ -349,7 +355,10 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		if e.metrics != nil {
 			e.metrics.RecordError(proj.Name, fmt.Sprintf("rclone exit %d for %s", exitCode, relPath))
 		}
-		e.Queue.RecordFailure(proj.Name)
+		if e.Queue.RecordFailure(proj.Name) {
+			e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, relPath,
+				fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold), "")
+		}
 	}
 }
 
@@ -453,7 +462,10 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 		if e.metrics != nil {
 			e.metrics.RecordError(proj.Name, fmt.Sprintf("full sync rclone exit %d", exitCode))
 		}
-		e.Queue.RecordFailure(proj.Name)
+		if e.Queue.RecordFailure(proj.Name) {
+			e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, "",
+				fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold), "")
+		}
 	}
 }
 

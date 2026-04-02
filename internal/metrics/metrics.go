@@ -28,6 +28,9 @@ type Collector struct {
 	lastScanTime    time.Time            // last startup reconciliation
 	startTime       time.Time
 	queueDepth      atomic.Int64
+
+	// AnomalySummaryFunc is set by the caller to provide anomaly counts for status output.
+	AnomalySummaryFunc func() map[string]int64
 }
 
 // Status is the JSON-serializable metrics snapshot.
@@ -43,6 +46,7 @@ type Status struct {
 	SyncErrors      int64                    `json:"sync_errors"`
 	AvgLatencyMs    int64                    `json:"avg_sync_latency_ms"`
 	Projects        map[string]ProjectStatus `json:"projects"`
+	AnomalyCounts   map[string]int64         `json:"anomaly_counts,omitempty"`
 	GeneratedAt     string                   `json:"generated_at"`
 }
 
@@ -155,6 +159,9 @@ func (c *Collector) Snapshot(version string) Status {
 	}
 	if !c.lastScanTime.IsZero() {
 		s.LastScanTime = c.lastScanTime.UTC().Format(time.RFC3339)
+	}
+	if c.AnomalySummaryFunc != nil {
+		s.AnomalyCounts = c.AnomalySummaryFunc()
 	}
 	return s
 }

@@ -81,6 +81,15 @@ type Global struct {
 	QuarantineDays     int          `yaml:"quarantine_days"`  // days to keep quarantined files (default 30)
 	VerifyIntervalS    int          `yaml:"verify_interval_sec"`  // periodic verify interval (default 21600 = 6h, 0 = disabled)
 	NotifyEnabled      *bool        `yaml:"notify_enabled"`       // Windows toast notifications (default true)
+	AnomalyDetectionEnabled     *bool        `yaml:"anomaly_detection_enabled"`      // Anomaly detection and recording (default true)
+}
+
+// IsAnomalyDetectionEnabled returns whether anomaly detection is enabled (default true).
+func (g Global) IsAnomalyDetectionEnabled() bool {
+	if g.AnomalyDetectionEnabled == nil {
+		return true
+	}
+	return *g.AnomalyDetectionEnabled
 }
 
 // RcloneArgs returns global rclone flags (--config if set).

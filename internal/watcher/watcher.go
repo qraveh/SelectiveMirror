@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/qraveh/SelectiveMirror/internal/anomaly"
 	"github.com/qraveh/SelectiveMirror/internal/config"
 	"github.com/qraveh/SelectiveMirror/internal/filter"
 	msync "github.com/qraveh/SelectiveMirror/internal/sync"
@@ -33,6 +34,9 @@ type Manager struct {
 
 	// clock abstracts time operations for testability. Defaults to realClock.
 	clock Clock
+
+	// Anomaly is the optional anomaly recorder. Nil-safe.
+	Anomaly *anomaly.Recorder
 
 	// Health monitoring
 	lastEventTime   time.Time
@@ -312,6 +316,8 @@ func (m *Manager) eventLoop(ctx context.Context) {
 				Message: fmt.Sprintf("watcher error: %v", err),
 			})
 			m.healthErrorsMu.Unlock()
+			m.Anomaly.Record(anomaly.KindWatcherError, "", "",
+				fmt.Sprintf("fsnotify: %v", err), "")
 		case <-ctx.Done():
 			return
 		}

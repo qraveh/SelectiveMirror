@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/qraveh/SelectiveMirror/internal/anomaly"
 	"github.com/qraveh/SelectiveMirror/internal/config"
 	"github.com/qraveh/SelectiveMirror/internal/filter"
 	"github.com/qraveh/SelectiveMirror/internal/lock"
@@ -36,7 +37,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.5.11-dev"
+var version = "0.5.12-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -348,8 +349,20 @@ func cmdStart(configPath string, args []string) {
 	m := metrics.New()
 	notifier := notify.New(cfg.IsNotifyEnabled())
 
-	// Create sync engine (with metrics)
+	// Create anomaly recorder (FR-ANOM-01..10)
+	var anomalyRecorder *anomaly.Recorder
+	if cfg.IsAnomalyDetectionEnabled() {
+		anomalyDir := filepath.Join(dataDir(cfg), "anomalies")
+		anomalyWriter := anomaly.NewFileWriter(anomalyDir)
+		anomalyRecorder = anomaly.NewRecorder(anomalyWriter)
+		defer anomalyRecorder.Close()
+		m.AnomalySummaryFunc = anomalyRecorder.SummaryStrings
+		slog.Info("anomaly detection enabled", "dir", anomalyDir)
+	}
+
+	// Create sync engine (with metrics + anomaly recorder)
 	syncEngine := msync.NewEngine(cfg, st, filters, m)
+	syncEngine.Anomaly = anomalyRecorder
 
 	// Create watcher manager (with delete policy)
 	watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.Queue, cfg.DeletePolicy())
@@ -357,6 +370,8 @@ func cmdStart(configPath string, args []string) {
 		slog.Error("watcher creation failed", "error", err)
 		os.Exit(1)
 	}
+
+	watchMgr.Anomaly = anomalyRecorder
 
 	// Auto-clean LEAKs when .syncignore filter rules change.
 	// LEAKs are files excluded by current filters but still on remote —
@@ -2057,13 +2072,26 @@ func serviceMain() {
 		filters := buildFilters(cfg)
 		m := metrics.New()
 		notifier := notify.New(cfg.IsNotifyEnabled())
+
+		// Anomaly recorder for service mode
+		var anomalyRecorder *anomaly.Recorder
+		if cfg.IsAnomalyDetectionEnabled() {
+			anomalyDir := filepath.Join(dataDir(cfg), "anomalies")
+			anomalyWriter := anomaly.NewFileWriter(anomalyDir)
+			anomalyRecorder = anomaly.NewRecorder(anomalyWriter)
+			defer anomalyRecorder.Close()
+			m.AnomalySummaryFunc = anomalyRecorder.SummaryStrings
+		}
+
 		syncEngine := msync.NewEngine(cfg, st, filters, m)
+		syncEngine.Anomaly = anomalyRecorder
 
 		watchMgr, err := watcher.NewManager(cfg.Projects, filters, syncEngine.Queue, cfg.DeletePolicy())
 		if err != nil {
 			slog.Error("watcher creation failed", "error", err)
 			return
 		}
+		watchMgr.Anomaly = anomalyRecorder
 
 		watchMgr.OnFilterChange = func(proj config.Project) {
 			cleaned, cleanErr := syncEngine.CleanupLeaks(context.Background(), proj)
