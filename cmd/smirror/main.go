@@ -38,7 +38,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.8-dev"
+var version = "0.7.9-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -2188,6 +2188,7 @@ func serviceMain() {
 					// Wait 1 second at a time, check context between waits
 					if service.WaitForSyncNowSignal(syncEvent, 1000) {
 						slog.Info("sync-now signal received via named event")
+						elog.Info(service.EventSyncNowReceived, "Immediate sync requested via sync-now signal")
 						for _, proj := range cfg.Projects {
 							syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
 						}
