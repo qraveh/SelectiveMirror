@@ -3,6 +3,48 @@
 All notable changes to SelectiveMirror are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [semver](https://semver.org/).
 
+## [0.7.0] — 2026-04-02
+
+### Added
+
+- **FR-ASP-17**: Pre/post-sync hook system. Shell commands run before and after per-file sync with environment variables (SMIRROR_PROJECT, SMIRROR_FILE, SMIRROR_REMOTE, SMIRROR_EVENT). Per-mirror and global config. 30s timeout. Errors are warnings, never block sync.
+- Config: `pre_sync_hook`, `post_sync_hook` on both mirror and global level
+- 5 new hook tests
+
+### Fixed
+
+- **SM-073**: `sync-now` acquires single-instance lock (prevents race with running service)
+- **SM-074**: Stale health error cleared on service restart
+
+---
+
+## [0.6.0] — 2026-04-02
+
+### Added
+
+- **FR-ANOM-01/02**: Anomaly classification engine with 11 categories (Panic, CircuitBreaker, Watcher:Error, Queue:DepthWarning, Ghost:Leak/Orphan/Stale, Reconciliation:Stale, Path:Gone, Sync:Timeout, Sync:Failure)
+- **FR-ANOM-03/04**: JSON-lines anomaly recording (anomalies-YYYY-MM-DD.jsonl) with automatic date rollover
+- **FR-ANOM-05**: Causal hypothesis templates per anomaly kind
+- **FR-ANOM-07**: Anomaly counts in metrics Status and status.json
+- **FR-ANOM-08**: Path sanitization (home directory redacted before persistence)
+- **FR-ANOM-10**: Anomaly file rotation (30 days, 50MB limit)
+- Config: `anomaly_detection_enabled` (default true)
+- 22 new anomaly tests
+- **SM-072**: 4-category ghost taxonomy (LEAK, RETAINED, STALE, ORPHAN). RETAINED files no longer reported as drift.
+- **SM-071**: Testable clock abstraction for debounce tests (18x faster watcher suite)
+- **SM-069**: Auto-clean LEAKs when .syncignore filter rules change
+- **SM-068**: Exit code 5 (ExitDrift) for test-mirrors drift detection
+- SRS.md and VV-Plan.md committed to version control
+
+### Changed
+
+- `FairQueue.RecordFailure()` returns `bool` (circuit breaker just tripped)
+- Circuit breaker trips emit `KindCircuitBreaker` anomaly
+- Panic recovery in processTask emits `KindPanic` anomaly
+- fsnotify errors emit `KindWatcherError` anomaly
+
+---
+
 ## [0.5.0] — 2026-04-02
 
 ### Added
