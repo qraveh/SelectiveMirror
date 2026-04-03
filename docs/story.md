@@ -70,9 +70,30 @@ For a **top-10% developer** — someone who ships production code daily, knows G
 | Bug finding + analysis + fixing | Ongoing | 83 bugs in 7 days |
 | **Total** | **3-5 months** | **7 days** |
 
-The ratio is roughly **15-20x**. But the raw time comparison understates the real advantage.
+The ratio is roughly **15-20x**. But this assumes the best developers — the ones who already know Go, Windows services, rclone, and gitignore semantics.
 
-A human developer working alone on this project would face a specific bottleneck that AI collaboration eliminates: **the feedback loop between writing code and understanding its consequences**. When SelectiveMirror's `.syncignore` filter had an unanchored negation pattern bug (SM-062), the AI traced the exact rclone filter generation, simulated the filter output, identified the excluded-parent constraint violation, and found that the fix needed to be in two places (the filter generator AND the pattern lint warnings) — all in a single analysis cycle. A human would discover the surface symptom, fix it, ship it, discover the deeper bug weeks later through user reports, and fix it again.
+### What about a typical developer?
+
+A **top-50% developer** — competent, employed, ships code regularly, but without deep expertise in every domain this project touches — faces compounding slowdowns. Each knowledge gap doesn't just add time; it creates production incidents that consume time from the next feature.
+
+The top-50% developer tries CGo-based SQLite first, hits cross-compilation issues, and switches to pure Go — losing 1-2 weeks. They get the Windows service running but miss that SYSTEM has a different PATH and rclone.conf location — two more weeks of debugging. They implement `.syncignore` filtering and ship it, not knowing that unanchored negation patterns match at any directory depth — that bug survives until a user reports 43 orphan files on Google Drive, months later.
+
+The production hardening phase is where the gap becomes a chasm. Every edge case — Office applications saving through temp-file-rename cycles, fsnotify buffer overflows during burst events, Google Drive API rate limiting, duplicate directory IDs preventing ghost cleanup — is a surprise that triggers a debugging session. The top-10% developer anticipates half of these. The top-50% developer discovers each one through a production incident.
+
+| | AI-assisted (actual) | Top 10% manual | Top 50% manual |
+|---|---|---|---|
+| Calendar time | **7 days** | 3-5 months | **8-14 months** |
+| Feature completeness | Full | Full | ~60% (no anomaly system, hooks, trust model, content-addressed sync) |
+| Test coverage | 392 tests | ~200 tests | ~50 tests |
+| Bugs found pre-production | 83 | ~20 | ~5 |
+| Documentation | 4,242 lines | ~1,000 lines | README only |
+| **Velocity ratio** | **1x** | **15-20x slower** | **40-60x slower** |
+
+The features that distinguish a polished product from a working prototype — anomaly detection, causal hypothesis templates, content-addressed sync skip, the trust model separating local-wishful from remote-verified state — are the features a top-50% developer would never build. Not because they can't, but because the economics don't justify it for a solo project. AI collaboration changes that calculus: these features cost minutes instead of weeks, so they get built.
+
+### The deeper advantage
+
+The raw time comparison understates the real advantage. A human developer working alone faces a specific bottleneck that AI collaboration eliminates: **the feedback loop between writing code and understanding its consequences**. When SelectiveMirror's `.syncignore` filter had an unanchored negation pattern bug (SM-062), the AI traced the exact rclone filter generation, simulated the filter output, identified the excluded-parent constraint violation, and found that the fix needed to be in two places (the filter generator AND the pattern lint warnings) — all in a single analysis cycle. A human would discover the surface symptom, fix it, ship it, discover the deeper bug weeks later through user reports, and fix it again.
 
 The 83 bug reports aren't a sign of poor quality. They're a sign that the AI found and fixed bugs that a human wouldn't discover until production. Bugs like: `deleteRemoteFile` silently discarding database errors (SM-079, critical — could cause incorrect remote deletions), or rclone stderr going to `/dev/null` when running as a Windows service (311 failures with zero diagnostic information). These are the bugs that live in production for months in manually-developed software.
 
