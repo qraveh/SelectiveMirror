@@ -54,7 +54,7 @@ func (e *Engine) rebuildMerged() {
 	all = append(all, e.globalRules...)
 	all = append(all, e.projectRules...)
 	if len(all) > 0 {
-		m := gitignore.New("")
+		m := &gitignore.Matcher{} // bare matcher — do NOT use New() which auto-loads .gitignore
 		m.AddPatterns([]byte(strings.Join(all, "\n")), "")
 		// SM-080: Check for pattern parse errors that would otherwise be silently lost.
 		if errs := m.Errors(); len(errs) > 0 {

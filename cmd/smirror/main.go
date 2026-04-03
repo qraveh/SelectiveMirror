@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/md5"
 	"database/sql"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -38,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.7.26-dev"
+var version = "0.8.0"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -48,6 +50,7 @@ const (
 	ExitRcloneError  = 3 // rclone-related failure (unreachable, auth, binary missing)
 	ExitLockConflict = 4 // another instance is running
 	ExitDrift        = 5 // diagnostic found drift (leaks, orphans, mismatches — tool worked, action needed)
+	ExitUpgrade      = 6 // selfupdate: new version available but user declined or preflight failed
 )
 
 func main() {
@@ -100,7 +103,7 @@ func main() {
 
 	// Print version header for all commands (except those that handle it themselves)
 	switch cmd {
-	case "version", "help", "--help", "-h", "report-bug":
+	case "version", "help", "--help", "-h", "report-bug", "selfupdate":
 		// handled below
 	default:
 		fmt.Printf("smirror %s\n", version)
@@ -125,6 +128,8 @@ func main() {
 		cmdStats(configPath)
 	case "report-bug":
 		cmdReportBug(configPath, cmdArgs)
+	case "selfupdate":
+		cmdSelfUpdate(configPath, cmdArgs)
 	case "service":
 		cmdService(configPath, cmdArgs)
 	case "version":
@@ -155,8 +160,10 @@ Commands:
   explain <mirror> <path>   Explain why a file is included or excluded
   project-stats             Show file counts and line counts across all mirrors (alias: stats)
   report-bug [--stdout]     Generate diagnostic report for bug filing
-  service <action>          Windows Service (background): install, uninstall, start, stop
-                            ("run as administrator" elevated cmd/PowerShell required for running smirror.exe service install/uninstall)
+  selfupdate [--check]      Check for and install updates (also: --whatsnew, --include-rclone)
+  service <action>          Windows Service (background): install, uninstall [--clean], start, stop
+                            ("run as administrator" elevated cmd/PowerShell required)
+                            uninstall --clean removes config, state DB, and logs
   version                   Show version
 
 Options:
@@ -284,6 +291,9 @@ func preflightPath(proj config.Project) []string {
 }
 
 func cmdStart(configPath string, args []string) {
+	// Non-blocking update check (rate-limited to once/24h)
+	go checkForUpdateOnStartup(configPath)
+
 	cfg := loadConfig(configPath)
 
 	// Pre-flight checks: verify local paths exist and rclone is available
@@ -597,6 +607,9 @@ func cmdDryRun(configPath string, args []string) {
 }
 
 func cmdStatus(configPath string) {
+	// Non-blocking update check (rate-limited to once/24h)
+	go checkForUpdateOnStartup(configPath)
+
 	cfg := loadConfig(configPath)
 
 	st, err := state.Open(cfg.StateDB)
@@ -1599,8 +1612,19 @@ func cmdReportBug(configPath string, args []string) {
 	if openBrowser {
 		fmt.Print(report)
 		fmt.Println("\n--- Opening browser ---")
-		url := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
-		_ = exec.Command("cmd", "/c", "start", url).Start()
+		// Pre-fill the Environment field in the GitHub issue template
+		issueURL := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
+		issueURL += "&environment=" + url.QueryEscape(report)
+		// Windows cmd.exe has a ~8191 char limit for URLs; truncate if needed
+		if len(issueURL) > 8000 {
+			truncated := report
+			if len(truncated) > 4000 {
+				truncated = truncated[:4000] + "\n... (truncated, paste full report from smirror report-bug --stdout)"
+			}
+			issueURL = "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
+			issueURL += "&environment=" + url.QueryEscape(truncated)
+		}
+		_ = exec.Command("cmd", "/c", "start", issueURL).Start()
 		return
 	}
 
@@ -2442,7 +2466,7 @@ func updateConfigKey(configPath, key, value string) error {
 
 func cmdService(configPath string, args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: smirror service <install|uninstall|start|stop>")
+		fmt.Fprintln(os.Stderr, "Usage: smirror service <install|uninstall [--clean] [--yes]|start|stop>")
 		os.Exit(ExitConfigError)
 	}
 
@@ -2488,13 +2512,66 @@ func cmdService(configPath string, args []string) {
 		fmt.Println("Start with: smirror service start")
 		fmt.Println("Or: net start smirror")
 
+		// Warn about .syncignore files present in project directories
+		if cfg, err := config.Load(configPath); err == nil {
+			var syncignoreFiles []string
+			for _, p := range cfg.Projects {
+				si := p.SyncIgnoreFile()
+				if _, err := os.Stat(si); err == nil {
+					syncignoreFiles = append(syncignoreFiles, si)
+				}
+			}
+			if len(syncignoreFiles) > 0 {
+				fmt.Println()
+				fmt.Println("Note: .syncignore files detected in project directories:")
+				for _, si := range syncignoreFiles {
+					fmt.Printf("  %s\n", si)
+				}
+				fmt.Println("These files control which files are synced per project.")
+			}
+		}
+
 	case "uninstall":
+		uflags := parseServiceUninstallFlags(args[1:])
+		clean := uflags.clean
+		autoYes := uflags.autoYes
+
 		_ = service.RemoveEventSource() // best-effort cleanup
 		if err := service.Uninstall(); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
+			// Distinguish "not installed" from real errors
+			if strings.Contains(err.Error(), "is not installed") {
+				fmt.Fprintln(os.Stderr, "Service 'smirror' is not installed.")
+				if !clean {
+					os.Exit(0)
+				}
+				// If --clean, continue to data removal even if service wasn't installed
+				fmt.Println()
+			} else {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Println("Service 'smirror' uninstalled successfully.")
 		}
-		fmt.Println("Service 'smirror' uninstalled successfully.")
+
+		if clean {
+			serviceUninstallClean(configPath, autoYes)
+		} else {
+			fmt.Println()
+			fmt.Println("To fully remove SelectiveMirror:")
+			fmt.Println("  MSI install:    Settings > Apps > SelectiveMirror > Uninstall")
+			fmt.Println("                  Or: msiexec /x {ProductCode}")
+			fmt.Println("  Manual install: Delete smirror.exe and remove its directory from PATH")
+			// Show data directory location
+			dataPath := config.DefaultDataDir()
+			fmt.Println()
+			fmt.Printf("User data preserved at: %s\n", dataPath)
+			fmt.Println("  config.yaml           — configuration")
+			fmt.Println("  state.db              — sync state database")
+			fmt.Println("  selectivemirror.log   — application logs")
+			fmt.Println()
+			fmt.Println("To also remove user data: smirror service uninstall --clean")
+		}
 
 	case "start":
 		if err := service.Start(); err != nil {
@@ -2517,4 +2594,186 @@ func cmdService(configPath string, args []string) {
 		fmt.Fprintf(os.Stderr, "Unknown service action: %s\nUse: install, uninstall, start, stop\n", args[0])
 		os.Exit(ExitConfigError)
 	}
+}
+
+// serviceUninstallFlags holds parsed flags for `smirror service uninstall`.
+type serviceUninstallFlags struct {
+	clean   bool
+	autoYes bool
+}
+
+// parseServiceUninstallFlags parses service uninstall flags from args.
+func parseServiceUninstallFlags(args []string) serviceUninstallFlags {
+	var f serviceUninstallFlags
+	for _, a := range args {
+		switch a {
+		case "--clean":
+			f.clean = true
+		case "--yes", "-y":
+			f.autoYes = true
+		}
+	}
+	return f
+}
+
+// dryTestRemovability checks whether each named file in dir can be opened for
+// read-write (i.e. is not locked by another process and has correct permissions).
+// Returns a list of human-readable descriptions of blocked files.
+// Files that do not exist are silently skipped.
+func dryTestRemovability(dir string, fileNames []string) []string {
+	var blocked []string
+	for _, name := range fileNames {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); os.IsNotExist(err) {
+			continue // file doesn't exist, nothing to remove
+		}
+		fh, err := os.OpenFile(p, os.O_RDWR, 0)
+		if err != nil {
+			blocked = append(blocked, fmt.Sprintf("  %s: %v", name, err))
+			continue
+		}
+		fh.Close()
+	}
+	return blocked
+}
+
+// serviceUninstallClean removes SelectiveMirror user data (config, state DB, logs).
+// Uses a dry-test approach: first verifies every file can be removed (no locks,
+// permissions OK), then either proceeds or aborts the entire operation.
+// Requires double confirmation unless --yes is passed.
+func serviceUninstallClean(configPath string, autoYes bool) {
+	dataPath := config.DefaultDataDir()
+
+	// --- Phase 1: Inventory ---
+	type fileEntry struct {
+		path string
+		desc string
+		size int64
+	}
+	var found []fileEntry
+	candidates := []struct {
+		name string
+		desc string
+	}{
+		{"config.yaml", "configuration"},
+		{"state.db", "sync state database"},
+		{"state.db-wal", "SQLite WAL journal"},
+		{"state.db-shm", "SQLite shared memory"},
+		{"selectivemirror.log", "application logs"},
+		{"smirror.lock", "instance lock file"},
+		{"status.json", "status snapshot"},
+	}
+
+	for _, c := range candidates {
+		p := filepath.Join(dataPath, c.name)
+		if info, err := os.Stat(p); err == nil {
+			found = append(found, fileEntry{path: p, desc: c.desc, size: info.Size()})
+		}
+	}
+
+	if len(found) == 0 {
+		fmt.Printf("No user data found at %s — nothing to clean.\n", dataPath)
+		return
+	}
+
+	// --- Phase 2: Dry-test — verify every file is removable ---
+	fmt.Println("Dry-test: checking all files can be removed...")
+	var fileNames []string
+	for _, f := range found {
+		fileNames = append(fileNames, filepath.Base(f.path))
+	}
+	blocked := dryTestRemovability(dataPath, fileNames)
+
+	if len(blocked) > 0 {
+		fmt.Println()
+		fmt.Println("ABORT: the following files are locked or inaccessible:")
+		for _, b := range blocked {
+			fmt.Println(b)
+		}
+		fmt.Println()
+		fmt.Println("Possible causes:")
+		fmt.Println("  - smirror is still running (stop with: smirror service stop)")
+		fmt.Println("  - Another process holds a file open")
+		fmt.Println("  - Insufficient permissions")
+		fmt.Println()
+		fmt.Println("Resolve the locks and retry: smirror service uninstall --clean")
+		os.Exit(ExitError)
+	}
+	fmt.Println("  All files are removable.")
+
+	// --- Phase 3: Show what will be removed ---
+	fmt.Println()
+	fmt.Println("The following user data will be permanently deleted:")
+	fmt.Println()
+	var totalSize int64
+	for _, f := range found {
+		totalSize += f.size
+		fmt.Printf("  %s (%s, %s)\n", filepath.Base(f.path), f.desc, humanBytes(f.size))
+	}
+	fmt.Printf("\n  Total: %s in %s\n", humanBytes(totalSize), dataPath)
+
+	// Warn about .syncignore files in project directories (NOT deleted)
+	if cfg, err := config.Load(configPath); err == nil {
+		var syncignoreFiles []string
+		for _, p := range cfg.Projects {
+			si := p.SyncIgnoreFile()
+			if _, err := os.Stat(si); err == nil {
+				syncignoreFiles = append(syncignoreFiles, si)
+			}
+		}
+		if len(syncignoreFiles) > 0 {
+			fmt.Println()
+			fmt.Println("  Note: .syncignore files in your project directories are NOT removed")
+			fmt.Println("  (they belong to the project, not to smirror):")
+			for _, si := range syncignoreFiles {
+				fmt.Printf("    %s\n", si)
+			}
+		}
+	}
+
+	// --- Phase 4: Double confirmation ---
+	if !autoYes {
+		fmt.Println()
+		fmt.Print("Remove all user data? This cannot be undone. [y/N] ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		line = strings.TrimSpace(strings.ToLower(line))
+		if line != "y" && line != "yes" {
+			fmt.Println("Clean cancelled. User data preserved.")
+			return
+		}
+
+		// Second confirmation
+		fmt.Print("Are you sure? Type 'DELETE' to confirm: ")
+		line, _ = reader.ReadString('\n')
+		line = strings.TrimSpace(line)
+		if line != "DELETE" {
+			fmt.Println("Clean cancelled. User data preserved.")
+			return
+		}
+	}
+
+	// --- Phase 5: Remove (all pre-verified removable) ---
+	fmt.Println()
+	for _, f := range found {
+		if err := os.Remove(f.path); err != nil {
+			// Should not happen — dry-test passed. Treat as fatal.
+			fmt.Fprintf(os.Stderr, "UNEXPECTED: failed to remove %s: %v\n", filepath.Base(f.path), err)
+			fmt.Fprintln(os.Stderr, "Aborting. Some files may have been removed. Check manually:")
+			fmt.Fprintf(os.Stderr, "  %s\n", dataPath)
+			os.Exit(ExitError)
+		}
+		fmt.Printf("  Removed %s\n", filepath.Base(f.path))
+	}
+
+	// Try to remove the data directory itself (only succeeds if empty)
+	if err := os.Remove(dataPath); err == nil {
+		fmt.Printf("  Removed %s\n", dataPath)
+	}
+
+	fmt.Printf("\nClean complete: %d files removed.\n", len(found))
+	fmt.Println()
+	fmt.Println("To fully remove SelectiveMirror:")
+	fmt.Println("  MSI install:    Settings > Apps > SelectiveMirror > Uninstall")
+	fmt.Println("  Manual install: Delete smirror.exe and remove its directory from PATH")
 }

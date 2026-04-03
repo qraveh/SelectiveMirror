@@ -209,6 +209,45 @@ func Uninstall() error {
 	return nil
 }
 
+// IsInstalled reports whether the smirror Windows service is registered.
+// Does not require Administrator privileges (read-only SCM query).
+func IsInstalled() bool {
+	m, err := mgr.Connect()
+	if err != nil {
+		return false
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService(serviceName)
+	if err != nil {
+		return false
+	}
+	s.Close()
+	return true
+}
+
+// IsRunning reports whether the smirror Windows service is currently running.
+// Returns (installed, running). Does not require Administrator for query.
+func IsRunning() (installed bool, running bool) {
+	m, err := mgr.Connect()
+	if err != nil {
+		return false, false
+	}
+	defer m.Disconnect()
+
+	s, err := m.OpenService(serviceName)
+	if err != nil {
+		return false, false
+	}
+	defer s.Close()
+
+	status, err := s.Query()
+	if err != nil {
+		return true, false
+	}
+	return true, status.State == svc.Running
+}
+
 // Start sends a start signal to the smirror Windows service.
 // Requires Administrator privileges.
 func Start() error {

@@ -869,3 +869,42 @@ func TestReload_MalformedSyncignore_KeepsPreviousRules(t *testing.T) {
 		t.Errorf("generation should not change on malformed .syncignore: got %d, want %d", fe.Generation(), gen1)
 	}
 }
+
+// Regression: rebuildMerged must NOT inherit .gitignore from the process CWD.
+// The git-pkgs/gitignore library's New("") auto-loads .gitignore files from the
+// filesystem. Our filter engine must use only explicit global_excludes + .syncignore.
+func TestFilterDoesNotInheritDotGitignore(t *testing.T) {
+	// Create a temp dir with a .gitignore that excludes *.exe
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.exe\nbin/\n"), 0644)
+
+	// cd into the temp dir so the library would pick up .gitignore if buggy
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	// Create filter with rules that do NOT exclude .exe
+	fe, err := New([]string{".git/", "*.tmp"}, "")
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// .exe files must NOT be excluded (only .gitignore excludes them, not our rules)
+	if fe.IsExcluded("bin/smirror.exe") {
+		t.Error("bin/smirror.exe should NOT be excluded — .gitignore must not leak into filter engine")
+	}
+	if fe.IsExcluded("test.exe") {
+		t.Error("test.exe should NOT be excluded — .gitignore must not leak into filter engine")
+	}
+
+	// Our explicit rules still work
+	if !fe.IsExcluded(".git/config") {
+		t.Error(".git/config should be excluded by explicit .git/ rule")
+	}
+	if !fe.IsExcluded("scratch.tmp") {
+		t.Error("scratch.tmp should be excluded by explicit *.tmp rule")
+	}
+	if fe.IsExcluded("internal/sync/sync.go") {
+		t.Error("internal/sync/sync.go should NOT be excluded")
+	}
+}

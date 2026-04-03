@@ -1256,6 +1256,9 @@ type RemoteFile struct {
 }
 
 // ListRemote returns all files on the remote for a project using rclone lsjson.
+// Duplicates (same path, different content) are deduplicated: newest ModTime wins,
+// size breaks ties (larger wins). This handles backends like Google Drive that
+// allow multiple files with the same name in the same directory.
 func ListRemote(cfg *config.Global, proj config.Project) ([]RemoteFile, error) {
 	start := time.Now()
 	rclonePath := cfg.RclonePath
@@ -1270,10 +1273,80 @@ func ListRemote(cfg *config.Global, proj config.Project) ([]RemoteFile, error) {
 		return nil, fmt.Errorf("rclone lsjson: %w", err)
 	}
 
-	var files []RemoteFile
-	if err := json.Unmarshal(out, &files); err != nil {
+	var raw []RemoteFile
+	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, fmt.Errorf("parsing lsjson: %w", err)
 	}
+
+	files := deduplicateRemoteFiles(raw, proj.Name)
 	slog.Debug("ListRemote", "project", proj.Name, "files", len(files), "ms", time.Since(start).Milliseconds())
 	return files, nil
+}
+
+// deduplicateRemoteFiles resolves same-path duplicates by keeping the newest
+// entry (by ModTime). On ModTime tie, the larger file wins (more likely to be
+// the complete write). Warnings are logged for each duplicate found.
+func deduplicateRemoteFiles(files []RemoteFile, project string) []RemoteFile {
+	type entry struct {
+		file RemoteFile
+		idx  int // insertion order for stable output
+	}
+	best := make(map[string]entry, len(files))
+	dupes := 0
+
+	for _, rf := range files {
+		path := filepath.ToSlash(rf.Path)
+		prev, exists := best[path]
+		if !exists {
+			best[path] = entry{file: rf, idx: len(best)}
+			continue
+		}
+
+		dupes++
+		winner, loser := rf, prev.file
+		if remoteFileNewer(prev.file, rf) {
+			winner, loser = prev.file, rf
+		}
+
+		slog.Warn("duplicate remote file, keeping newest",
+			"project", project,
+			"path", path,
+			"kept_size", winner.Size, "kept_mod", winner.ModTime,
+			"dropped_size", loser.Size, "dropped_mod", loser.ModTime)
+
+		best[path] = entry{file: winner, idx: prev.idx}
+	}
+
+	if dupes == 0 {
+		return files
+	}
+
+	// Rebuild slice in original insertion order for deterministic output.
+	result := make([]RemoteFile, len(best))
+	for _, e := range best {
+		result[e.idx] = e.file
+	}
+	slog.Info("deduplicated remote listing", "project", project,
+		"duplicates", dupes, "before", len(files), "after", len(result))
+	return result
+}
+
+// remoteFileNewer returns true if a is newer than b.
+// On tie, larger size wins (more likely to be the complete write).
+func remoteFileNewer(a, b RemoteFile) bool {
+	ta, errA := time.Parse(time.RFC3339, a.ModTime)
+	tb, errB := time.Parse(time.RFC3339, b.ModTime)
+	if errA != nil && errB != nil {
+		return a.Size >= b.Size
+	}
+	if errA != nil {
+		return false
+	}
+	if errB != nil {
+		return true
+	}
+	if ta.Equal(tb) {
+		return a.Size >= b.Size
+	}
+	return ta.After(tb)
 }

@@ -3339,3 +3339,80 @@ func TestSyncSingleFile_DifferentRemoteHash_Syncs(t *testing.T) {
 		t.Error("rclone should be called — local hash differs from remote hash")
 	}
 }
+
+// Backends like Google Drive allow multiple files with the same name.
+// deduplicateRemoteFiles must keep only the newest entry per path.
+func TestDeduplicateRemoteFiles(t *testing.T) {
+	t.Run("newest wins", func(t *testing.T) {
+		files := []RemoteFile{
+			{Path: "a.go", Size: 100, ModTime: "2026-04-01T12:00:00Z"},
+			{Path: "a.go", Size: 200, ModTime: "2026-04-02T12:00:00Z"}, // newer
+			{Path: "b.go", Size: 300, ModTime: "2026-04-01T12:00:00Z"},
+		}
+		got := deduplicateRemoteFiles(files, "test")
+		if len(got) != 2 {
+			t.Fatalf("expected 2 files, got %d", len(got))
+		}
+		for _, f := range got {
+			if f.Path == "a.go" && f.Size != 200 {
+				t.Errorf("a.go: expected size 200 (newer), got %d", f.Size)
+			}
+		}
+	})
+
+	t.Run("size breaks tie", func(t *testing.T) {
+		files := []RemoteFile{
+			{Path: "x.go", Size: 50, ModTime: "2026-04-01T12:00:00Z"},
+			{Path: "x.go", Size: 500, ModTime: "2026-04-01T12:00:00Z"}, // same time, larger
+		}
+		got := deduplicateRemoteFiles(files, "test")
+		if len(got) != 1 {
+			t.Fatalf("expected 1 file, got %d", len(got))
+		}
+		if got[0].Size != 500 {
+			t.Errorf("expected size 500 (larger), got %d", got[0].Size)
+		}
+	})
+
+	t.Run("no duplicates passthrough", func(t *testing.T) {
+		files := []RemoteFile{
+			{Path: "a.go", Size: 100, ModTime: "2026-04-01T12:00:00Z"},
+			{Path: "b.go", Size: 200, ModTime: "2026-04-02T12:00:00Z"},
+		}
+		got := deduplicateRemoteFiles(files, "test")
+		if len(got) != 2 {
+			t.Fatalf("expected 2 files, got %d", len(got))
+		}
+		// Should return original slice unchanged (no allocation)
+		if &got[0] != &files[0] {
+			t.Error("no-dup case should return original slice, not a copy")
+		}
+	})
+
+	t.Run("three copies keeps newest", func(t *testing.T) {
+		files := []RemoteFile{
+			{Path: "f.go", Size: 10, ModTime: "2026-03-01T00:00:00Z"},
+			{Path: "f.go", Size: 20, ModTime: "2026-04-01T00:00:00Z"}, // newest
+			{Path: "f.go", Size: 15, ModTime: "2026-03-15T00:00:00Z"},
+		}
+		got := deduplicateRemoteFiles(files, "test")
+		if len(got) != 1 {
+			t.Fatalf("expected 1 file, got %d", len(got))
+		}
+		if got[0].Size != 20 {
+			t.Errorf("expected size 20 (newest), got %d", got[0].Size)
+		}
+	})
+
+	t.Run("dirs not affected", func(t *testing.T) {
+		files := []RemoteFile{
+			{Path: "dir", IsDir: true},
+			{Path: "dir/file.go", Size: 100, ModTime: "2026-04-01T12:00:00Z"},
+			{Path: "dir/file.go", Size: 200, ModTime: "2026-04-02T12:00:00Z"},
+		}
+		got := deduplicateRemoteFiles(files, "test")
+		if len(got) != 2 {
+			t.Fatalf("expected 2 entries (1 dir + 1 deduped file), got %d", len(got))
+		}
+	})
+}
