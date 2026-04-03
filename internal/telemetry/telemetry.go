@@ -24,6 +24,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
@@ -156,6 +158,8 @@ func (c *Client) SendReport(ctx context.Context, report Report) {
 
 // CheckForUpdate checks GitHub releases for a newer version.
 // Returns the latest release info, or nil if already up to date.
+// Authenticates automatically: tries `gh auth token`, then GITHUB_TOKEN env,
+// then falls back to unauthenticated (sufficient for public repos).
 func (c *Client) CheckForUpdate(ctx context.Context) (*ReleaseInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, UpdateEndpoint, nil)
 	if err != nil {
@@ -163,6 +167,11 @@ func (c *Client) CheckForUpdate(ctx context.Context) (*ReleaseInfo, error) {
 	}
 	req.Header.Set("User-Agent", fmt.Sprintf("smirror/%s", c.version))
 	req.Header.Set("Accept", "application/vnd.github+json")
+
+	// Authenticate if possible (required for private repos)
+	if token := githubToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -189,6 +198,19 @@ func (c *Client) CheckForUpdate(ctx context.Context) (*ReleaseInfo, error) {
 	}
 
 	return &release, nil
+}
+
+// githubToken returns a GitHub API token if available.
+// Priority: 1) gh CLI auth token, 2) GITHUB_TOKEN env var, 3) empty string.
+func githubToken() string {
+	// Try gh CLI (most common for developers)
+	if out, err := exec.CommandContext(context.Background(), "gh", "auth", "token").Output(); err == nil {
+		if token := strings.TrimSpace(string(out)); token != "" {
+			return token
+		}
+	}
+	// Fall back to environment variable
+	return os.Getenv("GITHUB_TOKEN")
 }
 
 // FindAsset returns the first asset whose name contains the given substring,
