@@ -2575,6 +2575,10 @@ func cmdService(configPath string, args []string) {
 
 	case "start":
 		if err := service.Start(); err != nil {
+			if strings.Contains(err.Error(), "already running") || strings.Contains(err.Error(), "already been started") {
+				fmt.Fprintf(os.Stderr, "Warning: service is already running.\n")
+				os.Exit(0)
+			}
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
