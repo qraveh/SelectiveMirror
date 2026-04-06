@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.0"
+var version = "0.8.1-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -70,6 +70,13 @@ func main() {
 		return
 	}
 
+	// CLI mode: wrap in crash recovery so panics produce a saved report
+	// instead of a raw stack trace.
+	runWithCrashReport(cliMain)
+}
+
+// cliMain is the CLI entry point, called from main() wrapped in runWithCrashReport.
+func cliMain() {
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -107,6 +114,12 @@ func main() {
 		// handled below
 	default:
 		fmt.Printf("smirror %s\n", version)
+	}
+
+	// Check for unsent crash reports on interactive commands
+	switch cmd {
+	case "start", "status", "test-mirrors", "doctor", "verify":
+		checkUnsentCrashReports(configPath)
 	}
 
 	switch cmd {
@@ -1611,6 +1624,25 @@ func cmdReportBug(configPath string, args []string) {
 
 	if openBrowser {
 		fmt.Print(report)
+
+		// Search for similar existing issues before submitting
+		fmt.Println("\nSearching for similar issues...")
+		searchCtx, searchCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer searchCancel()
+		if issues, err := searchSimilarIssues(searchCtx, report); err == nil && len(issues) > 0 {
+			choice := displayDupResults(issues)
+			if choice > 0 {
+				// User chose to view an existing issue
+				_ = exec.Command("cmd", "/c", "start", issues[choice-1].HTMLURL).Start()
+				return
+			}
+			// choice == 0: user wants to submit new report
+		} else if err != nil {
+			// Silently skip — don't block submission on search failure
+		} else {
+			fmt.Println("  No similar issues found.")
+		}
+
 		fmt.Println("\n--- Opening browser ---")
 		// Pre-fill the Environment field in the GitHub issue template
 		issueURL := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
@@ -2590,6 +2622,10 @@ func cmdService(configPath string, args []string) {
 
 	case "stop":
 		if err := service.Stop(); err != nil {
+			if strings.Contains(err.Error(), "not been started") || strings.Contains(err.Error(), "not running") {
+				fmt.Fprintf(os.Stderr, "Warning: service is not running.\n")
+				os.Exit(0)
+			}
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}

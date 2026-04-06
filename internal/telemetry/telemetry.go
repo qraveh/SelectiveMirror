@@ -169,7 +169,7 @@ func (c *Client) CheckForUpdate(ctx context.Context) (*ReleaseInfo, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 
 	// Authenticate if possible (required for private repos)
-	if token := githubToken(); token != "" {
+	if token := GithubToken(); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
@@ -200,9 +200,9 @@ func (c *Client) CheckForUpdate(ctx context.Context) (*ReleaseInfo, error) {
 	return &release, nil
 }
 
-// githubToken returns a GitHub API token if available.
+// GithubToken returns a GitHub API token if available.
 // Priority: 1) gh CLI auth token, 2) GITHUB_TOKEN env var, 3) empty string.
-func githubToken() string {
+func GithubToken() string {
 	// Try gh CLI (most common for developers)
 	if out, err := exec.CommandContext(context.Background(), "gh", "auth", "token").Output(); err == nil {
 		if token := strings.TrimSpace(string(out)); token != "" {
