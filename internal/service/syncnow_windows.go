@@ -45,12 +45,11 @@ func CreateSyncNowEvent() (windows.Handle, error) {
 // securityAttributesForAuthUsers creates a SecurityAttributes with a DACL that
 // grants EVENT_MODIFY_STATE (0x0002) to Everyone (WD).
 func securityAttributesForAuthUsers() (*windows.SecurityAttributes, error) {
-	// SDDL string: D:(A;;0x0002;;;AU)
-	// D: = DACL
-	// A = Allow
-	// 0x0002 = EVENT_MODIFY_STATE
-	// AU = Authenticated Users (excludes anonymous/unauthenticated sessions)
-	sddl := "D:(A;;0x0002;;;AU)"
+	// SM-086: Restrict to SYSTEM + Administrators only.
+	// SDDL: D:(A;;0x0002;;;SY)(A;;0x0002;;;BA)
+	// SY = LocalSystem (service account), BA = BUILTIN\Administrators
+	// Non-admin sync-now uses state DB signaling fallback (SM-077).
+	sddl := "D:(A;;0x0002;;;SY)(A;;0x0002;;;BA)"
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {
 		return nil, fmt.Errorf("parse SDDL: %w", err)

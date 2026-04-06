@@ -156,3 +156,41 @@ func TestSummaryStrings(t *testing.T) {
 		t.Errorf("Ghost:Leak count = %d, want 1", ss["Ghost:Leak"])
 	}
 }
+
+func TestOnRecord_CalledAfterWrite(t *testing.T) {
+	w := &memWriter{}
+	r := NewRecorder(w)
+
+	var received []*Anomaly
+	r.OnRecord = func(a *Anomaly) {
+		received = append(received, a)
+	}
+
+	r.Record(KindSyncFailure, "proj", "file.go", "rclone exit 1", "elapsed: 500ms")
+	r.Record(KindCircuitBreaker, "proj", "", "tripped", "")
+
+	if len(received) != 2 {
+		t.Fatalf("OnRecord called %d times, want 2", len(received))
+	}
+	if received[0].Kind != KindSyncFailure {
+		t.Errorf("first callback kind: %s, want SyncFailure", received[0].Kind)
+	}
+	if received[1].Kind != KindCircuitBreaker {
+		t.Errorf("second callback kind: %s, want CircuitBreaker", received[1].Kind)
+	}
+
+	// Writer also got both
+	if len(w.anomalies) != 2 {
+		t.Errorf("writer got %d anomalies, want 2", len(w.anomalies))
+	}
+}
+
+func TestOnRecord_NilCallbackSafe(t *testing.T) {
+	w := &memWriter{}
+	r := NewRecorder(w)
+	// OnRecord not set — should not panic
+	r.Record(KindPanic, "", "", "msg", "")
+	if len(w.anomalies) != 1 {
+		t.Error("expected 1 anomaly written even without OnRecord callback")
+	}
+}

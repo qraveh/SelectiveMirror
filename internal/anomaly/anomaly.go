@@ -70,6 +70,10 @@ type Recorder struct {
 	counter atomic.Int64
 	mu      sync.Mutex
 	counts  map[Kind]int64
+
+	// OnRecord is called after each anomaly is recorded. Set before use; not thread-safe to change.
+	// Intended for alerting integration (webhook, notification).
+	OnRecord func(a *Anomaly)
 }
 
 // Writer is the interface for anomaly persistence.
@@ -115,6 +119,10 @@ func (r *Recorder) Record(kind Kind, project, path, message, detail string) *Ano
 
 	if r.writer != nil {
 		_ = r.writer.Write(a) // best-effort; anomaly recording should not block sync
+	}
+
+	if r.OnRecord != nil {
+		r.OnRecord(a)
 	}
 
 	return a

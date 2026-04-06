@@ -80,7 +80,7 @@ func (w *FileWriter) ensureFile(date string) error {
 	}
 
 	filename := filepath.Join(w.dataDir, "anomalies-"+date+".jsonl")
-	f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("opening anomaly file: %w", err)
 	}

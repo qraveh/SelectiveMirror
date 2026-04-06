@@ -230,9 +230,11 @@ func (e *Engine) quiesceFile(localPath string) (os.FileInfo, error) {
 		}
 	}()
 
-	// Lstat to detect symlinks, then Stat to follow them.
-	// Symlinks to files are synced (target content uploaded at symlink's path).
-	// Symlinks to directories are rejected (would need recursive watching).
+	// SM-085: Resolve symlinks once upfront, then use the resolved path for all
+	// subsequent operations. This closes the TOCTOU window where a symlink target
+	// could be swapped between check and use.
+	readPath := localPath // path used for Stat/Open (resolved target if symlink)
+
 	linfo, err := os.Lstat(localPath)
 	if err != nil {
 		return nil, err
@@ -240,15 +242,20 @@ func (e *Engine) quiesceFile(localPath string) (os.FileInfo, error) {
 
 	var info1 os.FileInfo
 	if linfo.Mode()&os.ModeSymlink != 0 {
-		// Follow symlink to get target info
-		target, serr := os.Stat(localPath)
+		// Resolve to absolute target path once — all further I/O uses this.
+		resolved, serr := filepath.EvalSymlinks(localPath)
 		if serr != nil {
 			return nil, fmt.Errorf("broken symlink: %s -> %v", localPath, serr)
+		}
+		target, serr := os.Lstat(resolved) // Lstat the resolved path (no more following)
+		if serr != nil {
+			return nil, fmt.Errorf("broken symlink target: %s -> %v", resolved, serr)
 		}
 		if target.IsDir() {
 			return nil, fmt.Errorf("symlink to directory not synced: %s", localPath)
 		}
 		info1 = target
+		readPath = resolved
 	} else {
 		info1 = linfo
 	}
@@ -257,10 +264,10 @@ func (e *Engine) quiesceFile(localPath string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("not a regular file (mode %s): %s", info1.Mode().String(), localPath)
 	}
 
-	// Wait 200ms and re-check (use Stat to follow symlinks consistently)
+	// Wait 200ms and re-check using the resolved path (not the mutable symlink)
 	time.Sleep(200 * time.Millisecond)
 
-	info2, err := os.Stat(localPath)
+	info2, err := os.Lstat(readPath)
 	if err != nil {
 		return nil, err
 	}
@@ -270,9 +277,9 @@ func (e *Engine) quiesceFile(localPath string) (os.FileInfo, error) {
 		return nil, fmt.Errorf("file still changing")
 	}
 
-	// Try to open for shared read (detects locked files on Windows)
+	// Try to open the resolved path for shared read (detects locked files on Windows)
 	for attempt := 0; attempt < 3; attempt++ {
-		f, err := os.Open(localPath)
+		f, err := os.Open(readPath)
 		if err == nil {
 			f.Close()
 			return info2, nil
@@ -294,6 +301,20 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 	}
 
 	localPath := filepath.Join(proj.LocalPath, relPath)
+
+	// SM-087: Bounds check — reject paths that escape the project root.
+	// Defense-in-depth: relPath currently comes from filepath.Rel on fsnotify events
+	// (always under watched dir), but this guard protects against future input sources.
+	if absLocal, err := filepath.Abs(localPath); err == nil {
+		if absProj, err := filepath.Abs(proj.LocalPath); err == nil {
+			if !strings.HasPrefix(absLocal+string(filepath.Separator), absProj+string(filepath.Separator)) && absLocal != absProj {
+				e.log.Error("path escape blocked", "project", proj.Name, "path", relPath, "resolved", absLocal)
+				e.Anomaly.Record(anomaly.KindSyncFailure, proj.Name, relPath,
+					"path escape blocked: resolved path outside project root", absLocal)
+				return
+			}
+		}
+	}
 
 	// Quiescence check: confirm file is stable and not locked
 	info, err := e.quiesceFile(localPath)
@@ -403,6 +424,13 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		e.state.LogAction(proj.Name, relPath, "error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
 		if e.metrics != nil {
 			e.metrics.RecordError(proj.Name, fmt.Sprintf("rclone exit %d for %s", exitCode, relPath))
+		}
+		if exitCode == -2 {
+			e.Anomaly.Record(anomaly.KindSyncTimeout, proj.Name, relPath,
+				"rclone timed out", fmt.Sprintf("exit code: %d, elapsed: %dms", exitCode, elapsed.Milliseconds()))
+		} else {
+			e.Anomaly.Record(anomaly.KindSyncFailure, proj.Name, relPath,
+				fmt.Sprintf("rclone exit %d", exitCode), fmt.Sprintf("elapsed: %dms", elapsed.Milliseconds()))
 		}
 		if e.Queue.RecordFailure(proj.Name) {
 			e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, relPath,
@@ -1006,6 +1034,27 @@ func ClassifyGhost(fe *filter.Engine, st *state.Store, project, remotePath strin
 	return GhostOrphan
 }
 
+// recordGhostAnomalies records one anomaly per ghost kind found in a project.
+// Groups by kind to avoid flooding the anomaly system with per-file records.
+func (e *Engine) recordGhostAnomalies(proj config.Project, ghosts []GhostFile) {
+	counts := make(map[GhostKind]int)
+	for _, g := range ghosts {
+		counts[g.Kind]++
+	}
+	kindMap := map[GhostKind]anomaly.Kind{
+		GhostLeak:   anomaly.KindGhostLeak,
+		GhostOrphan: anomaly.KindGhostOrphan,
+		GhostStale:  anomaly.KindGhostStale,
+	}
+	for gk, count := range counts {
+		if ak, ok := kindMap[gk]; ok {
+			e.Anomaly.Record(ak, proj.Name, "",
+				fmt.Sprintf("%d %s ghost(s) detected", count, gk),
+				fmt.Sprintf("run 'smirror test-mirrors %s' for details", proj.Name))
+		}
+	}
+}
+
 // CleanupGhosts removes remote-only files (LEAKs and ORPHANs) for a project.
 // Returns the number of files successfully deleted.
 func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, error) {
@@ -1016,6 +1065,7 @@ func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, e
 	if len(ghosts) == 0 {
 		return 0, nil
 	}
+	e.recordGhostAnomalies(proj, ghosts)
 
 	deleted := 0
 	for _, g := range ghosts {

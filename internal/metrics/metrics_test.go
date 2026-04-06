@@ -123,3 +123,57 @@ func TestEmptySnapshot(t *testing.T) {
 		t.Errorf("expected 0 projects, got %d", len(s.Projects))
 	}
 }
+
+func TestLatencyPercentiles(t *testing.T) {
+	c := New()
+
+	// Empty: all zeros
+	if got := c.LatencyP95(); got != 0 {
+		t.Errorf("empty p95: got %d, want 0", got)
+	}
+	if got := c.LatencyP99(); got != 0 {
+		t.Errorf("empty p99: got %d, want 0", got)
+	}
+
+	// Record 100 syncs: latencies 1, 2, 3, ..., 100
+	for i := int64(1); i <= 100; i++ {
+		c.RecordSync("test", 0, i)
+	}
+
+	p95 := c.LatencyP95()
+	if p95 < 95 || p95 > 96 {
+		t.Errorf("p95 of 1..100: got %d, want ~95", p95)
+	}
+	p99 := c.LatencyP99()
+	if p99 < 99 || p99 > 100 {
+		t.Errorf("p99 of 1..100: got %d, want ~99", p99)
+	}
+
+	// Snapshot includes percentiles
+	s := c.Snapshot("test")
+	if s.P95LatencyMs != p95 {
+		t.Errorf("snapshot p95: got %d, want %d", s.P95LatencyMs, p95)
+	}
+	if s.P99LatencyMs != p99 {
+		t.Errorf("snapshot p99: got %d, want %d", s.P99LatencyMs, p99)
+	}
+}
+
+func TestLatencyRingOverflow(t *testing.T) {
+	c := New()
+
+	// Fill beyond ring size — old values should be evicted
+	for i := int64(0); i < latencyRingSize+500; i++ {
+		c.RecordSync("test", 0, i)
+	}
+
+	if c.latencyLen != latencyRingSize {
+		t.Errorf("ring len: got %d, want %d", c.latencyLen, latencyRingSize)
+	}
+
+	// p95 should reflect only the latest 1000 values (500..1499)
+	p95 := c.LatencyP95()
+	if p95 < 1400 || p95 > 1500 {
+		t.Errorf("overflow p95: got %d, want ~1450", p95)
+	}
+}

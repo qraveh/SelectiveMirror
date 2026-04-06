@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 )
+
+const latencyRingSize = 1000 // last N sync latencies for percentile calculation
 
 // Collector tracks operational metrics with thread-safe counters.
 type Collector struct {
@@ -29,6 +32,11 @@ type Collector struct {
 	startTime       time.Time
 	queueDepth      atomic.Int64
 
+	// Latency ring buffer for percentile calculation (protected by mu)
+	latencyRing [latencyRingSize]int64
+	latencyPos  int
+	latencyLen  int
+
 	// AnomalySummaryFunc is set by the caller to provide anomaly counts for status output.
 	AnomalySummaryFunc func() map[string]int64
 }
@@ -45,6 +53,8 @@ type Status struct {
 	BytesUploaded   int64                    `json:"bytes_uploaded"`
 	SyncErrors      int64                    `json:"sync_errors"`
 	AvgLatencyMs    int64                    `json:"avg_sync_latency_ms"`
+	P95LatencyMs    int64                    `json:"p95_sync_latency_ms"`
+	P99LatencyMs    int64                    `json:"p99_sync_latency_ms"`
 	Projects        map[string]ProjectStatus `json:"projects"`
 	AnomalyCounts   map[string]int64         `json:"anomaly_counts,omitempty"`
 	GeneratedAt     string                   `json:"generated_at"`
@@ -75,7 +85,40 @@ func (c *Collector) RecordSync(project string, bytes int64, latencyMs int64) {
 
 	c.mu.Lock()
 	c.lastSync[project] = time.Now()
+	c.latencyRing[c.latencyPos] = latencyMs
+	c.latencyPos = (c.latencyPos + 1) % latencyRingSize
+	if c.latencyLen < latencyRingSize {
+		c.latencyLen++
+	}
 	c.mu.Unlock()
+}
+
+// latencyPercentile returns the p-th percentile (0-100) of recent sync latencies.
+// Returns 0 if no data. Caller must hold mu (at least RLock).
+func (c *Collector) latencyPercentile(p int) int64 {
+	if c.latencyLen == 0 {
+		return 0
+	}
+	sorted := make([]int64, c.latencyLen)
+	copy(sorted, c.latencyRing[:c.latencyLen])
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	idx := (p * (c.latencyLen - 1)) / 100
+	return sorted[idx]
+}
+
+// LatencyP95 returns the 95th percentile sync latency in ms.
+func (c *Collector) LatencyP95() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.latencyPercentile(95)
+}
+
+// LatencyP99 returns the 99th percentile sync latency in ms.
+func (c *Collector) LatencyP99() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.latencyPercentile(99)
 }
 
 // RecordError records a sync error.
@@ -154,6 +197,8 @@ func (c *Collector) Snapshot(version string) Status {
 		BytesUploaded:  c.bytesUploaded.Load(),
 		SyncErrors:     c.syncErrors.Load(),
 		AvgLatencyMs:   avgLatency,
+		P95LatencyMs:   c.latencyPercentile(95),
+		P99LatencyMs:   c.latencyPercentile(99),
 		Projects:       projects,
 		GeneratedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
@@ -181,7 +226,7 @@ func (c *Collector) WriteStatusFile(dataDir, version string) error {
 
 	// Write atomically via temp file
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("writing status: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -215,13 +260,18 @@ func (c *Collector) FormatHuman() string {
 		bytesStr = fmt.Sprintf("%d B", bytes)
 	}
 
-	return fmt.Sprintf("Uptime: %s | Files synced: %d | Metadata synced: %d | Uploaded: %s | Errors: %d | Avg latency: %dms | Queue: %d",
+	p95 := c.latencyPercentile(95)
+	p99 := c.latencyPercentile(99)
+
+	return fmt.Sprintf("Uptime: %s | Files synced: %d | Metadata synced: %d | Uploaded: %s | Errors: %d | Avg latency: %dms | p95: %dms | p99: %dms | Queue: %d",
 		time.Since(c.startTime).Round(time.Second),
 		synced,
 		c.metadataSynced.Load(),
 		bytesStr,
 		c.syncErrors.Load(),
 		avgLatency,
+		p95,
+		p99,
 		c.queueDepth.Load(),
 	)
 }

@@ -2,9 +2,9 @@
 
 ## SelectiveMirror — V&V per ISO/IEC/IEEE 29119 & ISO/IEC 25010
 
-**Document Version**: 0.1 (Draft)
-**Date**: 2026-04-01
-**SRS Reference**: docs/SRS.md v0.3
+**Document Version**: 0.2
+**Date**: 2026-04-06
+**SRS Reference**: docs/SRS.md v1.0 (Baseline)
 
 ---
 

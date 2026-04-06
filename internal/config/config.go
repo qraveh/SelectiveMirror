@@ -103,6 +103,8 @@ type Global struct {
 	AnomalyDetectionEnabled     *bool        `yaml:"anomaly_detection_enabled"`      // Anomaly detection and recording (default true)
 	PreSyncHook                string       `yaml:"pre_sync_hook"`                  // global default pre-sync hook (empty = none)
 	PostSyncHook               string       `yaml:"post_sync_hook"`                 // global default post-sync hook (empty = none)
+	AlertWebhookURL            string       `yaml:"alert_webhook_url"`              // HTTP endpoint for anomaly alerts (empty = disabled)
+	AlertMinSeverity           string       `yaml:"alert_min_severity"`             // minimum severity to alert: info, warning, error, critical (default: error)
 }
 
 // IsAnomalyDetectionEnabled returns whether anomaly detection is enabled (default true).
@@ -337,6 +339,18 @@ func (g *Global) Validate() error {
 		// Apply defaults (DebounceSec 0 = dynamic debounce, don't override)
 		if p.MaxFileSizeMB <= 0 {
 			g.Projects[i].MaxFileSizeMB = 100
+		}
+	}
+
+	// SM-089: Validate rclone_path if explicitly set to an absolute or relative path.
+	// Bare command names like "rclone" are resolved at runtime via PATH — skip validation.
+	if g.RclonePath != "" && (filepath.IsAbs(g.RclonePath) || strings.ContainsRune(g.RclonePath, filepath.Separator)) {
+		info, err := os.Stat(g.RclonePath)
+		if err != nil {
+			return fmt.Errorf("rclone_path %q: %w", g.RclonePath, err)
+		}
+		if info.IsDir() {
+			return fmt.Errorf("rclone_path %q is a directory, not an executable", g.RclonePath)
 		}
 	}
 

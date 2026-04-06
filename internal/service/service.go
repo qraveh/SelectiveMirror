@@ -1,3 +1,5 @@
+//go:build windows
+
 // Package service provides Windows Service Control Manager (SCM) integration
 // for smirror, using golang.org/x/sys/windows/svc.
 package service

@@ -212,6 +212,13 @@ func dataDir(cfg *config.Global) string {
 	return filepath.Dir(cfg.StateDB)
 }
 
+// severityAtLeast returns true if sev is at or above the threshold.
+// Order: info < warning < error < critical.
+func severityAtLeast(sev, threshold string) bool {
+	order := map[string]int{"info": 0, "warning": 1, "error": 2, "critical": 3}
+	return order[sev] >= order[threshold]
+}
+
 // hasProjectHooks returns true if any project has per-mirror hooks configured.
 func hasProjectHooks(cfg *config.Global) bool {
 	for _, p := range cfg.Projects {
@@ -416,6 +423,29 @@ func cmdStart(configPath string, args []string) {
 
 	watchMgr.Anomaly = anomalyRecorder
 
+	// Wire queue overflow → anomaly
+	syncEngine.Queue.SetOnOverflow(func() {
+		anomalyRecorder.Record(anomaly.KindQueueDepthWarning, "", "",
+			"queue depth exceeds 50,000 items",
+			"possible event storm or stalled workers; check 'smirror status'")
+	})
+
+	// Wire webhook alerting (incident-based)
+	var webhookSender *notify.WebhookSender
+	if cfg.AlertWebhookURL != "" {
+		webhookSender = notify.NewWebhookSender(cfg.AlertWebhookURL)
+		webhookSender.SanitizePath = anomaly.SanitizePath
+		minSev := cfg.AlertMinSeverity
+		if minSev == "" {
+			minSev = "error"
+		}
+		anomalyRecorder.OnRecord = func(a *anomaly.Anomaly) {
+			if severityAtLeast(string(a.Severity), minSev) {
+				webhookSender.Record(string(a.Kind), string(a.Severity), a.Project, a.Path, a.Message, a.Detail)
+			}
+		}
+	}
+
 	// Auto-clean LEAKs when .syncignore filter rules change.
 	// LEAKs are files excluded by current filters but still on remote —
 	// distinct from delete_policy which controls user-deleted files.
@@ -482,7 +512,7 @@ func cmdStart(configPath string, args []string) {
 	}
 
 	// Start heartbeat (writes status.json + heartbeat to DB + health checks + periodic reconciliation + auto-verify)
-	go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine, filters, notifier)
+	go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine, filters, notifier, webhookSender)
 
 	slog.Info("smirror running", "mirrors", cfg.ProjectNames())
 	if !service.IsWindowsService() {
@@ -2072,7 +2102,7 @@ func (ra *reconcileAdapter) adapt(driftFound bool) bool {
 	return false
 }
 
-func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *metrics.Collector, watchMgr *watcher.Manager, syncEngine *msync.Engine, filters map[string]*filter.Engine, notifier *notify.Notifier) {
+func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *metrics.Collector, watchMgr *watcher.Manager, syncEngine *msync.Engine, filters map[string]*filter.Engine, notifier *notify.Notifier, webhookSender *notify.WebhookSender) {
 	interval := cfg.HeartbeatInterval()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -2140,6 +2170,8 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 				// Check if project path still exists (may have been unmounted)
 				if _, err := os.Stat(proj.LocalPath); err != nil {
 					slog.Error("auto-verify: project path gone", "mirror", proj.Name, "path", proj.LocalPath)
+					syncEngine.Anomaly.Record(anomaly.KindPathGone, proj.Name, proj.LocalPath,
+						"project directory missing or unmounted", "")
 					if notifier != nil {
 						notifier.PathGone(proj.Name, proj.LocalPath)
 					}
@@ -2149,6 +2181,9 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 				drift := verifyProjectQuiet(cfg, proj, filters[proj.Name], st)
 				totalDrift += drift
 				if drift > 0 {
+					syncEngine.Anomaly.Record(anomaly.KindReconcileStale, proj.Name, "",
+						fmt.Sprintf("%d files out of sync", drift),
+						"auto-verify detected drift; next reconciliation should resolve it")
 					slog.Warn("auto-verify: drift detected", "mirror", proj.Name, "drift", drift)
 					st.SetMeta("last_verify_drift_"+proj.Name,
 						fmt.Sprintf("%d files at %s", drift, time.Now().UTC().Format(time.RFC3339)))
@@ -2201,11 +2236,16 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 			for _, proj := range cfg.Projects {
 				if _, err := os.Stat(proj.LocalPath); err != nil {
 					slog.Error("project path missing", "mirror", proj.Name, "path", proj.LocalPath)
+					syncEngine.Anomaly.Record(anomaly.KindPathGone, proj.Name, proj.LocalPath,
+						"project directory missing or unmounted", "")
 					if notifier != nil {
 						notifier.PathGone(proj.Name, proj.LocalPath)
 					}
 				}
 			}
+
+			// Check for resolved incidents (silence window passed)
+			webhookSender.CheckResolved()
 
 		case <-ctx.Done():
 			return
@@ -2355,6 +2395,28 @@ func serviceMain() {
 		}
 		watchMgr.Anomaly = anomalyRecorder
 
+		// Wire queue overflow → anomaly (service mode)
+		syncEngine.Queue.SetOnOverflow(func() {
+			anomalyRecorder.Record(anomaly.KindQueueDepthWarning, "", "",
+				"queue depth exceeds 50,000 items",
+				"possible event storm or stalled workers; check 'smirror status'")
+		})
+
+		// Wire webhook alerting (service mode)
+		var webhookSender *notify.WebhookSender
+		if cfg.AlertWebhookURL != "" {
+			webhookSender = notify.NewWebhookSender(cfg.AlertWebhookURL)
+			minSev := cfg.AlertMinSeverity
+			if minSev == "" {
+				minSev = "error"
+			}
+			anomalyRecorder.OnRecord = func(a *anomaly.Anomaly) {
+				if severityAtLeast(string(a.Severity), minSev) {
+					webhookSender.Record(string(a.Kind), string(a.Severity), a.Project, a.Path, a.Message, a.Detail)
+				}
+			}
+		}
+
 		watchMgr.OnFilterChange = func(proj config.Project) {
 			cleaned, cleanErr := syncEngine.CleanupLeaks(context.Background(), proj)
 			if cleanErr != nil {
@@ -2379,7 +2441,7 @@ func serviceMain() {
 		defer watchMgr.Stop()
 
 		go syncEngine.Run(ctx)
-		go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine, filters, notifier)
+		go heartbeatLoop(ctx, st, cfg, m, watchMgr, syncEngine, filters, notifier, webhookSender)
 
 		liveSyncEngine = syncEngine
 		liveCfg = cfg

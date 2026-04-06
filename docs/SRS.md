@@ -2,11 +2,11 @@
 
 ## SelectiveMirror — Selective Near-Real-Time File Mirror
 
-**Document Version**: 0.3 (Draft)
-**Date**: 2026-04-01
+**Document Version**: 1.0 (Baseline)
+**Date**: 2026-04-06
 **Author**: Raveh / Claude (iterative collaboration)
-**Project Version**: 0.4.0 (pre-release)
-**Status**: DRAFT — for iterative review
+**Project Version**: 0.8.1-dev
+**Status**: BASELINED — approved for v1.0 release planning
 
 ---
 
