@@ -18,6 +18,7 @@ type WebhookPayload struct {
 	Kind      string `json:"kind"`               // anomaly kind (e.g. "CircuitBreaker")
 	Severity  string `json:"severity"`           // critical, error, warning, info
 	Project   string `json:"project,omitempty"`
+	Path      string `json:"path,omitempty"`     // relative path (sanitized via SanitizePath)
 	Message   string `json:"message"`
 	Detail    string `json:"detail,omitempty"`
 	Count     int    `json:"count,omitempty"`     // accumulated event count (for escalation)
@@ -100,6 +101,7 @@ func (w *WebhookSender) Record(kind, severity, project, path, message, detail st
 			Kind:      kind,
 			Severity:  severity,
 			Project:   project,
+			Path:      path,
 			Message:   message,
 			Detail:    detail,
 			Count:     1,
@@ -131,6 +133,7 @@ func (w *WebhookSender) Record(kind, severity, project, path, message, detail st
 			Kind:      kind,
 			Severity:  severity,
 			Project:   project,
+			Path:      path,
 			Message:   message,
 			Detail:    detail,
 			Count:     1,
@@ -162,6 +165,7 @@ func (w *WebhookSender) Record(kind, severity, project, path, message, detail st
 			Kind:      kind,
 			Severity:  severity,
 			Project:   project,
+			Path:      path,
 			Message:   fmt.Sprintf("%s — %d events over %s", message, count, duration),
 			Detail:    detail,
 			Count:     count,

@@ -461,6 +461,10 @@ func extractFromZip(zipPath, fileName, destPath string) error {
 	}
 	defer r.Close()
 
+	// SM-094: Cap extraction size to prevent decompression bombs.
+	// 200 MB is ~5× the largest legitimate smirror.exe and rclone.exe combined.
+	const maxExtractSize = 200 * 1024 * 1024
+
 	for _, f := range r.File {
 		// Match by base name (GoReleaser puts files at root or in a subdirectory)
 		if filepath.Base(f.Name) == fileName && !f.FileInfo().IsDir() {
@@ -476,8 +480,14 @@ func extractFromZip(zipPath, fileName, destPath string) error {
 			}
 			defer out.Close()
 
-			_, err = io.Copy(out, rc)
-			return err
+			written, err := io.Copy(out, io.LimitReader(rc, maxExtractSize+1))
+			if err != nil {
+				return err
+			}
+			if written > maxExtractSize {
+				return fmt.Errorf("archive entry %q exceeds %d bytes (potential decompression bomb)", fileName, maxExtractSize)
+			}
+			return nil
 		}
 	}
 
