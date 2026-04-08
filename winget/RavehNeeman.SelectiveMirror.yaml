@@ -5,15 +5,15 @@
 # 1. Update PackageVersion and InstallerUrl below
 # 2. Compute SHA256: certutil -hashfile SelectiveMirror.msi SHA256
 # 3. Fork microsoft/winget-pkgs
-# 4. Create: manifests/q/Qodeh/SelectiveMirror/<version>/Qodeh.SelectiveMirror.yaml
+# 4. Create: manifests/r/RavehNeeman/SelectiveMirror/<version>/RavehNeeman.SelectiveMirror.yaml
 # 5. Submit PR
 #
-# Or use: wingetcreate update --urls <msi-url> --version <version> Qodeh.SelectiveMirror
+# Or use: wingetcreate update --urls <msi-url> --version <version> RavehNeeman.SelectiveMirror
 
-PackageIdentifier: Qodeh.SelectiveMirror
+PackageIdentifier: RavehNeeman.SelectiveMirror
 PackageVersion: 0.3.0  # UPDATE on each release
 PackageName: SelectiveMirror
-Publisher: Qodeh
+Publisher: RavehNeeman
 PublisherUrl: https://github.com/qraveh
 Author: Raveh Neeman
 License: MIT
