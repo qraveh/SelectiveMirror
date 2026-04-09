@@ -276,7 +276,7 @@ Creates a filter engine with no global excludes and no `.syncignore`, useful whe
 | `rclone` | `internal/rclone/` | ~170 | Binary detection (PATH + common install locations), version parsing, compatibility checking |
 | `metrics` | `internal/metrics/` | ~150 | Atomic counters, per-project status, status.json snapshot, human-readable formatting |
 | `notify` | `internal/notify/` | ~100 | Desktop notifications via Windows toast (drift alerts, sync failures) |
-| `service` | `internal/service/` | ~150 | Windows Service integration: SCM handler via `golang.org/x/sys/windows/svc`, install/uninstall/start/stop |
+| `service` | `internal/service/` | ~150 | Windows Service integration: SCM handler via `golang.org/x/sys/windows/svc`, compound commands (install [start], stop [uninstall]) |
 | `lock` | `internal/lock/` | ~80 | Single-instance file lock with PID recording, platform-specific locking |
 | `logging` | `internal/logging/` | ~80 | slog setup, rotating file writer (10MB, 5 backups), console + file multi-writer |
 

@@ -62,7 +62,10 @@ smirror start
 | `smirror explain <mirror> <path>` | Show include/exclude status and sync state |
 | `smirror project-stats` | Show file counts and line counts across all mirrors (alias: `stats`) |
 | `smirror report-bug` | Generate diagnostic report for bug filing |
-| `smirror service <action>` | Windows Service: install, uninstall, start, stop |
+| `smirror remote [remote_path]` | Show or set the default rclone remote for new mirrors |
+| `smirror addmirror <path> [-dest <remote>]` | Add a directory as a new mirror |
+| `smirror unmirror <name\|path>` | Remove a mirror from config |
+| `smirror service <action...>` | Windows Service: install [start], stop, uninstall [--clean] [--yes] |
 | `smirror version` | Show version |
 
 ## Configuration

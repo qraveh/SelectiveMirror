@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.2-dev"
+var version = "0.8.3-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -143,6 +143,17 @@ func cliMain() {
 		cmdReportBug(configPath, cmdArgs)
 	case "selfupdate":
 		cmdSelfUpdate(configPath, cmdArgs)
+	case "remote":
+		cmdRemote(configPath, cmdArgs)
+	case "addmirror", "add-mirror", "add":
+		cmdAddMirror(configPath, cmdArgs)
+	case "unmirror", "remove-mirror", "remove":
+		cmdUnmirror(configPath, cmdArgs)
+	case "clean":
+		// Shortcut: smirror clean = smirror service stop uninstall --clean [--yes]
+		cleanArgs := []string{"stop", "uninstall", "--clean"}
+		cleanArgs = append(cleanArgs, cmdArgs...) // pass through --yes if given
+		cmdService(configPath, cleanArgs)
 	case "service":
 		cmdService(configPath, cmdArgs)
 	case "version":
@@ -173,10 +184,14 @@ Commands:
   explain <mirror> <path>   Explain why a file is included or excluded
   project-stats             Show file counts and line counts across all mirrors (alias: stats)
   report-bug [--stdout]     Generate diagnostic report for bug filing
+  remote [remote_path]      Show or set the default rclone remote for new mirrors
+  addmirror <path> [-dest]  Add a directory as a new mirror (aliases: add-mirror, add)
+  unmirror <name|path>      Remove a mirror from config (aliases: remove-mirror, remove)
+  clean [--yes]             Stop service, uninstall, and remove all user data
   selfupdate [--check]      Check for and install updates (also: --whatsnew, --include-rclone)
-  service <action>          Windows Service (background): install, uninstall [--clean], start, stop
+  service <action...>       Windows Service: install [start], stop, uninstall [--clean] [--yes]
+                            Compound: "service install start", "service stop uninstall [--clean]"
                             ("run as administrator" elevated cmd/PowerShell required)
-                            uninstall --clean removes config, state DB, and logs
   version                   Show version
 
 Options:
@@ -331,6 +346,13 @@ func cmdStart(configPath string, args []string) {
 			os.Exit(ExitRcloneError)
 		}
 		os.Exit(ExitError)
+	}
+
+	// Check for multiple smirror installations on PATH.
+	if instInfo := findInstallations(); instInfo.HasDuplicates {
+		fmt.Fprintln(os.Stderr)
+		warnMultipleInstallations(instInfo)
+		fmt.Fprintln(os.Stderr)
 	}
 
 	// Acquire single-instance lock (in same dir as state DB)
@@ -653,7 +675,28 @@ func cmdStatus(configPath string) {
 	// Non-blocking update check (rate-limited to once/24h)
 	go checkForUpdateOnStartup(configPath)
 
-	cfg := loadConfig(configPath)
+	fmt.Printf("SelectiveMirror Status\n")
+	fmt.Printf("======================\n\n")
+
+	// Show service state (works without config — queries SCM directly).
+	svcInstalled, svcRunning := service.IsRunning()
+	if svcInstalled {
+		if svcRunning {
+			fmt.Println("Service: running")
+		} else {
+			fmt.Println("Service: stopped")
+		}
+	} else {
+		fmt.Println("Service: not installed")
+	}
+
+	cfg, cfgErr := config.Load(configPath)
+	if cfgErr != nil {
+		fmt.Printf("Config: %s (not found)\n", configPath)
+		fmt.Fprintf(os.Stderr, "\nError: %v\n", cfgErr)
+		fmt.Fprintln(os.Stderr, "Create a config file to see full status.")
+		os.Exit(ExitConfigError)
+	}
 
 	st, err := state.Open(cfg.StateDB)
 	if err != nil {
@@ -662,8 +705,6 @@ func cmdStatus(configPath string) {
 	}
 	defer st.Close()
 
-	fmt.Printf("SelectiveMirror Status\n")
-	fmt.Printf("======================\n\n")
 	fmt.Printf("Config: %s\n", configPath)
 	fmt.Printf("State DB: %s\n", cfg.StateDB)
 	fmt.Printf("Delete policy: %s\n\n", cfg.DeletePolicy())
@@ -746,9 +787,14 @@ func cmdStatus(configPath string) {
 			}
 		}
 		fmt.Println()
+	} else if !svcInstalled {
+		// No service and no foreground instance — nothing running
+		fmt.Printf("Not running\n\n")
 	} else {
-		fmt.Printf("Instance: not running\n\n")
+		fmt.Println() // service state already shown above
 	}
+
+	filters := buildFilters(cfg)
 
 	for _, proj := range cfg.Projects {
 		lastSync, _ := st.GetLastSyncTime(proj.Name)
@@ -758,6 +804,14 @@ func cmdStatus(configPath string) {
 		fmt.Printf("Mirror: %s\n", proj.Name)
 		fmt.Printf("  Path:    %s\n", proj.LocalPath)
 		fmt.Printf("  Remote:  %s\n", proj.Remote)
+
+		// Count local files and filter status
+		if fe, ok := filters[proj.Name]; ok {
+			total, excluded := countFilteredFiles(proj.LocalPath, fe)
+			syncable := total - excluded
+			fmt.Printf("  Local files: %d  Excluded: %d  Syncable: %d\n", total, excluded, syncable)
+		}
+
 		fmt.Printf("  Files synced: %d\n", len(synced))
 		if !lastSync.IsZero() {
 			fmt.Printf("  Last file sync: %s (%s ago)\n", lastSync.Local().Format(time.RFC3339), time.Since(lastSync).Round(time.Second))
@@ -844,6 +898,37 @@ func cmdStatus(configPath string) {
 		}
 		fmt.Println()
 	}
+}
+
+// countFilteredFiles walks a directory and counts total files vs excluded files.
+// Returns (total, excluded). Directories themselves are not counted.
+func countFilteredFiles(root string, fe *filter.Engine) (total, excluded int) {
+	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip inaccessible entries
+		}
+		if path == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			// Check if entire directory is excluded (e.g., .git/)
+			if fe.IsExcluded(rel + "/") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		total++
+		if fe.IsExcluded(rel) {
+			excluded++
+		}
+		return nil
+	})
+	return total, excluded
 }
 
 // cmdTestMirrors runs all diagnostics (local + remote) and verifies sync state.
@@ -2560,141 +2645,296 @@ func updateConfigKey(configPath, key, value string) error {
 
 func cmdService(configPath string, args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: smirror service <install|uninstall [--clean] [--yes]|start|stop>")
+		printServiceUsage()
 		os.Exit(ExitConfigError)
 	}
 
-	switch args[0] {
-	case "install":
-		// Resolve rclone path and config before installing the service.
-		// The Windows service runs as SYSTEM with different PATH and home dir.
-		if cfg, err := config.Load(configPath); err == nil {
-			// Resolve rclone binary to absolute path
-			if !filepath.IsAbs(cfg.RclonePath) {
-				if info, err := rclone.Detect(cfg.RclonePath); err == nil {
-					if err := updateConfigKey(configPath, "rclone_path", info.Path); err != nil {
-						fmt.Fprintf(os.Stderr, "Warning: could not update rclone_path in config: %v\n", err)
-						fmt.Fprintf(os.Stderr, "Manually set rclone_path to: %s\n\n", info.Path)
-					} else {
-						fmt.Printf("Resolved rclone_path: %s\n", info.Path)
-					}
+	// Parse actions and flags from args.
+	actions, flags := parseServiceArgs(args)
+	if len(actions) == 0 {
+		printServiceUsage()
+		os.Exit(ExitConfigError)
+	}
+
+	// Normalize and validate compound sequences.
+	actions = normalizeServiceActions(actions)
+	if actions == nil {
+		// normalizeServiceActions printed the error
+		os.Exit(ExitConfigError)
+	}
+
+	uflags := parseServiceUninstallFlags(flags)
+
+	// Execute actions sequentially.
+	for i, action := range actions {
+		if i > 0 {
+			fmt.Println()
+		}
+		switch action {
+		case "install":
+			serviceDoInstall(configPath, len(actions) > 1)
+		case "start":
+			serviceDoStart(configPath, len(actions) > 1)
+		case "stop":
+			serviceDoStop(len(actions) > 1)
+		case "uninstall":
+			serviceDoUninstall(configPath, uflags.clean, uflags.autoYes)
+		}
+	}
+}
+
+// printServiceUsage prints the service subcommand usage.
+func printServiceUsage() {
+	fmt.Fprintln(os.Stderr, `Usage: smirror service <action...> [flags]
+
+Actions:
+  install [start]                Install service (and optionally start it)
+  start                          Start the service
+  stop [uninstall [--clean]]     Stop the service (and optionally uninstall it)
+  uninstall [--clean] [--yes]    Uninstall the service
+
+Flags:
+  --clean    Also remove user data (config, state DB, logs)
+  --yes      Skip confirmation prompts
+
+Compound commands:
+  smirror service install start            Install and start in one step
+  smirror service stop uninstall           Stop and uninstall in one step
+  smirror service stop uninstall --clean   Stop, uninstall, and remove all data
+
+Requires "run as administrator" elevated cmd/PowerShell.`)
+}
+
+// parseServiceArgs separates actions (install, start, stop, uninstall) from
+// flags (--clean, --yes, -y). Unknown tokens are treated as invalid actions.
+func parseServiceArgs(args []string) (actions, flags []string) {
+	for _, a := range args {
+		switch a {
+		case "install", "start", "stop", "uninstall":
+			actions = append(actions, a)
+		case "--clean", "--yes", "-y":
+			flags = append(flags, a)
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown service action: %s\n", a)
+			printServiceUsage()
+			os.Exit(ExitConfigError)
+		}
+	}
+	return actions, flags
+}
+
+// normalizeServiceActions reorders and validates compound action sequences.
+// Returns nil if the sequence is invalid (error already printed).
+func normalizeServiceActions(actions []string) []string {
+	if len(actions) == 1 {
+		return actions
+	}
+	if len(actions) > 2 {
+		fmt.Fprintln(os.Stderr, "Error: at most two service actions can be combined.")
+		printServiceUsage()
+		return nil
+	}
+
+	a, b := actions[0], actions[1]
+
+	// Canonical pairs and their reversed forms.
+	switch {
+	case a == "install" && b == "start":
+		return []string{"install", "start"}
+	case a == "start" && b == "install":
+		// Auto-reorder: user meant install then start
+		return []string{"install", "start"}
+	case a == "stop" && b == "uninstall":
+		return []string{"stop", "uninstall"}
+	case a == "uninstall" && b == "stop":
+		// Auto-reorder: user meant stop then uninstall
+		return []string{"stop", "uninstall"}
+	default:
+		fmt.Fprintf(os.Stderr, "Error: invalid service action combination: %s %s\n", a, b)
+		fmt.Fprintln(os.Stderr, "Valid combinations: install start, stop uninstall")
+		return nil
+	}
+}
+
+// serviceDoInstall handles `smirror service install`.
+// When compound is true, the "start with:" hint is suppressed (start follows).
+func serviceDoInstall(configPath string, compound bool) {
+	// Preflight: config must exist and be valid before registering the service.
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Cannot install the service without a valid configuration.")
+		fmt.Fprintf(os.Stderr, "Create a config file at: %s\n", configPath)
+		fmt.Fprintf(os.Stderr, "Example: smirror --config %s start  (generates default config on first run)\n", configPath)
+		os.Exit(ExitConfigError)
+	}
+
+	// Resolve rclone path and config before installing the service.
+	// The Windows service runs as SYSTEM with different PATH and home dir.
+	if cfg != nil {
+		// Resolve rclone binary to absolute path
+		if !filepath.IsAbs(cfg.RclonePath) {
+			if info, err := rclone.Detect(cfg.RclonePath); err == nil {
+				if err := updateConfigKey(configPath, "rclone_path", info.Path); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not update rclone_path in config: %v\n", err)
+					fmt.Fprintf(os.Stderr, "Manually set rclone_path to: %s\n\n", info.Path)
+				} else {
+					fmt.Printf("Resolved rclone_path: %s\n", info.Path)
 				}
 			}
-			// Resolve rclone config (SYSTEM has its own %APPDATA%, no remotes there)
-			if cfg.RcloneConfig == "" {
-				rcloneConf := filepath.Join(os.Getenv("APPDATA"), "rclone", "rclone.conf")
-				if _, err := os.Stat(rcloneConf); err == nil {
-					if err := updateConfigKey(configPath, "rclone_config", rcloneConf); err != nil {
-						fmt.Fprintf(os.Stderr, "Warning: could not update rclone_config in config: %v\n", err)
-						fmt.Fprintf(os.Stderr, "Manually set rclone_config to: %s\n\n", rcloneConf)
-					} else {
-						fmt.Printf("Resolved rclone_config: %s\n", rcloneConf)
-					}
+		}
+		// Resolve rclone config (SYSTEM has its own %APPDATA%, no remotes there)
+		if cfg.RcloneConfig == "" {
+			rcloneConf := filepath.Join(os.Getenv("APPDATA"), "rclone", "rclone.conf")
+			if _, err := os.Stat(rcloneConf); err == nil {
+				if err := updateConfigKey(configPath, "rclone_config", rcloneConf); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: could not update rclone_config in config: %v\n", err)
+					fmt.Fprintf(os.Stderr, "Manually set rclone_config to: %s\n\n", rcloneConf)
+				} else {
+					fmt.Printf("Resolved rclone_config: %s\n", rcloneConf)
 				}
 			}
 		}
-		if err := service.Install(configPath); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-		// FR-SVC-08: Register Windows Event Log source
-		if err := service.InstallEventSource(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not register event log source: %v\n", err)
-		}
-		fmt.Println("Service 'smirror' installed successfully.")
-		fmt.Printf("Config: %s\n", configPath)
+	}
+	// Warn about multiple smirror installations.
+	if instInfo := findInstallations(); instInfo.HasDuplicates {
+		fmt.Println()
+		warnMultipleInstallations(instInfo)
+		fmt.Println()
+	}
+
+	if err := service.Install(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	// FR-SVC-08: Register Windows Event Log source
+	if err := service.InstallEventSource(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not register event log source: %v\n", err)
+	}
+	fmt.Println("Service 'smirror' installed successfully.")
+	fmt.Printf("Config: %s\n", configPath)
+	if !compound {
 		fmt.Println("Start with: smirror service start")
 		fmt.Println("Or: net start smirror")
+	}
 
-		// Warn about .syncignore files present in project directories
-		if cfg, err := config.Load(configPath); err == nil {
-			var syncignoreFiles []string
-			for _, p := range cfg.Projects {
-				si := p.SyncIgnoreFile()
-				if _, err := os.Stat(si); err == nil {
-					syncignoreFiles = append(syncignoreFiles, si)
-				}
-			}
-			if len(syncignoreFiles) > 0 {
-				fmt.Println()
-				fmt.Println("Note: .syncignore files detected in project directories:")
-				for _, si := range syncignoreFiles {
-					fmt.Printf("  %s\n", si)
-				}
-				fmt.Println("These files control which files are synced per project.")
+	// Warn about .syncignore files present in project directories
+	{
+		var syncignoreFiles []string
+		for _, p := range cfg.Projects {
+			si := p.SyncIgnoreFile()
+			if _, err := os.Stat(si); err == nil {
+				syncignoreFiles = append(syncignoreFiles, si)
 			}
 		}
-
-	case "uninstall":
-		uflags := parseServiceUninstallFlags(args[1:])
-		clean := uflags.clean
-		autoYes := uflags.autoYes
-
-		_ = service.RemoveEventSource() // best-effort cleanup
-		if err := service.Uninstall(); err != nil {
-			// Distinguish "not installed" from real errors
-			if strings.Contains(err.Error(), "is not installed") {
-				fmt.Fprintln(os.Stderr, "Service 'smirror' is not installed.")
-				if !clean {
-					os.Exit(0)
-				}
-				// If --clean, continue to data removal even if service wasn't installed
-				fmt.Println()
-			} else {
-				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-				os.Exit(1)
+		if len(syncignoreFiles) > 0 {
+			fmt.Println()
+			fmt.Println("Note: .syncignore files detected in project directories:")
+			for _, si := range syncignoreFiles {
+				fmt.Printf("  %s\n", si)
 			}
-		} else {
-			fmt.Println("Service 'smirror' uninstalled successfully.")
+			fmt.Println("These files control which files are synced per project.")
 		}
+	}
+}
 
-		if clean {
-			serviceUninstallClean(configPath, autoYes)
-		} else {
-			fmt.Println()
-			fmt.Println("To fully remove SelectiveMirror:")
-			fmt.Println("  MSI install:    Settings > Apps > SelectiveMirror > Uninstall")
-			fmt.Println("                  Or: msiexec /x {ProductCode}")
-			fmt.Println("  Manual install: Delete smirror.exe and remove its directory from PATH")
-			// Show data directory location
-			dataPath := config.DefaultDataDir()
-			fmt.Println()
-			fmt.Printf("User data preserved at: %s\n", dataPath)
-			fmt.Println("  config.yaml           — configuration")
-			fmt.Println("  state.db              — sync state database")
-			fmt.Println("  selectivemirror.log   — application logs")
-			fmt.Println()
-			fmt.Println("To also remove user data: smirror service uninstall --clean")
-		}
-
-	case "start":
-		if err := service.Start(); err != nil {
-			if strings.Contains(err.Error(), "already running") || strings.Contains(err.Error(), "already been started") {
-				fmt.Fprintf(os.Stderr, "Warning: service is already running.\n")
+// serviceDoStart handles `smirror service start`.
+// When compound is true, "already running" is non-fatal (continues to next action).
+func serviceDoStart(configPath string, compound bool) {
+	if err := service.Start(); err != nil {
+		if strings.Contains(err.Error(), "already running") || strings.Contains(err.Error(), "already been started") {
+			fmt.Fprintf(os.Stderr, "Warning: service is already running.\n")
+			if !compound {
 				os.Exit(0)
 			}
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Service 'smirror' started.")
+	cfg, err := config.Load(configPath)
+	if err == nil {
+		fmt.Printf("Follow log: powershell -NoProfile -Command \"Get-Content '%s' -Wait -Tail 30\"\n", cfg.LogFile)
+	}
+}
+
+// serviceDoStop handles `smirror service stop`.
+// When compound is true, "not running" is non-fatal (continues to next action).
+func serviceDoStop(compound bool) {
+	if err := service.Stop(); err != nil {
+		errMsg := err.Error()
+		benign := strings.Contains(errMsg, "not been started") ||
+			strings.Contains(errMsg, "not running") ||
+			strings.Contains(errMsg, "is not installed")
+		if benign {
+			fmt.Fprintf(os.Stderr, "Service 'smirror' was not running.\n")
+			if !compound {
+				os.Exit(0)
+			}
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("Service 'smirror' stopped.")
+}
+
+// serviceDoUninstall handles `smirror service uninstall [--clean] [--yes]`.
+func serviceDoUninstall(configPath string, clean, autoYes bool) {
+	_ = service.RemoveEventSource() // best-effort cleanup
+	if err := service.Uninstall(); err != nil {
+		// Distinguish "not installed" from real errors
+		if strings.Contains(err.Error(), "is not installed") {
+			fmt.Fprintln(os.Stderr, "Service 'smirror' is not installed.")
+			if !clean {
+				os.Exit(0)
+			}
+			// If --clean, continue to data removal even if service wasn't installed
+			fmt.Println()
+		} else {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Service 'smirror' started.")
-		cfg, err := config.Load(configPath)
-		if err == nil {
-			fmt.Printf("Follow log: powershell -NoProfile -Command \"Get-Content '%s' -Wait -Tail 30\"\n", cfg.LogFile)
+	} else {
+		fmt.Println("Service 'smirror' uninstalled successfully.")
+	}
+
+	if clean {
+		serviceUninstallClean(configPath, autoYes)
+	} else {
+		fmt.Println()
+		instInfo := findInstallations()
+		dataPath := config.DefaultDataDir()
+
+		fmt.Printf("Binary:     %s\n", instInfo.CurrentExe)
+		fmt.Printf("Data dir:   %s\n", dataPath)
+
+		if instInfo.HasDuplicates {
+			fmt.Println()
+			warnMultipleInstallations(instInfo)
+		} else if len(instInfo.AllFound) == 1 {
+			fmt.Printf("On PATH:    %s\n", instInfo.AllFound[0])
 		}
 
-	case "stop":
-		if err := service.Stop(); err != nil {
-			if strings.Contains(err.Error(), "not been started") || strings.Contains(err.Error(), "not running") {
-				fmt.Fprintf(os.Stderr, "Warning: service is not running.\n")
-				os.Exit(0)
-			}
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
+		fmt.Println()
+		fmt.Printf("User data preserved at: %s\n", dataPath)
+		fmt.Println("  config.yaml           — configuration")
+		fmt.Println("  state.db              — sync state database")
+		fmt.Println("  selectivemirror.log   — application logs")
 
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown service action: %s\nUse: install, uninstall, start, stop\n", args[0])
-		os.Exit(ExitConfigError)
+		// Offer PATH cleanup
+		cleanPATHEntries(instInfo, autoYes)
+
+		fmt.Println()
+		fmt.Println("To fully remove SelectiveMirror:")
+		fmt.Println("  MSI install:    Settings > Apps > SelectiveMirror > Uninstall")
+		fmt.Println("                  Or: msiexec /x {ProductCode}")
+		fmt.Printf("  Manual install: Delete %s and remove %s from PATH\n",
+			instInfo.CurrentExe, filepath.Dir(instInfo.CurrentExe))
+		fmt.Println()
+		fmt.Println("To also remove user data: smirror service uninstall --clean")
 	}
 }
 
@@ -2726,8 +2966,17 @@ func dryTestRemovability(dir string, fileNames []string) []string {
 	var blocked []string
 	for _, name := range fileNames {
 		p := filepath.Join(dir, name)
-		if _, err := os.Stat(p); os.IsNotExist(err) {
+		info, err := os.Stat(p)
+		if os.IsNotExist(err) {
 			continue // file doesn't exist, nothing to remove
+		}
+		if err != nil {
+			blocked = append(blocked, fmt.Sprintf("  %s: %v", name, err))
+			continue
+		}
+		// Skip open-file test for directories (RemoveAll handles them)
+		if info.IsDir() {
+			continue
 		}
 		fh, err := os.OpenFile(p, os.O_RDWR, 0)
 		if err != nil {
@@ -2746,30 +2995,67 @@ func dryTestRemovability(dir string, fileNames []string) []string {
 func serviceUninstallClean(configPath string, autoYes bool) {
 	dataPath := config.DefaultDataDir()
 
-	// --- Phase 1: Inventory ---
+	// --- Phase 1: Inventory — scan everything in the data directory ---
 	type fileEntry struct {
 		path string
 		desc string
 		size int64
 	}
-	var found []fileEntry
-	candidates := []struct {
-		name string
-		desc string
-	}{
-		{"config.yaml", "configuration"},
-		{"state.db", "sync state database"},
-		{"state.db-wal", "SQLite WAL journal"},
-		{"state.db-shm", "SQLite shared memory"},
-		{"selectivemirror.log", "application logs"},
-		{"smirror.lock", "instance lock file"},
-		{"status.json", "status snapshot"},
+
+	// Known file descriptions
+	knownDescs := map[string]string{
+		"config.yaml":         "configuration",
+		"state.db":            "sync state database",
+		"state.db-wal":        "SQLite WAL journal",
+		"state.db-shm":        "SQLite shared memory",
+		"selectivemirror.log": "application logs",
+		"smirror.lock":        "instance lock file",
+		"status.json":         "status snapshot",
+		"heartbeat.txt":       "heartbeat timestamp",
 	}
 
-	for _, c := range candidates {
-		p := filepath.Join(dataPath, c.name)
-		if info, err := os.Stat(p); err == nil {
-			found = append(found, fileEntry{path: p, desc: c.desc, size: info.Size()})
+	var found []fileEntry
+	entries, err := os.ReadDir(dataPath)
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "Error reading %s: %v\n", dataPath, err)
+		os.Exit(ExitError)
+	}
+	for _, e := range entries {
+		p := filepath.Join(dataPath, e.Name())
+		if e.IsDir() {
+			// Sum directory contents
+			var totalSize int64
+			var fileCount int
+			filepath.WalkDir(p, func(_ string, d os.DirEntry, _ error) error {
+				if d != nil && !d.IsDir() {
+					if fi, err := d.Info(); err == nil {
+						totalSize += fi.Size()
+						fileCount++
+					}
+				}
+				return nil
+			})
+			found = append(found, fileEntry{
+				path: p,
+				desc: fmt.Sprintf("%s/ (%d files)", e.Name(), fileCount),
+				size: totalSize,
+			})
+		} else {
+			fi, _ := e.Info()
+			size := int64(0)
+			if fi != nil {
+				size = fi.Size()
+			}
+			desc := knownDescs[e.Name()]
+			if desc == "" {
+				// Rotated logs, unknown files — describe by extension
+				if strings.HasPrefix(e.Name(), "selectivemirror.log.") {
+					desc = "rotated log"
+				} else {
+					desc = "user data"
+				}
+			}
+			found = append(found, fileEntry{path: p, desc: desc, size: size})
 		}
 	}
 
@@ -2858,7 +3144,13 @@ func serviceUninstallClean(configPath string, autoYes bool) {
 	// --- Phase 5: Remove (all pre-verified removable) ---
 	fmt.Println()
 	for _, f := range found {
-		if err := os.Remove(f.path); err != nil {
+		var err error
+		if info, statErr := os.Stat(f.path); statErr == nil && info.IsDir() {
+			err = os.RemoveAll(f.path)
+		} else {
+			err = os.Remove(f.path)
+		}
+		if err != nil {
 			// Should not happen — dry-test passed. Treat as fatal.
 			fmt.Fprintf(os.Stderr, "UNEXPECTED: failed to remove %s: %v\n", filepath.Base(f.path), err)
 			fmt.Fprintln(os.Stderr, "Aborting. Some files may have been removed. Check manually:")
@@ -2874,8 +3166,25 @@ func serviceUninstallClean(configPath string, autoYes bool) {
 	}
 
 	fmt.Printf("\nClean complete: %d files removed.\n", len(found))
+
+	// --- Phase 6: PATH cleanup ---
+	instInfo := findInstallations()
+	fmt.Println()
+	fmt.Printf("Binary: %s\n", instInfo.CurrentExe)
+	if instInfo.HasDuplicates {
+		fmt.Println()
+		warnMultipleInstallations(instInfo)
+	}
+
+	pathCleaned := cleanPATHEntries(instInfo, autoYes)
+
 	fmt.Println()
 	fmt.Println("To fully remove SelectiveMirror:")
 	fmt.Println("  MSI install:    Settings > Apps > SelectiveMirror > Uninstall")
-	fmt.Println("  Manual install: Delete smirror.exe and remove its directory from PATH")
+	if pathCleaned {
+		fmt.Printf("  Manual install: Delete %s\n", instInfo.CurrentExe)
+	} else {
+		fmt.Printf("  Manual install: Delete %s and remove %s from PATH\n",
+			instInfo.CurrentExe, filepath.Dir(instInfo.CurrentExe))
+	}
 }

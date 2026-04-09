@@ -85,6 +85,7 @@ const (
 // Global holds the complete application configuration.
 type Global struct {
 	Projects           []Project    `yaml:"mirrors"`
+	DefaultRemote      string       `yaml:"default_remote"`  // default rclone remote for new mirrors (e.g., "gdrive:smirror")
 	GlobalExcludes     []string     `yaml:"global_excludes"`
 	StateDB            string       `yaml:"state_db"`
 	LogFile            string       `yaml:"log_file"`

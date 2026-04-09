@@ -493,6 +493,12 @@ SelectiveMirror includes native Windows Service support via `golang.org/x/sys/wi
 Open an **elevated** PowerShell or Command Prompt and run:
 
 ```
+smirror service install start
+```
+
+This installs and starts the service in one step. You can also run them separately:
+
+```
 smirror service install
 smirror service start
 ```
@@ -502,12 +508,17 @@ The `install` command registers the service with Windows SCM, auto-detects rclon
 ## Managing the Service
 
 ```
-smirror service start       # Start the service
-smirror service stop        # Stop the service
-smirror service uninstall   # Remove the service registration
+smirror service start                        # Start the service
+smirror service stop                         # Stop the service
+smirror service stop uninstall               # Stop and uninstall in one step
+smirror service uninstall                    # Remove the service registration
+smirror service uninstall --clean            # Uninstall and remove all user data
+smirror service uninstall --clean --yes      # Same, skip confirmation prompts
 ```
 
 You can also manage it via Windows Services (`services.msc`) where it appears as "SelectiveMirror".
+
+The `--clean` flag removes user data (config.yaml, state.db, logs) after uninstalling. This requires double confirmation unless `--yes` is passed.
 
 ## Checking Service Status
 
@@ -554,14 +565,22 @@ After upgrading rclone, run `smirror test-mirrors` to verify continued compatibi
 
 ## Uninstalling SelectiveMirror
 
+If the service is running, stop and uninstall it first:
+
+```
+smirror service stop uninstall --clean
+```
+
+This stops the service, removes the service registration, and deletes all user data (config, state DB, logs). Omit `--clean` to preserve user data.
+
 ### MSI Uninstall
 
-Use **Settings > Apps > Installed apps** or **Control Panel > Programs and Features** to uninstall. The MSI uninstaller removes the binary and PATH entry but **preserves** the `~/.selectivemirror/` directory containing your configuration and state database. Delete this directory manually if you want a clean removal.
+Use **Settings > Apps > Installed apps** or **Control Panel > Programs and Features** to uninstall. The MSI uninstaller removes the binary and PATH entry but **preserves** the `~/.selectivemirror/` directory containing your configuration and state database. Run `smirror service uninstall --clean` before the MSI uninstall to remove user data, or delete `%USERPROFILE%\.selectivemirror\` manually.
 
 ### Portable Uninstall
 
 1. Delete the `smirror.exe` binary
-2. Remove the directory from your system PATH
+2. Remove the directory from your system PATH (or use the PATH cleanup offered by `smirror service uninstall`)
 3. Optionally delete `%USERPROFILE%\.selectivemirror\`
 
 

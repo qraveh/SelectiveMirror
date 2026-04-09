@@ -810,14 +810,27 @@ func (e *Engine) DryRun(ctx context.Context, proj config.Project) error {
 	args = append(args, e.cfg.RcloneExtraFlags...)
 	args = append(args, proj.RcloneExtraFlags...)
 
+	rclonePath := e.cfg.RclonePath
+	if rclonePath == "" {
+		rclonePath = "rclone"
+	}
+	fullArgs := append(e.cfg.RcloneArgs(), args...)
+
 	fmt.Printf("=== Dry run: %s ===\n", proj.Name)
 	fmt.Printf("Source: %s\n", proj.LocalPath)
 	fmt.Printf("Destination: %s\n", proj.Remote)
-	fmt.Printf("Running: %s %s\n\n", e.cfg.RclonePath, strings.Join(args, " "))
+	fmt.Printf("Running: %s %s\n\n", rclonePath, strings.Join(fullArgs, " "))
 
-	exitCode := e.runRclone(ctx, args)
-	if exitCode != 0 {
-		return fmt.Errorf("rclone exit code %d", exitCode)
+	// Dry-run output (INFO-level "Skipped copy" messages) goes to rclone's
+	// stderr. Pass it through to the terminal instead of capturing it.
+	cmd := exec.CommandContext(ctx, rclonePath, fullArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return fmt.Errorf("rclone exit code %d", exitErr.ExitCode())
+		}
+		return fmt.Errorf("rclone: %w", err)
 	}
 	return nil
 }

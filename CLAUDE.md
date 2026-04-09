@@ -74,7 +74,10 @@ smirror explain Orch CLAUDE.md
 | `smirror explain <mirror> <path>` | Show include/exclude status, matched rule, sync state |
 | `smirror project-stats` | File counts + line counts per mirror (alias: `stats`) |
 | `smirror report-bug` | Generate diagnostic report for bug filing |
-| `smirror service <action>` | Windows Service: install, uninstall, start, stop |
+| `smirror remote [remote_path]` | Show or set the default rclone remote for new mirrors |
+| `smirror addmirror <path> [-dest <remote>]` | Add a directory as a new mirror |
+| `smirror unmirror <name\|path>` | Remove a mirror from config |
+| `smirror service <action...>` | Windows Service: install [start], stop, uninstall [--clean] [--yes] |
 
 ---
 

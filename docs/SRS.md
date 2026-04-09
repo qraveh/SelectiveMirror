@@ -257,7 +257,7 @@ SelectiveMirror is the **missing link**: real-time + selective + backend-agnosti
 | FR-SVC-04 | System SHALL handle SYSTEM account context (different PATH, APPDATA) | Must | SYSTEM has no rclone.conf in its APPDATA; critical production bug class | Done |
 | FR-SVC-05 | System SHALL gracefully shut down on service Stop/Shutdown with 30s timeout | Must | In-flight syncs must complete or abort cleanly | Done |
 | FR-SVC-06 | System SHALL write emergency crash logs to fixed paths for service diagnostics | Should | SYSTEM account failures are invisible without fixed-path logging | Done |
-| FR-SVC-07 | System SHALL support `service install\|uninstall\|start\|stop` commands | Must | — | Done |
+| FR-SVC-07 | System SHALL support `service install [start]`, `service stop [uninstall [--clean] [--yes]]` commands with compound sequencing | Must | Single-command install+start and stop+uninstall reduces operational friction | Done |
 | FR-SVC-08 | System SHALL write service lifecycle events (start, stop, failure, recovery) to the Windows Event Log (Application log) | Should | Windows administrators expect service events in Event Viewer, not just text log files | Not Done |
 
 ### 3.10 CLI (FR-CLI)

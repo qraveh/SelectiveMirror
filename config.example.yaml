@@ -1,6 +1,10 @@
 # SelectiveMirror configuration
 # Copy to ~/.selectivemirror/config.yaml and customize.
 
+# Default rclone remote for new mirrors added via `smirror addmirror`.
+# Set with: smirror remote gdrive:smirror
+# default_remote: ""
+
 mirrors:
   - name: MyProject
     local_path: C:\Projects\MyProject    # Local directory to watch
