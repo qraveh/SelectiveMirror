@@ -54,17 +54,19 @@ smirror start
 | Command | Description |
 |---------|-------------|
 | `smirror start` | Start foreground watcher (single-instance locked) |
-| `smirror sync-now [mirror]` | Immediate full sync |
-| `smirror dry-run [mirror]` | Show what would sync |
-| `smirror status` | Show sync status, metrics, instance state |
-| `smirror test-mirrors [mirror]` | Run diagnostics, check connectivity, verify sync state (aliases: `doctor`, `verify`) |
+| `smirror sync-now [mirror]` | Immediate full sync + ghost cleanup |
+| `smirror dry-run [mirror]` | Show what would sync + ghost cleanup preview |
+| `smirror status [mirror]` | Show sync status, metrics, instance state |
+| `smirror test-mirrors [mirror]` | Run diagnostics and verify sync state (aliases: `doctor`, `verify`) |
 | `smirror list-filters [mirror]` | Show effective filter rules |
-| `smirror explain <mirror> <path>` | Show include/exclude status and sync state |
-| `smirror project-stats` | Show file counts and line counts across all mirrors (alias: `stats`) |
-| `smirror report-bug` | Generate diagnostic report for bug filing |
+| `smirror explain <mirror> <path>` | Explain include/exclude status, matched rule, sync state |
+| `smirror project-stats [mirror]` | Show file counts and line counts per mirror (alias: `stats`) |
+| `smirror report-bug [flags]` | Generate diagnostic report (`--stdout`, `--open`) |
 | `smirror remote [remote_path]` | Show or set the default rclone remote for new mirrors |
-| `smirror addmirror <path> [-dest <remote>]` | Add a directory as a new mirror |
-| `smirror unmirror <name\|path>` | Remove a mirror from config |
+| `smirror addmirror <path...> [flags]` | Add directories as mirrors (`-dest`, `--backup`, `--delete`, `--initial-sync`; aliases: `add-mirror`, `add`) |
+| `smirror unmirror <name\|path>` | Remove a mirror from config (aliases: `removemirror`, `remove-mirror`, `remove`) |
+| `smirror clean [--yes]` | Stop service, uninstall, and remove all user data |
+| `smirror selfupdate [flags]` | Check for and install updates (`--check`, `--whatsnew`, `--yes`, `--include-rclone`) |
 | `smirror service <action...>` | Windows Service: install [start], stop, uninstall [--clean] [--yes] |
 | `smirror version` | Show version |
 

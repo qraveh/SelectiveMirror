@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.4-dev"
+var version = "0.8.5-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -130,7 +130,7 @@ func cliMain() {
 	case "dry-run":
 		cmdDryRun(configPath, cmdArgs)
 	case "status":
-		cmdStatus(configPath)
+		cmdStatus(configPath, cmdArgs)
 	case "test-mirrors", "doctor", "verify":
 		cmdTestMirrors(configPath, cmdArgs)
 	case "list-filters":
@@ -138,7 +138,7 @@ func cliMain() {
 	case "explain":
 		cmdExplain(configPath, cmdArgs)
 	case "project-stats", "stats":
-		cmdStats(configPath)
+		cmdStats(configPath, cmdArgs)
 	case "report-bug":
 		cmdReportBug(configPath, cmdArgs)
 	case "selfupdate":
@@ -147,7 +147,7 @@ func cliMain() {
 		cmdRemote(configPath, cmdArgs)
 	case "addmirror", "add-mirror", "add":
 		cmdAddMirror(configPath, cmdArgs)
-	case "unmirror", "remove-mirror", "remove":
+	case "unmirror", "removemirror", "remove-mirror", "remove":
 		cmdUnmirror(configPath, cmdArgs)
 	case "clean":
 		// Shortcut: smirror clean = smirror service stop uninstall --clean [--yes]
@@ -157,8 +157,8 @@ func cliMain() {
 	case "service":
 		cmdService(configPath, cmdArgs)
 	case "version":
-		fmt.Println("Copyright (c) 2026 Raveh Neeman")
 		fmt.Printf("smirror %s\n", version)
+		fmt.Println("Copyright (c) 2026 Raveh Neeman")
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -175,24 +175,25 @@ Usage:
   smirror <command> [options]
 
 Commands:
-  start                     Start the file watcher (foreground)
-  sync-now [mirror]         Trigger immediate sync for one or all mirrors
-  dry-run [mirror]          Show what would be synced without doing it
-  status                    Show sync status and metrics per mirror
-  test-mirrors [mirror]     Run all diagnostics and verify sync state (aliases: doctor, verify)
-  list-filters [mirror]     Show effective filter rules
-  explain <mirror> <path>   Explain why a file is included or excluded
-  project-stats             Show file counts and line counts across all mirrors (alias: stats)
-  report-bug [--stdout]     Generate diagnostic report for bug filing
-  remote [remote_path]      Show or set the default rclone remote for new mirrors
-  addmirror <path> [-dest]  Add a directory as a new mirror (aliases: add-mirror, add)
-  unmirror <name|path>      Remove a mirror from config (aliases: remove-mirror, remove)
-  clean [--yes]             Stop service, uninstall, and remove all user data
-  selfupdate [--check]      Check for and install updates (also: --whatsnew, --include-rclone)
-  service <action...>       Windows Service: install [start], stop, uninstall [--clean] [--yes]
-                            Compound: "service install start", "service stop uninstall [--clean]"
-                            ("run as administrator" elevated cmd/PowerShell required)
-  version                   Show version
+  start                      Start the file watcher (foreground)
+  sync-now [mirror]          Immediate full sync + ghost cleanup (aliases: syncnow)
+  dry-run [mirror]           Show what would sync + ghost cleanup preview
+  status [mirror]            Show sync status, metrics, instance state
+  test-mirrors [mirror]      Run diagnostics and verify sync state (aliases: doctor, verify)
+  list-filters [mirror]      Show effective filter rules
+  explain <mirror> <path>    Explain include/exclude status, matched rule, sync state
+  project-stats [mirror]     Show file counts and line counts per mirror (alias: stats)
+  report-bug [flags]         Generate diagnostic report (--stdout, --open)
+  remote [remote_path]       Show or set the default rclone remote for new mirrors
+  addmirror <path...> [flags]  Add directories as mirrors (aliases: add-mirror, add)
+                             Flags: -dest <remote>, --backup, --delete, --initial-sync
+  unmirror <name|path>       Remove a mirror from config (aliases: removemirror, remove-mirror, remove)
+  clean [--yes]              Stop service, uninstall, and remove all user data
+  selfupdate [flags]         Check for and install updates (--check, --whatsnew, --yes, --include-rclone)
+  service <action...>        Windows Service: install [start], stop, uninstall [--clean] [--yes]
+                             Compound: "service install start", "service stop uninstall [--clean]"
+                             ("run as administrator" elevated cmd/PowerShell required)
+  version                    Show version
 
 Options:
   --config PATH      Path to config file (default: ~/.selectivemirror/config.yaml)
@@ -671,7 +672,7 @@ func cmdDryRun(configPath string, args []string) {
 	}
 }
 
-func cmdStatus(configPath string) {
+func cmdStatus(configPath string, args []string) {
 	// Non-blocking update check (rate-limited to once/24h)
 	go checkForUpdateOnStartup(configPath)
 
@@ -796,7 +797,17 @@ func cmdStatus(configPath string) {
 
 	filters := buildFilters(cfg)
 
-	for _, proj := range cfg.Projects {
+	projects := cfg.Projects
+	if len(args) > 0 {
+		proj := cfg.FindProject(args[0])
+		if proj == nil {
+			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
+			os.Exit(ExitConfigError)
+		}
+		projects = []config.Project{*proj}
+	}
+
+	for _, proj := range projects {
 		lastSync, _ := st.GetLastSyncTime(proj.Name)
 		pending, _ := st.GetPendingFiles(proj.Name)
 		synced, _ := st.GetAllSyncedPaths(proj.Name)
@@ -1802,7 +1813,7 @@ func cmdReportBug(configPath string, args []string) {
 	fmt.Println("Paste into a GitHub issue at: https://github.com/qraveh/SelectiveMirror/issues/new")
 }
 
-func cmdStats(configPath string) {
+func cmdStats(configPath string, args []string) {
 	cfg := loadConfig(configPath)
 	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
@@ -1843,6 +1854,16 @@ func cmdStats(configPath string) {
 	fmt.Printf("smirror project-stats\n")
 	fmt.Printf("=====================\n")
 
+	projects := cfg.Projects
+	if len(args) > 0 {
+		proj := cfg.FindProject(args[0])
+		if proj == nil {
+			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
+			os.Exit(ExitConfigError)
+		}
+		projects = []config.Project{*proj}
+	}
+
 	var allStats []projectStats
 	grandTotal := catCount{}
 	grandBytes := int64(0)
@@ -1850,7 +1871,7 @@ func cmdStats(configPath string) {
 	grandByCat := make(map[string]catCount)
 	grandOther := catCount{}
 
-	for _, proj := range cfg.Projects {
+	for _, proj := range projects {
 		fe := filters[proj.Name]
 		ps := projectStats{
 			name:  proj.Name,

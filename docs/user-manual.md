@@ -505,18 +505,18 @@ Press Ctrl+C to stop
 
 ## sync-now
 
-Trigger an immediate full-project sync for one or all projects. Runs synchronously and exits.
+Immediate full sync + ghost cleanup for one or all projects. Runs synchronously and exits.
 
 ```
 smirror sync-now              # sync all projects
 smirror sync-now MyProject    # sync one project
 ```
 
-This command does not start the watcher. It is useful for forcing a one-time full sync, for example after manually editing files or recovering from an error.
+After syncing, automatically scans for and removes ghost files (orphaned files on the remote that no longer exist locally). This command does not start the watcher. It is useful for forcing a one-time full sync, for example after manually editing files or recovering from an error.
 
 ## dry-run
 
-Show what would be synced without actually transferring files. Uses rclone's `--dry-run` flag.
+Show what would sync + ghost cleanup preview without actually transferring or deleting files. Uses rclone's `--dry-run` flag for the sync preview, then lists ghost files that would be cleaned.
 
 ```
 smirror dry-run              # all projects
@@ -540,7 +540,8 @@ Running: rclone copy C:\Projects\MyProject gdrive:backup/MyProject --checksum --
 Show sync status, live metrics, and project details.
 
 ```
-smirror status
+smirror status              # all mirrors
+smirror status MyProject    # one mirror
 ```
 
 Example output:
@@ -616,7 +617,7 @@ Example output:
 
 ## explain
 
-Explain why a specific file is included or excluded from sync, and show its sync state.
+Explain include/exclude status, matched rule, and sync state for a specific file.
 
 ```
 smirror explain <project> <relative-path>
@@ -692,10 +693,11 @@ See Section 9 for details on each check.
 
 ## project-stats
 
-Show file counts, line counts, and size breakdown by language category across all mirrors (alias: `stats`).
+Show file counts, line counts, and size breakdown by language category per mirror (alias: `stats`).
 
 ```
-smirror project-stats
+smirror project-stats              # all mirrors
+smirror project-stats MyProject    # one mirror
 ```
 
 Example output:
