@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.3-dev"
+var version = "0.8.4-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -918,6 +918,10 @@ func countFilteredFiles(root string, fe *filter.Engine) (total, excluded int) {
 		if d.IsDir() {
 			// Check if entire directory is excluded (e.g., .git/)
 			if fe.IsExcluded(rel + "/") {
+				// Count files inside the excluded directory
+				n := countFilesInDir(path)
+				total += n
+				excluded += n
 				return filepath.SkipDir
 			}
 			return nil
@@ -929,6 +933,18 @@ func countFilteredFiles(root string, fe *filter.Engine) (total, excluded int) {
 		return nil
 	})
 	return total, excluded
+}
+
+// countFilesInDir counts regular files recursively inside a directory.
+func countFilesInDir(dir string) int {
+	n := 0
+	filepath.WalkDir(dir, func(_ string, d os.DirEntry, _ error) error {
+		if d != nil && !d.IsDir() {
+			n++
+		}
+		return nil
+	})
+	return n
 }
 
 // cmdTestMirrors runs all diagnostics (local + remote) and verifies sync state.
