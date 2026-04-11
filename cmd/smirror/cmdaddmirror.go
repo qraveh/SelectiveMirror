@@ -175,7 +175,7 @@ Examples:
 	if cfgErr != nil {
 		fmt.Printf("Config %s does not exist. Creating it.\n", configPath)
 		dir := filepath.Dir(configPath)
-		os.MkdirAll(dir, 0755)
+		_ = os.MkdirAll(dir, 0755)
 		initial := fmt.Sprintf(`default_remote: %q
 
 # Patterns applied to ALL mirrors (in addition to per-mirror .syncignore)

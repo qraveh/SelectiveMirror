@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.5-dev"
+var version = "0.8.6-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -914,7 +914,7 @@ func cmdStatus(configPath string, args []string) {
 // countFilteredFiles walks a directory and counts total files vs excluded files.
 // Returns (total, excluded). Directories themselves are not counted.
 func countFilteredFiles(root string, fe *filter.Engine) (total, excluded int) {
-	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip inaccessible entries
 		}
@@ -949,7 +949,7 @@ func countFilteredFiles(root string, fe *filter.Engine) (total, excluded int) {
 // countFilesInDir counts regular files recursively inside a directory.
 func countFilesInDir(dir string) int {
 	n := 0
-	filepath.WalkDir(dir, func(_ string, d os.DirEntry, _ error) error {
+	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, _ error) error {
 		if d != nil && !d.IsDir() {
 			n++
 		}
@@ -2967,7 +2967,6 @@ func serviceDoUninstall(configPath string, clean, autoYes bool) {
 		fmt.Println()
 		fmt.Println("To fully remove SelectiveMirror:")
 		fmt.Println("  MSI install:    Settings > Apps > SelectiveMirror > Uninstall")
-		fmt.Println("                  Or: msiexec /x {ProductCode}")
 		fmt.Printf("  Manual install: Delete %s and remove %s from PATH\n",
 			instInfo.CurrentExe, filepath.Dir(instInfo.CurrentExe))
 		fmt.Println()
@@ -3063,7 +3062,7 @@ func serviceUninstallClean(configPath string, autoYes bool) {
 			// Sum directory contents
 			var totalSize int64
 			var fileCount int
-			filepath.WalkDir(p, func(_ string, d os.DirEntry, _ error) error {
+			_ = filepath.WalkDir(p, func(_ string, d os.DirEntry, _ error) error {
 				if d != nil && !d.IsDir() {
 					if fi, err := d.Info(); err == nil {
 						totalSize += fi.Size()

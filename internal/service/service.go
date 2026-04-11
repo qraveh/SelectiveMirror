@@ -294,8 +294,7 @@ func Stop() error {
 		return fmt.Errorf("cannot query service state: %w", err)
 	}
 	if status.State == svc.Stopped {
-		fmt.Println("Service 'smirror' was not running.")
-		return nil
+		return fmt.Errorf("service has not been started")
 	}
 
 	status, err = s.Control(svc.Stop)
@@ -306,7 +305,6 @@ func Stop() error {
 	// Wait for it to actually stop
 	for i := 0; i < 20; i++ {
 		if status.State == svc.Stopped {
-			fmt.Println("Service 'smirror' stopped.")
 			return nil
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -317,9 +315,7 @@ func Stop() error {
 	}
 
 	if status.State != svc.Stopped {
-		fmt.Println("Service stop signal sent — may still be shutting down.")
-	} else {
-		fmt.Println("Service 'smirror' stopped.")
+		return fmt.Errorf("service stop signal sent but still running after 10s")
 	}
 	return nil
 }
