@@ -392,6 +392,13 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 	start := time.Now()
 	exitCode := e.runRclone(ctx, args)
 
+	// SM-100: If context was cancelled (graceful shutdown) or rclone was killed
+	// by signal (exit >= 128), don't retry, don't record failure, just return.
+	if exitCode == -3 || ctx.Err() != nil {
+		e.log.Debug("sync cancelled (shutdown)", "project", proj.Name, "path", relPath)
+		return
+	}
+
 	// FR-SYNC-16: Retry once on transient failure.
 	// Exit 1 = general error (often transient network), exit 5 = temporary error (rclone docs:
 	// "more retries might fix it" — API rate limits, server-side throttling).
@@ -400,6 +407,11 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		e.log.Info("transient failure, retrying once", "project", proj.Name, "path", relPath, "exit", exitCode)
 		time.Sleep(2 * time.Second)
 		exitCode = e.runRclone(ctx, args)
+		// Re-check cancellation after retry
+		if exitCode == -3 || ctx.Err() != nil {
+			e.log.Debug("sync cancelled during retry (shutdown)", "project", proj.Name, "path", relPath)
+			return
+		}
 	}
 	elapsed := time.Since(start)
 
@@ -775,6 +787,13 @@ func (e *Engine) defaultRunRclone(ctx context.Context, args []string) int {
 		if rcloneCtx.Err() == context.DeadlineExceeded {
 			e.log.Error("rclone timed out after 5 minutes", "args", strings.Join(args, " "), "stderr", stderrMsg)
 			return -2
+		}
+		// SM-100: Check context cancellation (graceful shutdown).
+		// rclone exits with 143 (SIGTERM) or similar when the parent is shutting down.
+		// This is not a failure — it's a cancellation.
+		if ctx.Err() == context.Canceled {
+			e.log.Debug("rclone cancelled (shutdown)", "args", strings.Join(args[:min(3, len(args))], " "))
+			return -3
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode := exitErr.ExitCode()
