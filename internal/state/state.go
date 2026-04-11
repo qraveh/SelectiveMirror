@@ -371,6 +371,20 @@ func (s *Store) GetPendingFiles(project string) ([]string, error) {
 	return paths, rows.Err()
 }
 
+// ClearStaleExitCodes resets rclone_exit to 0 for all files in a project that
+// have a non-zero exit code. Called after a successful batch reconciliation
+// (rclone copy) to clear stale per-file failure flags (SM-101).
+func (s *Store) ClearStaleExitCodes(project string) (int64, error) {
+	result, err := s.db.Exec(
+		"UPDATE sync_state SET rclone_exit = 0 WHERE project = ? AND rclone_exit != 0",
+		project,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // GetLastSyncTime returns the most recent successful sync time for a project.
 func (s *Store) GetLastSyncTime(project string) (time.Time, error) {
 	row := s.db.QueryRow(

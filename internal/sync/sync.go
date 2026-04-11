@@ -1038,6 +1038,16 @@ func (e *Engine) backfillStateAfterBatchSync(ctx context.Context, proj config.Pr
 	if backfilled > 0 {
 		e.log.Info("backfilled state DB after batch sync", "project", proj.Name, "files", backfilled)
 	}
+
+	// SM-101: Clear stale rclone_exit codes. The batch rclone copy succeeded for
+	// the whole project, so any per-file failure flags from previous runs are stale.
+	// Without this, "Pending retries" in status shows ghost failures forever.
+	cleared, err := e.state.ClearStaleExitCodes(proj.Name)
+	if err != nil {
+		e.log.Warn("failed to clear stale exit codes", "project", proj.Name, "error", err)
+	} else if cleared > 0 {
+		e.log.Info("cleared stale exit codes after batch sync", "project", proj.Name, "cleared", cleared)
+	}
 }
 
 // ClassifyGhost determines why a remote-only file exists using filter rules and state DB.
