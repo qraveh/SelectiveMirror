@@ -104,11 +104,13 @@ try {
     Copy-Item $extracted.FullName $rcloneExe -Force
     Write-Log "Installed rclone to $rcloneExe"
 
-    # Add to system PATH if not already there
-    $systemPath = [Environment]::GetEnvironmentVariable("PATH", "Machine")
-    if ($systemPath -notlike "*$rcloneDir*") {
-        [Environment]::SetEnvironmentVariable("PATH", "$systemPath;$rcloneDir", "Machine")
-        Write-Log "Added $rcloneDir to system PATH"
+    # Add to PATH (system if elevated, user if not)
+    $isElevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $scope = if ($isElevated) { "Machine" } else { "User" }
+    $currentPath = [Environment]::GetEnvironmentVariable("PATH", $scope)
+    if ($currentPath -notlike "*$rcloneDir*") {
+        [Environment]::SetEnvironmentVariable("PATH", "$currentPath;$rcloneDir", $scope)
+        Write-Log "Added $rcloneDir to $scope PATH"
     }
 
     # Verify

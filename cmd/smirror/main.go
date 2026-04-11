@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.6-dev"
+var version = "0.8.7-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -2796,6 +2796,11 @@ func normalizeServiceActions(actions []string) []string {
 // serviceDoInstall handles `smirror service install`.
 // When compound is true, the "start with:" hint is suppressed (start follows).
 func serviceDoInstall(configPath string, compound bool) {
+	if !isAdmin() {
+		fmt.Fprintln(os.Stderr, "Error: service installation requires administrator privileges.")
+		fmt.Fprintln(os.Stderr, "Run this command from an elevated (administrator) terminal.")
+		os.Exit(1)
+	}
 	// Preflight: config must exist and be valid before registering the service.
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -2879,6 +2884,11 @@ func serviceDoInstall(configPath string, compound bool) {
 // serviceDoStart handles `smirror service start`.
 // When compound is true, "already running" is non-fatal (continues to next action).
 func serviceDoStart(configPath string, compound bool) {
+	if !isAdmin() {
+		fmt.Fprintln(os.Stderr, "Error: starting the service requires administrator privileges.")
+		fmt.Fprintln(os.Stderr, "Run this command from an elevated (administrator) terminal.")
+		os.Exit(1)
+	}
 	if err := service.Start(); err != nil {
 		if strings.Contains(err.Error(), "already running") || strings.Contains(err.Error(), "already been started") {
 			fmt.Fprintf(os.Stderr, "Warning: service is already running.\n")
@@ -2900,6 +2910,11 @@ func serviceDoStart(configPath string, compound bool) {
 // serviceDoStop handles `smirror service stop`.
 // When compound is true, "not running" is non-fatal (continues to next action).
 func serviceDoStop(compound bool) {
+	if !isAdmin() {
+		fmt.Fprintln(os.Stderr, "Error: stopping the service requires administrator privileges.")
+		fmt.Fprintln(os.Stderr, "Run this command from an elevated (administrator) terminal.")
+		os.Exit(1)
+	}
 	if err := service.Stop(); err != nil {
 		errMsg := err.Error()
 		benign := strings.Contains(errMsg, "not been started") ||
@@ -2920,6 +2935,13 @@ func serviceDoStop(compound bool) {
 
 // serviceDoUninstall handles `smirror service uninstall [--clean] [--yes]`.
 func serviceDoUninstall(configPath string, clean, autoYes bool) {
+	// Check if service is installed — if so, require admin to uninstall.
+	// If not installed, allow proceeding (--clean still works without admin).
+	if service.IsInstalled() && !isAdmin() {
+		fmt.Fprintln(os.Stderr, "Error: service is installed. Uninstalling requires administrator privileges.")
+		fmt.Fprintln(os.Stderr, "Run this command from an elevated (administrator) terminal.")
+		os.Exit(1)
+	}
 	_ = service.RemoveEventSource() // best-effort cleanup
 	if err := service.Uninstall(); err != nil {
 		// Distinguish "not installed" from real errors
