@@ -76,7 +76,7 @@ func (p Project) SyncIgnoreFile() string {
 type DeletePolicy string
 
 const (
-	DeleteIgnore     DeletePolicy = "ignore"     // default: do nothing on remote
+	DeleteIgnore     DeletePolicy = "ignore"     // do nothing on remote
 	DeleteDelete     DeletePolicy = "delete"     // immediately delete remote file
 	DeleteMirror     DeletePolicy = "mirror"     // deprecated alias for "delete"
 	DeleteQuarantine DeletePolicy = "quarantine" // move remote to .quarantine/
@@ -165,11 +165,11 @@ func parseDeletePolicy(s string) DeletePolicy {
 	case DeleteQuarantine:
 		return DeleteQuarantine
 	default:
-		return DeleteIgnore
+		return DeleteDelete
 	}
 }
 
-// DeletePolicy returns the parsed global delete policy (defaults to "ignore").
+// DeletePolicy returns the parsed global delete policy (defaults to "delete").
 func (g Global) DeletePolicy() DeletePolicy {
 	return parseDeletePolicy(g.DeletePolicyStr)
 }

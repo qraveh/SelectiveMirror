@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.10-dev"
+var version = "0.8.11-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -707,8 +707,7 @@ func cmdStatus(configPath string, args []string) {
 	defer st.Close()
 
 	fmt.Printf("Config: %s\n", configPath)
-	fmt.Printf("State DB: %s\n", cfg.StateDB)
-	fmt.Printf("Delete policy: %s\n\n", cfg.DeletePolicy())
+	fmt.Printf("State DB: %s\n\n", cfg.StateDB)
 
 	// Show live metrics if status.json exists
 	statusPath := filepath.Join(dataDir(cfg), "status.json")
