@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.8-dev"
+var version = "0.8.9-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1195,7 +1195,7 @@ func cmdTestMirrors(configPath string, args []string) {
 	}
 
 	if totalDrift > 0 {
-		fmt.Println("Hint: 'smirror sync-now' may resolve most drift.")
+		fmt.Println("Hint: 'smirror sync-now' may resolve drift.")
 	}
 
 	if failed > 0 {
