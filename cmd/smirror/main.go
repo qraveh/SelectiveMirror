@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.20-dev"
+var version = "0.8.21-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1205,10 +1205,14 @@ func cmdTestMirrors(configPath string, args []string) {
 		}
 	}
 
-	// SM-116: Only suggest sync-now when drift exists without remote failures.
-	// When the remote is unreachable, sync-now can't help.
-	if totalDrift > 0 && failed == 0 {
-		fmt.Println("Hint: 'smirror sync-now' may resolve drift.")
+	// SM-116: Show hint when drift exists. When there are also failures,
+	// qualify the hint — some drift may still be resolvable even if some remotes are down.
+	if totalDrift > 0 {
+		if failed > 0 {
+			fmt.Println("Hint: 'smirror sync-now' may resolve drift on reachable mirrors.")
+		} else {
+			fmt.Println("Hint: 'smirror sync-now' may resolve drift.")
+		}
 	}
 
 	if failed > 0 {
@@ -2145,6 +2149,7 @@ func reconcileAll(ctx context.Context, cfg *config.Global, st *state.Store, filt
 func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, filters map[string]*filter.Engine) {
 	start := time.Now()
 	totalGhosts := 0
+	scanFailed := false
 	var ghostDetails []string
 
 	for _, proj := range cfg.Projects {
@@ -2153,9 +2158,7 @@ func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, fil
 		remoteFiles, err := msync.ListRemote(cfg, proj)
 		if err != nil {
 			slog.Warn("ghost scan: failed to list remote", "mirror", proj.Name, "error", err)
-			// SM-114: Record failure instead of silently reporting "clean"
-			st.SetMeta("ghost_scan_result", fmt.Sprintf("failed: %s: %v", proj.Name, err))
-			st.SetMeta("ghost_scan_time", time.Now().UTC().Format(time.RFC3339))
+			scanFailed = true
 			continue
 		}
 
@@ -2218,6 +2221,11 @@ func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, fil
 			details = strings.Join(ghostDetails[:50], "\n") + fmt.Sprintf("\n... and %d more", len(ghostDetails)-50)
 		}
 		st.SetMeta("ghost_scan_details", details)
+	} else if scanFailed {
+		// SM-114: Don't report "clean" when scan failed on one or more mirrors
+		st.SetMeta("ghost_scan_result", "incomplete (remote listing failed)")
+		st.SetMeta("ghost_scan_time", time.Now().UTC().Format(time.RFC3339))
+		slog.Warn("ghost scan: incomplete due to remote listing failure")
 	} else {
 		st.SetMeta("ghost_scan_result", "clean")
 		st.SetMeta("ghost_scan_time", time.Now().UTC().Format(time.RFC3339))

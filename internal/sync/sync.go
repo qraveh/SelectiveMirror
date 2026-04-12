@@ -512,6 +512,12 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 		return fmt.Errorf("no filter engine for project %q", proj.Name)
 	}
 
+	// SM-107: Refuse batch sync when filter has bad patterns to prevent fail-open.
+	if fe.HasBadPatterns() {
+		e.log.Error("refusing batch sync: .syncignore has malformed patterns", "project", proj.Name)
+		return fmt.Errorf("malformed .syncignore patterns — batch sync blocked to prevent syncing excluded files")
+	}
+
 	// Capture filter generation before generating the rclone filter file.
 	// If the filter is hot-reloaded between now and rclone execution, a new
 	// full sync will be queued by reloadFilter — so we can safely skip this

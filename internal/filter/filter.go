@@ -110,11 +110,23 @@ func (e *Engine) loadProjectIgnore() error {
 		return err
 	}
 
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && !strings.HasPrefix(line, "#") {
-			e.projectRules = append(e.projectRules, line)
+	// Strip UTF-8 BOM if present (PowerShell Set-Content -Encoding UTF8 adds one)
+	content := string(data)
+	if strings.HasPrefix(content, "\xEF\xBB\xBF") {
+		content = content[3:]
+	}
+
+	for _, line := range strings.Split(content, "\n") {
+		// Strip CR (Windows CRLF)
+		line = strings.TrimRight(line, "\r")
+		// Strip unescaped trailing whitespace (gitignore spec).
+		// "foo\ " keeps the space, "foo " strips it, "foo\t" strips the tab.
+		line = trimTrailingUnescaped(line)
+		line = strings.TrimLeft(line, " \t")
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
 		}
+		e.projectRules = append(e.projectRules, line)
 	}
 
 	// Lint: warn about unanchored negation patterns that match at any depth.
@@ -225,6 +237,29 @@ func logFilterDiff(path string, oldRules, newRules []string) {
 	if len(removed) > 0 {
 		slog.Info(".syncignore rules removed", "path", path, "removed", removed)
 	}
+}
+
+// trimTrailingUnescaped strips trailing spaces and tabs unless the last space
+// is escaped with a backslash (gitignore spec: "foo\ " keeps the trailing space).
+func trimTrailingUnescaped(s string) string {
+	i := len(s)
+	for i > 0 && (s[i-1] == ' ' || s[i-1] == '\t') {
+		if i >= 2 && s[i-2] == '\\' && s[i-1] == ' ' {
+			// Escaped space — stop stripping
+			break
+		}
+		i--
+	}
+	return s[:i]
+}
+
+// HasBadPatterns reports whether the filter engine has malformed patterns
+// that were skipped during compilation. When true, batch sync should refuse
+// to run to avoid fail-open behavior.
+func (e *Engine) HasBadPatterns() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.badPatterns) > 0
 }
 
 // SyncIgnorePath returns the path to the .syncignore file being watched.
