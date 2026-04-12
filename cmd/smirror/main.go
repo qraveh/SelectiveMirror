@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.17-dev"
+var version = "0.8.18-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -125,7 +125,7 @@ func cliMain() {
 	switch cmd {
 	case "start":
 		cmdStart(configPath, cmdArgs)
-	case "sync-now":
+	case "sync-now", "syncnow":
 		cmdSyncNow(configPath, cmdArgs)
 	case "dry-run":
 		cmdDryRun(configPath, cmdArgs)
