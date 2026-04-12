@@ -11,7 +11,7 @@ Real-time selective file synchronization for Windows. Watches local directories 
 - **Backend-agnostic** -- rclone handles all cloud/remote storage
 - **Single-instance** -- file-based lock prevents duplicate watchers
 - **Quiescence** -- files must be stable before sync (handles Office saves, long writes)
-- **Delete policy** -- configurable ignore/mirror/quarantine for local deletions
+- **Delete policy** -- configurable delete/ignore/quarantine for local deletions (default: delete)
 - **Fair scheduling** -- hot files cycle to the back of the queue; no single file can starve other mirrors
 
 ## Installation
@@ -82,8 +82,25 @@ See [`config.example.yaml`](config.example.yaml) for a full annotated example.
 
 - **mirrors** -- list of watched directories with rclone remote destinations
 - **global_excludes** -- patterns applied to all mirrors (`.gitignore` syntax)
-- **delete_policy** -- `ignore` (default), `mirror`, or `quarantine`
+- **delete_policy** -- `ignore`, `delete` (default), or `quarantine`
+- **alert_webhook_url** -- HTTP endpoint for incident-based anomaly alerts (empty = disabled)
 - **Per-directory `.syncignore`** -- place in the directory root for per-mirror filtering
+
+### Delete policy
+
+Controls what happens on the remote when a file is deleted locally.
+
+| Policy | Batch sync verb | On delete event | Use case |
+|--------|----------------|-----------------|----------|
+| `delete` (default) | `rclone sync` | `rclone deletefile` | Mirror deletions to remote |
+| `ignore` | `rclone copy` | no action | Preserve remote as archive |
+| `quarantine` | `rclone copy` | `rclone moveto .quarantine/` | Soft-delete with recovery window |
+
+Per-mirror `delete_policy` overrides the global setting. If neither is set, the default is `delete`.
+
+### Diagnostics report
+
+`smirror report-bug --stdout` generates a diagnostic bundle for bug filing. It includes: version, platform, rclone info, config structure (mirror names, policy, workers), state DB summary, and last 30 log lines. All paths are sanitized (home directory replaced with `~`). Remote paths are fully redacted. Review the output before submitting.
 
 ## Roadmap
 

@@ -169,7 +169,7 @@ See `config.example.yaml` for full annotated example.
 ## Testing
 
 ```bash
-# Run all unit tests (347 tests across 11 packages)
+# Run all unit tests (570+ tests across 15 packages)
 go test ./internal/... ./cmd/... -p 24 -count=1
 
 # Run integration tests (adversarial, uses local rclone backend)
