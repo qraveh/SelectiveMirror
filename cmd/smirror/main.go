@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.12-dev"
+var version = "0.8.13-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1745,18 +1745,34 @@ func cmdReportBug(configPath string, args []string) {
 			if len(lines) > 30 {
 				start = len(lines) - 30
 			}
-			home, _ := os.UserHomeDir()
 			for _, line := range lines[start:] {
-				// Redact user paths
-				if home != "" {
-					line = strings.ReplaceAll(line, home, "<USER_HOME>")
-				}
 				b.WriteString(line + "\n")
 			}
 		}
 	}
 
+	// SM-103: Sanitize all paths in the report — replace home directory with ~.
+	// Applied to the full report so error messages, log lines, config paths,
+	// and rclone paths are all consistently redacted.
+	// Case-insensitive replacement needed because Windows paths are case-insensitive
+	// (config may use C:\users\... while os.UserHomeDir returns C:\Users\...).
 	report := b.String()
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		homeSlash := filepath.ToSlash(home)
+		reportLower := strings.ToLower(report)
+		// Replace all case-insensitive occurrences (both slash styles)
+		for _, pattern := range []string{home, homeSlash} {
+			patLower := strings.ToLower(pattern)
+			for {
+				idx := strings.Index(strings.ToLower(report), patLower)
+				if idx < 0 {
+					break
+				}
+				report = report[:idx] + "~" + report[idx+len(pattern):]
+			}
+		}
+		_ = reportLower // used indirectly via strings.ToLower(report) in loop
+	}
 
 	if toStdout {
 		fmt.Print(report)

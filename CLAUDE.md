@@ -140,9 +140,27 @@ File: `~/.selectivemirror/config.yaml`
 
 - **mirrors**: List of watched directories with rclone remote destinations
 - **global_excludes**: Patterns applied to all projects (.gitignore syntax)
-- **delete_policy**: `ignore` (default), `mirror`, or `quarantine`
+- **delete_policy**: `ignore`, `delete` (default), or `quarantine`
 - **quarantine_days**: Days to keep quarantined files (default 30)
+- **alert_webhook_url**: HTTP endpoint for incident-based anomaly alerts (empty = disabled)
+- **alert_min_severity**: Minimum severity to alert: info, warning, error (default), critical
 - **Per-project .syncignore**: Place a `.syncignore` file in the project root
+
+### Delete policy
+
+Controls what happens on the remote when a file is deleted locally.
+
+| Policy | Batch verb | On delete event | Use case |
+|--------|-----------|-----------------|----------|
+| `delete` (default) | `rclone sync` | `rclone deletefile` | Mirror deletions to remote |
+| `ignore` | `rclone copy` | no action | Preserve remote as archive |
+| `quarantine` | `rclone copy` | `rclone moveto .quarantine/` | Soft-delete with recovery window |
+
+**Precedence**: per-mirror `delete_policy` > global `delete_policy` > default (`delete`). If neither mirror nor global specifies a policy, the default is `delete`.
+
+### report-bug output
+
+`smirror report-bug --stdout` generates a diagnostic bundle containing: version, platform, rclone info, config structure (mirror names, delete policy, workers), state DB file counts, and last 30 log lines. All paths are sanitized (home directory replaced with `~`). Remote paths are fully redacted (`remote:<REDACTED>`). Review the output before submitting.
 
 See `config.example.yaml` for full annotated example.
 
