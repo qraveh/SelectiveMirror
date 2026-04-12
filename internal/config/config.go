@@ -157,6 +157,8 @@ func (g Global) Workers() int {
 // Handles the "mirror" → "delete" deprecation.
 func parseDeletePolicy(s string) DeletePolicy {
 	switch DeletePolicy(s) {
+	case DeleteIgnore:
+		return DeleteIgnore
 	case DeleteDelete:
 		return DeleteDelete
 	case DeleteMirror:
@@ -165,7 +167,7 @@ func parseDeletePolicy(s string) DeletePolicy {
 	case DeleteQuarantine:
 		return DeleteQuarantine
 	default:
-		return DeleteDelete
+		return DeleteDelete // no policy or unrecognized → delete (mirror the deletion)
 	}
 }
 

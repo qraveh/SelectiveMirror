@@ -198,12 +198,12 @@ func TestDeletePolicy(t *testing.T) {
 		input    string
 		expected DeletePolicy
 	}{
-		{"", DeleteIgnore},
+		{"", DeleteDelete},         // empty = default = delete
 		{"ignore", DeleteIgnore},
 		{"delete", DeleteDelete},
-		{"mirror", DeleteDelete}, // deprecated alias — returns DeleteDelete with warning
+		{"mirror", DeleteDelete},   // deprecated alias
 		{"quarantine", DeleteQuarantine},
-		{"invalid", DeleteIgnore},
+		{"invalid", DeleteDelete},  // unrecognized = default = delete
 	}
 
 	for _, tt := range tests {
@@ -255,9 +255,9 @@ func TestProjectDeletePolicy_MirrorDeprecation(t *testing.T) {
 func TestProjectDeletePolicy_InvalidFallsBack(t *testing.T) {
 	g := &Global{DeletePolicyStr: "quarantine"}
 	p := Project{DeletePolicyStr: "bogus"}
-	// Invalid per-mirror value falls to parseDeletePolicy default (ignore), not global
-	if got := p.DeletePolicy(g); got != DeleteIgnore {
-		t.Errorf("expected invalid → 'ignore', got %q", got)
+	// Invalid per-mirror value falls to parseDeletePolicy default (delete), not global
+	if got := p.DeletePolicy(g); got != DeleteDelete {
+		t.Errorf("expected invalid → 'delete', got %q", got)
 	}
 }
 
@@ -440,19 +440,19 @@ func TestExpandHome_Empty(t *testing.T) {
 // DeletePolicy parsing
 func TestDeletePolicy_InvalidString(t *testing.T) {
 	g := Global{DeletePolicyStr: "garbage"}
-	if g.DeletePolicy() != DeleteIgnore {
-		t.Errorf("invalid delete policy should default to 'ignore', got %q", g.DeletePolicy())
+	if g.DeletePolicy() != DeleteDelete {
+		t.Errorf("invalid delete policy should default to 'delete', got %q", g.DeletePolicy())
 	}
 }
 
 func TestDeletePolicy_CaseSensitive(t *testing.T) {
 	// "Mirror" (capitalized) — does the parser handle it?
 	g := Global{DeletePolicyStr: "Mirror"}
-	if g.DeletePolicy() != DeleteIgnore {
-		// It's case-sensitive: "Mirror" != "mirror" → falls through to default
-		t.Log("DeletePolicy is case-sensitive: 'Mirror' → default 'ignore'")
+	if g.DeletePolicy() != DeleteDelete {
+		// It's case-sensitive: "Mirror" != "mirror" → falls through to default (delete)
+		t.Log("DeletePolicy is case-sensitive: 'Mirror' → default 'delete'")
 	} else {
-		t.Log("NOTE: DeletePolicy is case-sensitive. 'Mirror' treated as unknown → ignore.")
+		t.Log("NOTE: DeletePolicy is case-sensitive. 'Mirror' treated as unknown → delete.")
 	}
 }
 
