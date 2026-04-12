@@ -67,8 +67,17 @@ Examples:
 		os.Exit(ExitConfigError)
 	}
 
-	// Load config (may fail if it doesn't exist — we'll handle that)
+	// SM-104: Use LoadRaw first to read default_remote even when config has no
+	// mirrors yet (validation would reject it). Fall back to full Load for the
+	// rest of addmirror logic.
 	cfg, cfgErr := config.Load(configPath)
+	if cfgErr != nil {
+		// Config exists but invalid (e.g., no mirrors yet) — try raw parse for default_remote
+		if rawCfg, rawErr := config.LoadRaw(configPath); rawErr == nil {
+			cfg = rawCfg
+			cfgErr = nil // config exists and parsed, just didn't pass validation
+		}
+	}
 
 	// Determine base remote
 	baseRemote := destRemote

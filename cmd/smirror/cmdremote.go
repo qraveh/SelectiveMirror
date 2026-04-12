@@ -23,7 +23,9 @@ func cmdRemote(configPath string, args []string) {
 
 // cmdRemoteShow displays the current default remote and lists remotes in use.
 func cmdRemoteShow(configPath string) {
-	cfg, err := config.Load(configPath)
+	// SM-104: Use LoadRaw (no validation) because this command is called before
+	// mirrors exist. LoadRaw only needs parseable YAML, not a valid config.
+	cfg, err := config.LoadRaw(configPath)
 	if err != nil {
 		// Config may not exist yet — that's OK for this command
 		fmt.Printf("Default remote: (not configured)\n")
@@ -151,8 +153,8 @@ func cmdRemoteSet(configPath string, remotePath string) {
 		fmt.Println(" OK")
 	}
 
-	// Write to config
-	if err := config.SetField(configPath, "default_remote", fmt.Sprintf("%q", remotePath)); err != nil {
+	// Write to config (YAML single-quoted to preserve backslashes literally)
+	if err := config.SetField(configPath, "default_remote", fmt.Sprintf("'%s'", remotePath)); err != nil {
 		fmt.Fprintf(os.Stderr, "Error updating config: %v\n", err)
 		os.Exit(ExitError)
 	}

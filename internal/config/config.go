@@ -238,6 +238,25 @@ func DefaultConfigPath() string {
 }
 
 // Load reads and parses a YAML config file, applying defaults.
+// LoadRaw parses the config YAML without running validation. Use for commands
+// that need config values before the config is fully set up (e.g., `smirror remote`
+// reads default_remote before any mirrors are defined).
+func LoadRaw(path string) (*Global, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolving config path: %w", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading config %s: %w", path, err)
+	}
+	cfg := &Global{}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
 func Load(path string) (*Global, error) {
 	// Resolve to absolute path so configDir is always absolute,
 	// even if the user passed a relative --config path.
