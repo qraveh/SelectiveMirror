@@ -902,10 +902,10 @@ func TestSyncFullProject_UsesGlobalDeletePolicy(t *testing.T) {
 	}
 }
 
-func TestSyncFullProject_DefaultIgnorePolicy(t *testing.T) {
+func TestSyncFullProject_DefaultDeletePolicy(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	// No delete policy set → defaults to "ignore" → uses "copy" verb
+	// No delete policy set → defaults to "delete" → uses "sync" verb
 
 	var verb string
 	runner := func(ctx context.Context, args []string) int {
@@ -918,8 +918,8 @@ func TestSyncFullProject_DefaultIgnorePolicy(t *testing.T) {
 
 	e.syncFullProject(context.Background(), proj)
 
-	if verb != "copy" {
-		t.Errorf("expected 'copy' verb for default ignore policy, got %q", verb)
+	if verb != "sync" {
+		t.Errorf("expected 'sync' verb for default delete policy, got %q", verb)
 	}
 }
 
@@ -927,7 +927,7 @@ func TestSyncFullProject_DefaultIgnorePolicy(t *testing.T) {
 func TestDeleteRemoteDir_IgnorePolicy_NoRcloneCalls(t *testing.T) {
 	proj := testProject(t)
 	cfg := testConfig(proj)
-	// Default = ignore policy
+	cfg.DeletePolicyStr = "ignore" // explicit ignore — default is now "delete"
 
 	var rcloneCalls int32
 	runner := func(ctx context.Context, args []string) int {
@@ -1658,8 +1658,9 @@ func TestReconciliation_ProcessTask_RoutesToFullSync(t *testing.T) {
 	if len(capturedArgs) == 0 {
 		t.Fatal("rclone was not called via processTask for full-project sync")
 	}
-	if capturedArgs[0] != "copy" {
-		t.Errorf("expected 'copy' verb for full-project sync, got %q", capturedArgs[0])
+	// Default delete policy is now "delete" → verb is "sync" (not "copy")
+	if capturedArgs[0] != "sync" {
+		t.Errorf("expected 'sync' verb for full-project sync (default delete policy), got %q", capturedArgs[0])
 	}
 }
 

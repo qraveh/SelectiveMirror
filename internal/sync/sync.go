@@ -199,7 +199,7 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 		e.deleteRemoteFile(ctx, task.Project, task.RelPath, task.ForceDelete)
 	default:
 		if task.RelPath == "" {
-			e.syncFullProject(ctx, task.Project)
+			_ = e.syncFullProject(ctx, task.Project) // daemon: errors handled via circuit breaker
 		} else {
 			e.syncSingleFile(ctx, task.Project, task.RelPath)
 		}
@@ -496,7 +496,12 @@ func (e *Engine) syncMtime(ctx context.Context, proj config.Project, relPath str
 	}
 }
 
-func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
+// SyncFullProject runs a full batch sync for a project. Returns an error if rclone fails.
+func (e *Engine) SyncFullProject(ctx context.Context, proj config.Project) error {
+	return e.syncFullProject(ctx, proj)
+}
+
+func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error {
 	e.log.Info("full project sync", "project", proj.Name)
 	start := time.Now()
 
@@ -504,7 +509,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 	fe, ok := e.filters[proj.Name]
 	if !ok {
 		e.log.Error("no filter engine for project", "project", proj.Name)
-		return
+		return fmt.Errorf("no filter engine for project %q", proj.Name)
 	}
 
 	// Capture filter generation before generating the rclone filter file.
@@ -516,7 +521,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 	filterFile, err := fe.GenerateRcloneFilterFile()
 	if err != nil {
 		e.log.Error("filter file generation failed", "project", proj.Name, "error", err)
-		return
+		return fmt.Errorf("filter file generation: %w", err)
 	}
 	defer os.Remove(filterFile)
 
@@ -525,7 +530,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 	// is already queued by reloadFilter with the updated rules.
 	if fe.Generation() != genBefore {
 		e.log.Info("filter changed during full sync setup, skipping stale sync", "project", proj.Name)
-		return
+		return nil // not a failure — a fresh sync is already queued
 	}
 
 	// Use "sync" when delete_policy=mirror — makes remote match local exactly,
@@ -536,6 +541,10 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 		verb = "sync"
 	}
 	args := []string{verb, proj.LocalPath, proj.Remote, "--checksum", "--filter-from", filterFile}
+	// SM-108: Enforce max_file_size_mb during batch sync (not just per-file sync).
+	if maxSize := proj.MaxFileSize(); maxSize > 0 {
+		args = append(args, "--max-size", fmt.Sprintf("%d", maxSize))
+	}
 	args = append(args, e.commonFlags(proj)...)
 
 	exitCode := e.runRclone(ctx, args)
@@ -548,21 +557,21 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) {
 		e.Queue.RecordSuccess(proj.Name)
 
 		// SM-083: Backfill state DB for files synced by batch reconciliation.
-		// rclone copy doesn't report per-file results, so we walk the local tree
-		// and record state for any included file that has no DB entry.
 		e.backfillStateAfterBatchSync(ctx, proj)
-	} else {
-		e.log.Warn("full sync failed", "project", proj.Name, "exit", exitCode, "ms", elapsed.Milliseconds())
-		e.state.LogAction(proj.Name, "", "full_sync_error", fmt.Sprintf("rclone exit %d, %dms", exitCode, elapsed.Milliseconds()), elapsed.Milliseconds())
-		if e.metrics != nil {
-			e.metrics.RecordError(proj.Name, fmt.Sprintf("full sync rclone exit %d", exitCode))
-		}
-		if e.Queue.RecordFailure(proj.Name) {
-			e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, "",
-				fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold),
-				fmt.Sprintf("last rclone exit code: %d (full sync)", exitCode))
-		}
+		return nil
 	}
+
+	e.log.Warn("full sync failed", "project", proj.Name, "exit", exitCode, "ms", elapsed.Milliseconds())
+	e.state.LogAction(proj.Name, "", "full_sync_error", fmt.Sprintf("rclone exit %d, %dms", exitCode, elapsed.Milliseconds()), elapsed.Milliseconds())
+	if e.metrics != nil {
+		e.metrics.RecordError(proj.Name, fmt.Sprintf("full sync rclone exit %d", exitCode))
+	}
+	if e.Queue.RecordFailure(proj.Name) {
+		e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, "",
+			fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold),
+			fmt.Sprintf("last rclone exit code: %d (full sync)", exitCode))
+	}
+	return fmt.Errorf("rclone exit %d", exitCode)
 }
 
 // deleteRemoteFile handles file deletion on remote based on delete policy.

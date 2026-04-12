@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.18-dev"
+var version = "0.8.19-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -597,15 +597,14 @@ func cmdSyncNow(configPath string, args []string) {
 		projects = []config.Project{*proj}
 	}
 
+	// SM-109: Use SyncFullProject directly (not queue) so errors propagate.
+	syncFailed := false
 	for _, proj := range projects {
-		syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
+		if err := syncEngine.SyncFullProject(ctx, proj); err != nil {
+			fmt.Fprintf(os.Stderr, "Sync failed for %s: %v\n", proj.Name, err)
+			syncFailed = true
+		}
 	}
-
-	// Process all queued tasks synchronously: start workers, wait for them
-	// to finish processing everything. We close the channel after queueing
-	// so workers exit once all tasks are drained.
-	syncEngine.Queue.Close()
-	syncEngine.Run(ctx) // blocks until all workers complete
 
 	// Clean up ghost files (LEAKs + ORPHANs) on remote
 	totalCleaned := 0
@@ -619,6 +618,11 @@ func cmdSyncNow(configPath string, args []string) {
 			fmt.Printf("Cleaned %d ghost file(s) from %s\n", cleaned, proj.Name)
 			totalCleaned += cleaned
 		}
+	}
+
+	if syncFailed {
+		fmt.Fprintln(os.Stderr, "Sync completed with errors.")
+		os.Exit(ExitError)
 	}
 	if totalCleaned > 0 {
 		fmt.Printf("Sync complete (%d ghost files cleaned)\n", totalCleaned)

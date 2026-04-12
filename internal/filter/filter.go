@@ -27,6 +27,9 @@ type Engine struct {
 	// Generation counter: incremented on each successful Reload that changes rules.
 	// Used by sync engine to detect stale filter files (SM-044).
 	generation uint64
+
+	// SM-107: Patterns that failed compilation. Skipped in GenerateRcloneFilterFile().
+	badPatterns []string
 }
 
 // New creates a filter engine with global excludes and an optional project .syncignore.
@@ -56,10 +59,13 @@ func (e *Engine) rebuildMerged() {
 	if len(all) > 0 {
 		m := &gitignore.Matcher{} // bare matcher — do NOT use New() which auto-loads .gitignore
 		m.AddPatterns([]byte(strings.Join(all, "\n")), "")
-		// SM-080: Check for pattern parse errors that would otherwise be silently lost.
+		// SM-080/SM-107: Check for pattern parse errors. Record bad patterns
+		// so they can be skipped in GenerateRcloneFilterFile().
+		e.badPatterns = nil
 		if errs := m.Errors(); len(errs) > 0 {
-			for _, e := range errs {
-				slog.Warn("pattern parse error in filter rules", "error", e)
+			for _, pe := range errs {
+				slog.Warn("pattern parse error in filter rules", "error", pe)
+				e.badPatterns = append(e.badPatterns, pe.Pattern)
 			}
 		}
 		e.merged = m
@@ -262,16 +268,26 @@ func (e *Engine) GenerateRcloneFilterFile() (string, error) {
 		}
 	}
 
+	// SM-107: Build set of bad patterns to skip in rclone filter output.
+	badSet := make(map[string]bool, len(e.badPatterns))
+	for _, bp := range e.badPatterns {
+		badSet[bp] = true
+	}
+
 	var combined []string
 	combined = append(combined, otherGlobalRules...)
 	combined = append(combined, e.projectRules...)
 
 	var lines []string
 	for _, d := range globalDirExcludes {
-		lines = append(lines, toRcloneFilter(d))
+		if !badSet[d] {
+			lines = append(lines, toRcloneFilter(d))
+		}
 	}
 	for i := len(combined) - 1; i >= 0; i-- {
-		lines = append(lines, toRcloneFilter(combined[i]))
+		if !badSet[combined[i]] {
+			lines = append(lines, toRcloneFilter(combined[i]))
+		}
 	}
 	e.mu.RUnlock()
 
