@@ -45,6 +45,23 @@ func New(globalExcludes []string, syncIgnorePath string) (*Engine, error) {
 	}
 
 	e.rebuildMerged()
+
+	// SM-110: On initial load, strip bad patterns and rebuild so the filter
+	// engine starts with only valid rules. (On Reload, we roll back instead.)
+	if len(e.badPatterns) > 0 {
+		badSet := make(map[string]bool)
+		for _, bp := range e.badPatterns {
+			badSet[bp] = true
+		}
+		var clean []string
+		for _, r := range e.projectRules {
+			if !badSet[r] {
+				clean = append(clean, r)
+			}
+		}
+		e.projectRules = clean
+		e.rebuildMerged()
+	}
 	return e, nil
 }
 
@@ -146,6 +163,18 @@ func (e *Engine) Reload() (changed bool, err error) {
 		return false, nil
 	}
 	e.rebuildMerged()
+
+	// SM-110: If any patterns failed to compile, the merged matcher may be
+	// incomplete (e.g., [abc is invalid → old exclusion rules lost → fail-open).
+	// Roll back to last-known-good state to prevent excluded files from syncing.
+	if len(e.badPatterns) > 0 {
+		slog.Warn("malformed patterns in .syncignore, keeping previous valid rules",
+			"path", e.syncIgnorePath, "bad_patterns", e.badPatterns)
+		e.projectRules = prevProjectRules
+		e.merged = prevMerged
+		e.badPatterns = nil
+		return false, nil
+	}
 
 	// Detect if rules actually changed and log the diff (SM-070)
 	changed = false

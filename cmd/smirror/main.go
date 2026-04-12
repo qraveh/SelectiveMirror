@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.19-dev"
+var version = "0.8.20-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -659,9 +659,12 @@ func cmdDryRun(configPath string, args []string) {
 		projects = []config.Project{*proj}
 	}
 
+	// SM-112/115: Track failures and exit non-zero if any mirror fails.
+	hadError := false
 	for _, proj := range projects {
 		if err := syncEngine.DryRun(ctx, proj); err != nil {
 			fmt.Fprintf(os.Stderr, "Dry run error for %s: %v\n", proj.Name, err)
+			hadError = true
 		}
 		fmt.Println()
 	}
@@ -672,7 +675,12 @@ func cmdDryRun(configPath string, args []string) {
 		fmt.Printf("\n%s:\n", proj.Name)
 		if _, err := syncEngine.DryRunCleanup(ctx, proj); err != nil {
 			fmt.Fprintf(os.Stderr, "Ghost scan error for %s: %v\n", proj.Name, err)
+			hadError = true
 		}
+	}
+
+	if hadError {
+		os.Exit(ExitError)
 	}
 }
 
@@ -1197,7 +1205,9 @@ func cmdTestMirrors(configPath string, args []string) {
 		}
 	}
 
-	if totalDrift > 0 {
+	// SM-116: Only suggest sync-now when drift exists without remote failures.
+	// When the remote is unreachable, sync-now can't help.
+	if totalDrift > 0 && failed == 0 {
 		fmt.Println("Hint: 'smirror sync-now' may resolve drift.")
 	}
 
@@ -2143,6 +2153,9 @@ func scanForGhosts(ctx context.Context, cfg *config.Global, st *state.Store, fil
 		remoteFiles, err := msync.ListRemote(cfg, proj)
 		if err != nil {
 			slog.Warn("ghost scan: failed to list remote", "mirror", proj.Name, "error", err)
+			// SM-114: Record failure instead of silently reporting "clean"
+			st.SetMeta("ghost_scan_result", fmt.Sprintf("failed: %s: %v", proj.Name, err))
+			st.SetMeta("ghost_scan_time", time.Now().UTC().Format(time.RFC3339))
 			continue
 		}
 
