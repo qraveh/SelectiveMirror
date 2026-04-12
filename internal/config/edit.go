@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -14,6 +15,13 @@ import (
 func SetField(configPath, key, value string) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// Create config directory and file with just this field
+			if dir := filepath.Dir(configPath); dir != "" {
+				_ = os.MkdirAll(dir, 0755)
+			}
+			return os.WriteFile(configPath, []byte(key+": "+value+"\n"), 0600)
+		}
 		return err
 	}
 

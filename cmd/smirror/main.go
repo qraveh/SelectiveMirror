@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.15-dev"
+var version = "0.8.16-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -1751,27 +1751,33 @@ func cmdReportBug(configPath string, args []string) {
 		}
 	}
 
-	// SM-103: Sanitize all paths in the report — replace home directory with ~.
-	// Applied to the full report so error messages, log lines, config paths,
-	// and rclone paths are all consistently redacted.
-	// Case-insensitive replacement needed because Windows paths are case-insensitive
-	// (config may use C:\users\... while os.UserHomeDir returns C:\Users\...).
+	// SM-103: Sanitize all paths in the report.
+	// Replace home directory with ~ and config directory with <configdir>.
+	// Case-insensitive because Windows paths are case-insensitive.
 	report := b.String()
+	sanitizePaths := []struct{ pattern, replacement string }{}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		homeSlash := filepath.ToSlash(home)
-		reportLower := strings.ToLower(report)
-		// Replace all case-insensitive occurrences (both slash styles)
-		for _, pattern := range []string{home, homeSlash} {
-			patLower := strings.ToLower(pattern)
-			for {
-				idx := strings.Index(strings.ToLower(report), patLower)
-				if idx < 0 {
-					break
-				}
-				report = report[:idx] + "~" + report[idx+len(pattern):]
+		sanitizePaths = append(sanitizePaths,
+			struct{ pattern, replacement string }{home, "~"},
+			struct{ pattern, replacement string }{filepath.ToSlash(home), "~"},
+		)
+	}
+	// Also sanitize config directory (covers sandbox paths not under home)
+	if configDir := filepath.Dir(configPath); configDir != "" && configDir != "." {
+		sanitizePaths = append(sanitizePaths,
+			struct{ pattern, replacement string }{configDir, "<configdir>"},
+			struct{ pattern, replacement string }{filepath.ToSlash(configDir), "<configdir>"},
+		)
+	}
+	for _, sp := range sanitizePaths {
+		patLower := strings.ToLower(sp.pattern)
+		for {
+			idx := strings.Index(strings.ToLower(report), patLower)
+			if idx < 0 {
+				break
 			}
+			report = report[:idx] + sp.replacement + report[idx+len(sp.pattern):]
 		}
-		_ = reportLower // used indirectly via strings.ToLower(report) in loop
 	}
 
 	if toStdout {
