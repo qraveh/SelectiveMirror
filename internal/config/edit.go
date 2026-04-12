@@ -8,6 +8,16 @@ import (
 	"strings"
 )
 
+// stripBOM removes a UTF-8 BOM prefix if present.
+// PowerShell's Set-Content -Encoding UTF8 writes a BOM that breaks
+// string matching on the first line of YAML files.
+func stripBOM(s string) string {
+	if strings.HasPrefix(s, "\xEF\xBB\xBF") {
+		return s[3:]
+	}
+	return s
+}
+
 // SetField updates or adds a top-level scalar field in the config YAML file.
 // Preserves comments and formatting by operating on raw text lines.
 // If the key already exists, its value is replaced in-place.
@@ -16,7 +26,6 @@ func SetField(configPath, key, value string) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Create config directory and file with just this field
 			if dir := filepath.Dir(configPath); dir != "" {
 				_ = os.MkdirAll(dir, 0755)
 			}
@@ -25,7 +34,7 @@ func SetField(configPath, key, value string) error {
 		return err
 	}
 
-	lines := strings.Split(string(data), "\n")
+	lines := strings.Split(stripBOM(string(data)), "\n")
 	prefix := key + ":"
 	found := false
 	for i, line := range lines {
@@ -54,7 +63,7 @@ func AddMirror(configPath string, p Project) error {
 		return err
 	}
 
-	lines := strings.Split(string(data), "\n")
+	lines := strings.Split(stripBOM(string(data)), "\n")
 
 	// Check for duplicate name
 	namePattern := regexp.MustCompile(`^\s+-\s+name:\s*` + regexp.QuoteMeta(p.Name) + `\s*$`)
@@ -132,7 +141,7 @@ func RemoveMirror(configPath, name string) error {
 		return err
 	}
 
-	lines := strings.Split(string(data), "\n")
+	lines := strings.Split(stripBOM(string(data)), "\n")
 
 	// Find the mirror's "  - name: <name>" line
 	startIdx := -1
