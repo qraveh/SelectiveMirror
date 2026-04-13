@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.28-dev"
+var version = "0.8.31-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -150,6 +150,22 @@ func cliMain() {
 	case "unmirror", "removemirror", "remove-mirror", "remove":
 		cmdUnmirror(configPath, cmdArgs)
 	case "clean":
+		if subcommandHelp(cmdArgs, `Usage: smirror clean [--yes]
+
+Stop the service, uninstall it, and remove all user data (config,
+state DB, logs). Equivalent to: smirror service stop uninstall --clean
+
+Flags:
+  --yes    Skip confirmation prompts`) {
+			break
+		}
+		// Validate flags before routing to service.
+		for _, a := range cmdArgs {
+			if strings.HasPrefix(a, "-") && a != "--yes" && a != "-y" {
+				fmt.Fprintf(os.Stderr, "unknown flag: %s\nRun 'smirror clean --help' for usage.\n", a)
+				os.Exit(ExitError)
+			}
+		}
 		// Shortcut: smirror clean = smirror service stop uninstall --clean [--yes]
 		cleanArgs := []string{"stop", "uninstall", "--clean"}
 		cleanArgs = append(cleanArgs, cmdArgs...) // pass through --yes if given
@@ -199,6 +215,32 @@ Options:
   --config PATH      Path to config file (default: ~/.selectivemirror/config.yaml)
 
 `, version)
+}
+
+// subcommandHelp checks if args contain --help or -h and prints the given
+// help text if so. Returns true if help was shown (caller should return).
+// Must be called before any config loading, state DB access, or lock
+// acquisition to avoid side effects (SM-128).
+func subcommandHelp(args []string, helpText string) bool {
+	for _, a := range args {
+		if a == "--help" || a == "-h" {
+			fmt.Println(helpText)
+			return true
+		}
+	}
+	return false
+}
+
+// rejectUnknownFlags checks if any positional args look like flags (start with -)
+// and exits with an error if so. Used by commands that take only positional
+// arguments (mirror names, paths) and should not silently swallow unknown flags.
+func rejectUnknownFlags(command string, args []string) {
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			fmt.Fprintf(os.Stderr, "unknown flag: %s\nRun 'smirror %s --help' for usage.\n", a, command)
+			os.Exit(ExitError)
+		}
+	}
 }
 
 func loadConfig(path string) *config.Global {
@@ -327,6 +369,18 @@ func preflightPath(proj config.Project) []string {
 }
 
 func cmdStart(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror start [--config PATH]
+
+Start the file watcher in the foreground. Watches all configured mirrors
+for file changes and syncs them to their remote destinations.
+
+A single-instance lock prevents duplicate instances. Runs an initial
+full sync on startup, then switches to incremental (on-change) mode.
+
+Press Ctrl+C to stop.`) {
+		return
+	}
+
 	// Non-blocking update check (rate-limited to once/24h)
 	go checkForUpdateOnStartup(configPath)
 
@@ -555,6 +609,23 @@ func cmdStart(configPath string, args []string) {
 }
 
 func cmdSyncNow(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror sync-now [mirror]
+
+Run an immediate full sync for all mirrors (or a specific mirror).
+Also performs ghost cleanup (removes orphaned remote files).
+
+If the service is running, signals it to sync instead of starting
+a second instance.
+
+Aliases: syncnow
+
+Examples:
+  smirror sync-now              Sync all mirrors
+  smirror sync-now MyProject    Sync only the "MyProject" mirror`) {
+		return
+	}
+	rejectUnknownFlags("sync-now", args)
+
 	cfg := loadConfig(configPath)
 	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
@@ -639,6 +710,18 @@ func cmdSyncNow(configPath string, args []string) {
 }
 
 func cmdDryRun(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror dry-run [mirror]
+
+Show what would be synced without actually transferring files.
+Also shows a ghost cleanup preview (orphaned remote files).
+
+Examples:
+  smirror dry-run              Preview all mirrors
+  smirror dry-run MyProject    Preview only "MyProject"`) {
+		return
+	}
+	rejectUnknownFlags("dry-run", args)
+
 	cfg := loadConfig(configPath)
 	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
@@ -692,6 +775,21 @@ func cmdDryRun(configPath string, args []string) {
 }
 
 func cmdStatus(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror status [mirror]
+
+Show sync status, metrics, and instance state.
+
+Displays: service state, live/last-known metrics (files synced, bytes
+uploaded, errors, latency), per-mirror sync state, ghost scan results,
+and recent anomalies.
+
+Examples:
+  smirror status              Show full status
+  smirror status MyProject    Show status for one mirror only`) {
+		return
+	}
+	rejectUnknownFlags("status", args)
+
 	// Non-blocking update check (rate-limited to once/24h)
 	go checkForUpdateOnStartup(configPath)
 
@@ -1030,6 +1128,22 @@ func countFilesInDir(dir string) int {
 // Optional argument: mirror name to test only that mirror.
 // Aliases: doctor, verify (kept for backward compatibility).
 func cmdTestMirrors(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror test-mirrors [mirror]
+
+Run diagnostics and verify sync state for all mirrors (or one mirror).
+Checks: config validity, rclone connectivity, remote reachability,
+local path accessibility, filter compilation, and file integrity.
+
+Aliases: doctor, verify
+
+Examples:
+  smirror test-mirrors              Test all mirrors
+  smirror test-mirrors MyProject    Test one mirror
+  smirror doctor                    Same as test-mirrors`) {
+		return
+	}
+	rejectUnknownFlags("test-mirrors", args)
+
 	fmt.Println()
 	passed := 0
 	failed := 0
@@ -1281,6 +1395,18 @@ func cmdTestMirrors(configPath string, args []string) {
 }
 
 func cmdListFilters(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror list-filters [mirror]
+
+Show effective filter rules for all mirrors (or one mirror).
+Displays global excludes and per-project .syncignore rules.
+
+Examples:
+  smirror list-filters              Show all mirrors' filters
+  smirror list-filters MyProject    Show one mirror's filters`) {
+		return
+	}
+	rejectUnknownFlags("list-filters", args)
+
 	cfg := loadConfig(configPath)
 	filters := buildFilters(cfg)
 
@@ -1310,6 +1436,19 @@ func cmdListFilters(configPath string, args []string) {
 
 // cmdExplain shows why a specific file is included or excluded and its sync state.
 func cmdExplain(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror explain <mirror> <relative-path>
+
+Explain why a file is included or excluded from sync.
+Shows: filter status, matched rule, remote path, local file info
+(size, modified, MD5), max_file_size_mb check, and sync state.
+
+Examples:
+  smirror explain Orch CLAUDE.md
+  smirror explain MyProject src/main.go`) {
+		return
+	}
+	rejectUnknownFlags("explain", args)
+
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: smirror explain <mirror> <relative-path>")
 		fmt.Fprintln(os.Stderr, "Example: smirror explain Orch CLAUDE.md")
@@ -1937,7 +2076,7 @@ sanitized and remote paths are redacted.`)
 		}
 
 		// Pre-fill title, environment, and logs as separate form fields
-		title := fmt.Sprintf("[Bug]: smirror %s on %s/%s", version, runtime.GOOS, runtime.GOARCH)
+		title := fmt.Sprintf("smirror %s (%s/%s): ", version, runtime.GOOS, runtime.GOARCH)
 		baseURL := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
 		issueURL := baseURL +
 			"&title=" + url.QueryEscape(title) +
@@ -1985,6 +2124,20 @@ sanitized and remote paths are redacted.`)
 }
 
 func cmdStats(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror project-stats [mirror]
+
+Show file counts and line counts per mirror, grouped by file type.
+Counts only syncable files (excluded files are not counted).
+
+Alias: stats
+
+Examples:
+  smirror project-stats              Stats for all mirrors
+  smirror project-stats MyProject    Stats for one mirror`) {
+		return
+	}
+	rejectUnknownFlags("project-stats", args)
+
 	cfg := loadConfig(configPath)
 	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: logging setup: %v\n", err)
@@ -2865,6 +3018,27 @@ func updateConfigKey(configPath, key, value string) error {
 }
 
 func cmdService(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror service <action...> [flags]
+
+Windows Service management (requires "run as administrator").
+
+Actions:
+  install [start]                Install service (and optionally start it)
+  start                          Start the service
+  stop [uninstall [--clean]]     Stop the service (and optionally uninstall it)
+  uninstall [--clean] [--yes]    Uninstall the service
+
+Flags:
+  --clean    Also remove user data (config, state DB, logs)
+  --yes      Skip confirmation prompts
+
+Compound commands:
+  smirror service install start            Install and start in one step
+  smirror service stop uninstall           Stop and uninstall in one step
+  smirror service stop uninstall --clean   Stop, uninstall, and remove all data`) {
+		return
+	}
+
 	if len(args) == 0 {
 		printServiceUsage()
 		os.Exit(ExitConfigError)

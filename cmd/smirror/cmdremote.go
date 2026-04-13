@@ -14,6 +14,21 @@ import (
 
 // cmdRemote handles `smirror remote [remote_path]`.
 func cmdRemote(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror remote [remote_path]
+
+Show or set the default rclone remote for new mirrors.
+
+With no arguments, shows the current default remote.
+With an argument, sets the default remote for future addmirror commands.
+
+Examples:
+  smirror remote                           Show current default remote
+  smirror remote gdrive:AI-hub             Set default remote
+  smirror remote C:\MyDrive\backups        Set a local path as default`) {
+		return
+	}
+	rejectUnknownFlags("remote", args)
+
 	if len(args) == 0 {
 		cmdRemoteShow(configPath)
 		return

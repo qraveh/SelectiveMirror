@@ -18,6 +18,26 @@ import (
 
 // cmdAddMirror handles `smirror addmirror <path> [<path2> ...] [-dest <remote>]`.
 func cmdAddMirror(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror addmirror <local_path> [<local_path2> ...] [flags]
+
+Add one or more directories as mirrors.
+
+Aliases: add-mirror, add
+
+Flags:
+  -dest <remote_path>    Override the default remote (e.g., "gdrive:backup/MyProject")
+                         Also accepts local paths (e.g., "C:\MyDrive\AI-hub")
+  --backup, -b           If destination has content, rename it to .bak (non-interactive)
+  --delete, -d           If destination has content, set delete_policy: delete (non-interactive)
+  --initial-sync         Run initial sync immediately after adding the mirror
+
+Examples:
+  smirror addmirror C:\Projects\MyApp
+  smirror addmirror C:\Work -dest C:\MyDrive\backups --backup --initial-sync
+  smirror addmirror C:\Docs -dest s3:my-bucket/mirrors --delete`) {
+		return
+	}
+
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, `Usage: smirror addmirror <local_path> [<local_path2> ...] [flags]
 

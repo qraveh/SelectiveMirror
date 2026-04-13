@@ -12,6 +12,21 @@ import (
 
 // cmdUnmirror handles `smirror unmirror <name_or_path>`.
 func cmdUnmirror(configPath string, args []string) {
+	if subcommandHelp(args, `Usage: smirror unmirror <mirror_name | local_path | remote_path>
+
+Remove a mirror from config.yaml.
+The local directory and remote files are NOT deleted.
+
+Aliases: removemirror, remove-mirror, remove
+
+Examples:
+  smirror unmirror MyProject
+  smirror unmirror C:\Projects\MyProject
+  smirror unmirror gdrive:backup/MyProject`) {
+		return
+	}
+	rejectUnknownFlags("unmirror", args)
+
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, `Usage: smirror unmirror <mirror_name | local_path | remote_path>
 
