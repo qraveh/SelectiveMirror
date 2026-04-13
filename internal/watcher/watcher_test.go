@@ -1372,6 +1372,9 @@ func TestHandleEvent_SyncIgnoreChange_ReloadsFilter(t *testing.T) {
 	os.WriteFile(syncignore, []byte("*.tmp\n*.bak\n"), 0644)
 	m.handleEvent(fsnotify.Event{Name: syncignore, Op: fsnotify.Write})
 
+	// SM-110: Filter reloads are debounced (200ms). Wait for the timer to fire.
+	time.Sleep(350 * time.Millisecond)
+
 	// Should have enqueued a full project sync (from reloadFilter)
 	if queue.Len() != 1 {
 		t.Errorf("syncignore change should trigger full sync, got %d tasks", queue.Len())

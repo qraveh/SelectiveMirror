@@ -40,7 +40,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-var version = "0.8.21-dev"
+var version = "0.8.28-dev"
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -403,6 +403,11 @@ func cmdStart(configPath string, args []string) {
 	st.SetMeta("instance_mode", "foreground")
 	st.SetMeta("instance_version", version)
 	st.SetMeta("instance_user", currentUser())
+	st.SetMeta("instance_config_fingerprint", cfg.MirrorFingerprint()) // SM-122
+	// SM-122: Store active mirror config so status can show what's actually running.
+	if mirrorsJSON, err := json.Marshal(cfg.Projects); err == nil {
+		st.SetMeta("instance_mirrors", string(mirrorsJSON))
+	}
 	st.SetMeta("last_health_error", "")
 	defer func() {
 		st.SetMeta("instance_pid", "")
@@ -410,6 +415,8 @@ func cmdStart(configPath string, args []string) {
 		st.SetMeta("instance_started", "")
 		st.SetMeta("instance_mode", "")
 		st.SetMeta("instance_user", "")
+		st.SetMeta("instance_config_fingerprint", "")
+		st.SetMeta("instance_mirrors", "")
 	}()
 
 	// Build filter engines
@@ -721,12 +728,19 @@ func cmdStatus(configPath string, args []string) {
 	fmt.Printf("Config: %s\n", configPath)
 	fmt.Printf("State DB: %s\n\n", cfg.StateDB)
 
-	// Show live metrics if status.json exists
+	// SM-124: Check lock early so we can label metrics correctly.
+	instanceRunning, _ := lock.IsLocked(dataDir(cfg))
+
+	// Show metrics if status.json exists
 	statusPath := filepath.Join(dataDir(cfg), "status.json")
 	if data, err := os.ReadFile(statusPath); err == nil {
 		var s metrics.Status
 		if json.Unmarshal(data, &s) == nil {
-			fmt.Printf("Live Metrics (from running instance):\n")
+			if instanceRunning {
+				fmt.Printf("Live Metrics (from running instance):\n")
+			} else {
+				fmt.Printf("Last Known Metrics (instance not running):\n")
+			}
 			startLocal := s.StartTime
 			if t, err := time.Parse(time.RFC3339, s.StartTime); err == nil {
 				startLocal = t.Local().Format(time.RFC3339)
@@ -761,9 +775,9 @@ func cmdStatus(configPath string, args []string) {
 		fmt.Printf("Last heartbeat: %s\n\n", hbLocal)
 	}
 
-	// Check instance status
-	locked, _ := lock.IsLocked(dataDir(cfg))
-	if locked {
+	// Check instance status (reuse instanceRunning from above)
+	configMismatch := false
+	if instanceRunning {
 		iPid, _ := st.GetMeta("instance_pid")
 		iExe, _ := st.GetMeta("instance_exe")
 		iMode, _ := st.GetMeta("instance_mode")
@@ -798,6 +812,16 @@ func cmdStatus(configPath string, args []string) {
 				fmt.Printf("  Started: %s (%s ago)\n", t.Local().Format(time.RFC3339), time.Since(t).Round(time.Second))
 			}
 		}
+
+		// SM-122: Warn if on-disk config has changed since the running instance started.
+		iFingerprint, _ := st.GetMeta("instance_config_fingerprint")
+		configMismatch = iFingerprint != "" && iFingerprint != cfg.MirrorFingerprint()
+		if configMismatch {
+			fmt.Printf("  WARNING: config.yaml has changed since this instance started.\n")
+			fmt.Printf("  Mirror details below are from the config file on disk,\n")
+			fmt.Printf("  NOT from the running instance. Restart to apply changes.\n")
+		}
+
 		fmt.Println()
 	} else if !svcInstalled {
 		// No service and no foreground instance — nothing running
@@ -806,16 +830,45 @@ func cmdStatus(configPath string, args []string) {
 		fmt.Println() // service state already shown above
 	}
 
+	// SM-122: When config has changed since the running instance started, use
+	// the instance's stored mirror config (from state DB) for display, not the
+	// potentially-changed config file on disk.
+	displayProjects := cfg.Projects
+	if configMismatch {
+		if stored, sErr := st.GetMeta("instance_mirrors"); sErr == nil && stored != "" {
+			var runningMirrors []config.Project
+			if json.Unmarshal([]byte(stored), &runningMirrors) == nil && len(runningMirrors) > 0 {
+				displayProjects = runningMirrors
+			}
+		}
+	}
+
 	filters := buildFilters(cfg)
 
-	projects := cfg.Projects
+	projects := displayProjects
 	if len(args) > 0 {
-		proj := cfg.FindProject(args[0])
-		if proj == nil {
-			fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(cfg.ProjectNames(), ", "))
-			os.Exit(ExitConfigError)
+		// Look up by name in the display projects
+		var found *config.Project
+		for i := range projects {
+			if projects[i].Name == args[0] {
+				found = &projects[i]
+				break
+			}
 		}
-		projects = []config.Project{*proj}
+		if found == nil {
+			// Fall back to disk config for name lookup
+			proj := cfg.FindProject(args[0])
+			if proj == nil {
+				var names []string
+				for _, p := range displayProjects {
+					names = append(names, p.Name)
+				}
+				fmt.Fprintf(os.Stderr, "Unknown mirror: %s\nAvailable: %s\n", args[0], strings.Join(names, ", "))
+				os.Exit(ExitConfigError)
+			}
+			found = proj
+		}
+		projects = []config.Project{*found}
 	}
 
 	for _, proj := range projects {
@@ -823,7 +876,11 @@ func cmdStatus(configPath string, args []string) {
 		pending, _ := st.GetPendingFiles(proj.Name)
 		synced, _ := st.GetAllSyncedPaths(proj.Name)
 
-		fmt.Printf("Mirror: %s\n", proj.Name)
+		if configMismatch {
+			fmt.Printf("Mirror: %s (from running instance)\n", proj.Name)
+		} else {
+			fmt.Printf("Mirror: %s\n", proj.Name)
+		}
 		fmt.Printf("  Path:    %s\n", proj.LocalPath)
 		fmt.Printf("  Remote:  %s\n", proj.Remote)
 
@@ -1681,15 +1738,39 @@ func verifyProjectQuiet(cfg *config.Global, proj config.Project, fe *filter.Engi
 	return drift
 }
 
+// openBrowserURL opens a URL in the default browser.
+// Uses rundll32 on Windows to avoid cmd.exe interpreting & as command separator.
+func openBrowserURL(rawURL string) error {
+	return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL).Start()
+}
+
 func cmdReportBug(configPath string, args []string) {
 	toStdout := false
 	openBrowser := false
 	for _, a := range args {
 		switch a {
+		case "--help", "-h":
+			fmt.Println(`Usage: smirror report-bug [flags]
+
+Generate a diagnostic report for bug filing.
+
+Flags:
+  --stdout    Print report to stdout instead of saving to file
+  --open      Open a pre-filled GitHub issue in the browser
+
+The report includes: version, platform, rclone info, config summary
+(sanitized), state DB stats, and recent log lines. All paths are
+sanitized and remote paths are redacted.`)
+			return
 		case "--stdout":
 			toStdout = true
 		case "--open":
 			openBrowser = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				fmt.Fprintf(os.Stderr, "unknown flag: %s\nRun 'smirror report-bug --help' for usage.\n", a)
+				os.Exit(ExitError)
+			}
 		}
 	}
 
@@ -1747,9 +1828,27 @@ func cmdReportBug(configPath string, args []string) {
 				count := st.CountFiles(p.Name)
 				b.WriteString(fmt.Sprintf("  %s: %d synced files\n", p.Name, count))
 			}
-			if hb, err := st.GetMeta("heartbeat"); err == nil && hb != "" {
+			if hb, err := st.GetMeta("last_heartbeat"); err == nil && hb != "" {
 				b.WriteString(fmt.Sprintf("  last heartbeat: %s\n", hb))
 			}
+		}
+
+		// SM-127: Include status.json live metrics in report
+		b.WriteString("\n--- Live Metrics ---\n")
+		statusPath := filepath.Join(filepath.Dir(cfg.StateDB), "status.json")
+		if statusData, stErr := os.ReadFile(statusPath); stErr == nil {
+			var s metrics.Status
+			if json.Unmarshal(statusData, &s) == nil {
+				b.WriteString(fmt.Sprintf("  uptime: %s\n", s.Uptime))
+				b.WriteString(fmt.Sprintf("  files_synced: %d\n", s.FilesSynced))
+				b.WriteString(fmt.Sprintf("  bytes_uploaded: %d\n", s.BytesUploaded))
+				b.WriteString(fmt.Sprintf("  sync_errors: %d\n", s.SyncErrors))
+				b.WriteString(fmt.Sprintf("  avg_latency_ms: %d\n", s.AvgLatencyMs))
+				b.WriteString(fmt.Sprintf("  queue_depth: %d\n", s.QueueDepth))
+				b.WriteString(fmt.Sprintf("  generated_at: %s\n", s.GeneratedAt))
+			}
+		} else {
+			b.WriteString("  (no status.json found)\n")
 		}
 
 		// Recent log lines (sanitized)
@@ -1814,7 +1913,7 @@ func cmdReportBug(configPath string, args []string) {
 			choice := displayDupResults(issues)
 			if choice > 0 {
 				// User chose to view an existing issue
-				_ = exec.Command("cmd", "/c", "start", issues[choice-1].HTMLURL).Start()
+				_ = openBrowserURL(issues[choice-1].HTMLURL)
 				return
 			}
 			// choice == 0: user wants to submit new report
@@ -1825,19 +1924,52 @@ func cmdReportBug(configPath string, args []string) {
 		}
 
 		fmt.Println("\n--- Opening browser ---")
-		// Pre-fill the Environment field in the GitHub issue template
-		issueURL := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
-		issueURL += "&environment=" + url.QueryEscape(report)
-		// Windows cmd.exe has a ~8191 char limit for URLs; truncate if needed
-		if len(issueURL) > 8000 {
-			truncated := report
-			if len(truncated) > 4000 {
-				truncated = truncated[:4000] + "\n... (truncated, paste full report from smirror report-bug --stdout)"
+
+		// Split report into environment and logs for separate form fields
+		envReport := report
+		logReport := ""
+		if idx := strings.Index(report, "\n--- Recent Logs"); idx >= 0 {
+			envReport = report[:idx]
+			rest := report[idx+1:]
+			if nl := strings.Index(rest, "\n"); nl >= 0 {
+				logReport = rest[nl+1:]
 			}
-			issueURL = "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
-			issueURL += "&environment=" + url.QueryEscape(truncated)
 		}
-		_ = exec.Command("cmd", "/c", "start", issueURL).Start()
+
+		// Pre-fill title, environment, and logs as separate form fields
+		title := fmt.Sprintf("[Bug]: smirror %s on %s/%s", version, runtime.GOOS, runtime.GOARCH)
+		baseURL := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
+		issueURL := baseURL +
+			"&title=" + url.QueryEscape(title) +
+			"&environment=" + url.QueryEscape(envReport)
+		if logReport != "" {
+			issueURL += "&logs=" + url.QueryEscape(logReport)
+		}
+
+		// Smart per-field truncation if URL exceeds browser/OS limits (~8KB)
+		const maxURL = 8000
+		if len(issueURL) > maxURL {
+			truncEnv := envReport
+			if len(truncEnv) > 3000 {
+				truncEnv = truncEnv[:3000] + "\n... (truncated, run: smirror report-bug --stdout)"
+			}
+			truncLog := logReport
+			if len(truncLog) > 1500 {
+				truncLog = truncLog[:1500] + "\n... (truncated)"
+			}
+			issueURL = baseURL +
+				"&title=" + url.QueryEscape(title) +
+				"&environment=" + url.QueryEscape(truncEnv) +
+				"&logs=" + url.QueryEscape(truncLog)
+			// If still too long, drop logs entirely
+			if len(issueURL) > maxURL {
+				issueURL = baseURL +
+					"&title=" + url.QueryEscape(title) +
+					"&environment=" + url.QueryEscape(truncEnv)
+			}
+		}
+
+		_ = openBrowserURL(issueURL)
 		return
 	}
 
@@ -2527,6 +2659,10 @@ func serviceMain() {
 		st.SetMeta("instance_mode", "service")
 		st.SetMeta("instance_version", version)
 		st.SetMeta("instance_user", currentUser())
+		st.SetMeta("instance_config_fingerprint", cfg.MirrorFingerprint()) // SM-122
+		if mirrorsJSON, jErr := json.Marshal(cfg.Projects); jErr == nil {
+			st.SetMeta("instance_mirrors", string(mirrorsJSON))
+		}
 		st.SetMeta("last_health_error", "")
 		defer func() {
 			st.SetMeta("instance_pid", "")
@@ -2534,6 +2670,8 @@ func serviceMain() {
 			st.SetMeta("instance_started", "")
 			st.SetMeta("instance_mode", "")
 			st.SetMeta("instance_user", "")
+			st.SetMeta("instance_config_fingerprint", "")
+			st.SetMeta("instance_mirrors", "")
 		}()
 
 		filters := buildFilters(cfg)

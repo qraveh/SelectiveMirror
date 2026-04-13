@@ -93,6 +93,27 @@ func (c *Collector) RecordSync(project string, bytes int64, latencyMs int64) {
 	c.mu.Unlock()
 }
 
+// RecordBatchSync records a batch sync that transferred count files.
+// SM-123: Used by startup/full-sync to register batch activity in global metrics.
+func (c *Collector) RecordBatchSync(project string, count int, bytes int64, latencyMs int64) {
+	c.filesSynced.Add(int64(count))
+	c.bytesUploaded.Add(bytes)
+	if count > 0 {
+		c.totalLatencyMs.Add(latencyMs)
+	}
+
+	c.mu.Lock()
+	c.lastSync[project] = time.Now()
+	if count > 0 {
+		c.latencyRing[c.latencyPos] = latencyMs
+		c.latencyPos = (c.latencyPos + 1) % latencyRingSize
+		if c.latencyLen < latencyRingSize {
+			c.latencyLen++
+		}
+	}
+	c.mu.Unlock()
+}
+
 // latencyPercentile returns the p-th percentile (0-100) of recent sync latencies.
 // Returns 0 if no data. Caller must hold mu (at least RLock).
 func (c *Collector) latencyPercentile(p int) int64 {

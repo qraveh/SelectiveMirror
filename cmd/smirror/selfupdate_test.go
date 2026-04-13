@@ -15,7 +15,10 @@ import (
 // --- selfupdate flag parsing ---
 
 func TestParseSelfUpdateFlags_CheckOnly(t *testing.T) {
-	f := parseSelfUpdateFlags([]string{"--check"})
+	f, err := parseSelfUpdateFlags([]string{"--check"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !f.checkOnly {
 		t.Error("--check should set checkOnly")
 	}
@@ -25,7 +28,10 @@ func TestParseSelfUpdateFlags_CheckOnly(t *testing.T) {
 }
 
 func TestParseSelfUpdateFlags_WhatsNew(t *testing.T) {
-	f := parseSelfUpdateFlags([]string{"--whatsnew"})
+	f, err := parseSelfUpdateFlags([]string{"--whatsnew"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !f.whatsNew {
 		t.Error("--whatsnew should set whatsNew")
 	}
@@ -35,21 +41,30 @@ func TestParseSelfUpdateFlags_WhatsNew(t *testing.T) {
 }
 
 func TestParseSelfUpdateFlags_YesLong(t *testing.T) {
-	f := parseSelfUpdateFlags([]string{"--yes"})
+	f, err := parseSelfUpdateFlags([]string{"--yes"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !f.autoYes {
 		t.Error("--yes should set autoYes")
 	}
 }
 
 func TestParseSelfUpdateFlags_YesShort(t *testing.T) {
-	f := parseSelfUpdateFlags([]string{"-y"})
+	f, err := parseSelfUpdateFlags([]string{"-y"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !f.autoYes {
 		t.Error("-y should set autoYes")
 	}
 }
 
 func TestParseSelfUpdateFlags_IncludeRclone(t *testing.T) {
-	f := parseSelfUpdateFlags([]string{"--include-rclone"})
+	f, err := parseSelfUpdateFlags([]string{"--include-rclone"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !f.includeRclone {
 		t.Error("--include-rclone should set includeRclone")
 	}
@@ -59,26 +74,39 @@ func TestParseSelfUpdateFlags_IncludeRclone(t *testing.T) {
 }
 
 func TestParseSelfUpdateFlags_Multiple(t *testing.T) {
-	f := parseSelfUpdateFlags([]string{"--check", "--whatsnew", "--yes", "--include-rclone"})
+	f, err := parseSelfUpdateFlags([]string{"--check", "--whatsnew", "--yes", "--include-rclone"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !f.checkOnly || !f.whatsNew || !f.autoYes || !f.includeRclone {
 		t.Error("all flags should be set when all are passed")
 	}
 }
 
 func TestParseSelfUpdateFlags_Empty(t *testing.T) {
-	f := parseSelfUpdateFlags(nil)
+	f, err := parseSelfUpdateFlags(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if f.checkOnly || f.whatsNew || f.autoYes || f.includeRclone {
 		t.Error("no flags should be set for empty args")
 	}
 }
 
-func TestParseSelfUpdateFlags_UnknownIgnored(t *testing.T) {
-	f := parseSelfUpdateFlags([]string{"--unknown", "--check", "bogus"})
-	if !f.checkOnly {
-		t.Error("--check should be set even with unknown args")
+func TestParseSelfUpdateFlags_UnknownFlagErrors(t *testing.T) {
+	_, err := parseSelfUpdateFlags([]string{"--unknown", "--check"})
+	if err == nil {
+		t.Error("unknown flag should return an error")
 	}
-	if f.whatsNew || f.autoYes || f.includeRclone {
-		t.Error("unknown args should not set any flags")
+}
+
+func TestParseSelfUpdateFlags_NonFlagArgsIgnored(t *testing.T) {
+	f, err := parseSelfUpdateFlags([]string{"--check", "bogus"})
+	if err != nil {
+		t.Fatalf("non-flag args should not error: %v", err)
+	}
+	if !f.checkOnly {
+		t.Error("--check should be set even with positional args")
 	}
 }
 

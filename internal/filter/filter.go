@@ -2,11 +2,13 @@
 package filter
 
 import (
+	"crypto/sha256"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/git-pkgs/gitignore"
 )
@@ -30,6 +32,11 @@ type Engine struct {
 
 	// SM-107: Patterns that failed compilation. Skipped in GenerateRcloneFilterFile().
 	badPatterns []string
+
+	// SM-110: SHA-256 of the raw .syncignore bytes that produced the currently
+	// committed projectRules. Used for content-hash idempotency (skip reload if
+	// file content hasn't changed) and rule-shrink stability detection.
+	committedContentHash [32]byte
 }
 
 // New creates a filter engine with global excludes and an optional project .syncignore.
@@ -40,14 +47,17 @@ func New(globalExcludes []string, syncIgnorePath string) (*Engine, error) {
 		globalRules:    globalExcludes,
 	}
 
-	if err := e.loadProjectIgnore(); err != nil {
+	rules, contentHash, err := e.readProjectRules()
+	if err != nil {
 		return nil, err
 	}
+	e.projectRules = rules
+	e.committedContentHash = contentHash
 
 	e.rebuildMerged()
 
 	// SM-110: On initial load, strip bad patterns and rebuild so the filter
-	// engine starts with only valid rules. (On Reload, we roll back instead.)
+	// engine starts with only valid rules. (On Reload, we refuse instead.)
 	if len(e.badPatterns) > 0 {
 		badSet := make(map[string]bool)
 		for _, bp := range e.badPatterns {
@@ -91,46 +101,42 @@ func (e *Engine) rebuildMerged() {
 	}
 }
 
-// loadProjectIgnore reads and compiles the project .syncignore file.
-// Caller must hold e.mu for write (or be in constructor before sharing).
-func (e *Engine) loadProjectIgnore() error {
-	e.projectRules = nil
-
+// readProjectRules reads the .syncignore file and returns parsed rules and a
+// SHA-256 hash of the raw file bytes. The hash is used for content-hash
+// idempotency and rule-shrink stability detection (SM-110).
+// Returns nil rules (not error) if the file doesn't exist.
+func (e *Engine) readProjectRules() ([]string, [32]byte, error) {
 	if e.syncIgnorePath == "" {
-		return nil
+		return nil, sha256.Sum256(nil), nil
 	}
-
 	if _, err := os.Stat(e.syncIgnorePath); err != nil {
-		return nil // file doesn't exist — not an error, just no project rules
+		return nil, sha256.Sum256(nil), nil // file doesn't exist — not an error
 	}
-
-	// Read raw lines for both pattern compilation and rclone filter generation
 	data, err := os.ReadFile(e.syncIgnorePath)
 	if err != nil {
-		return err
+		return nil, [32]byte{}, err
 	}
 
-	// Strip UTF-8 BOM if present (PowerShell Set-Content -Encoding UTF8 adds one)
+	contentHash := sha256.Sum256(data)
+
 	content := string(data)
 	if strings.HasPrefix(content, "\xEF\xBB\xBF") {
-		content = content[3:]
+		content = content[3:] // strip UTF-8 BOM
 	}
 
+	var rules []string
 	for _, line := range strings.Split(content, "\n") {
-		// Strip CR (Windows CRLF)
 		line = strings.TrimRight(line, "\r")
-		// Strip unescaped trailing whitespace (gitignore spec).
-		// "foo\ " keeps the space, "foo " strips it, "foo\t" strips the tab.
 		line = trimTrailingUnescaped(line)
 		line = strings.TrimLeft(line, " \t")
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		e.projectRules = append(e.projectRules, line)
+		rules = append(rules, line)
 	}
 
-	// Lint: warn about unanchored negation patterns that match at any depth.
-	for _, rule := range e.projectRules {
+	// Lint: warn about unanchored negation patterns
+	for _, rule := range rules {
 		if strings.HasPrefix(rule, "!") && !strings.HasPrefix(rule, "!/") {
 			pattern := rule[1:]
 			if !strings.Contains(pattern, "/") || strings.HasSuffix(pattern, "/") {
@@ -142,59 +148,108 @@ func (e *Engine) loadProjectIgnore() error {
 		}
 	}
 
-	return nil
+	return rules, contentHash, nil
 }
 
 // Reload re-reads the .syncignore file and recompiles the project filter rules.
 // Global excludes are not affected. Returns true if the rules actually changed.
 // Safe for concurrent use — callers of IsExcluded are briefly blocked during swap.
+//
+// SM-110 formally verifiable reload:
+//
+//  1. Content-hash idempotency: if file bytes haven't changed since last
+//     commit, return immediately. Eliminates duplicate reloads.
+//
+//  2. Validate-before-commit: trial-compile new rules into temp matcher.
+//     If any pattern is malformed, refuse entirely.
+//
+//  3. Rule-shrink stability check: if the new rule set is a strict subset
+//     of current rules (the signature of a truncated file), double-read
+//     the file after 50ms. If the hash changed, the file is still being
+//     written — abort. If stable, commit.
+//
+// Invariant: rules never shrink due to transient file states.
 func (e *Engine) Reload() (changed bool, err error) {
-	// Read the new rules before acquiring write lock (minimize lock time)
-	oldRules := func() []string {
-		e.mu.RLock()
-		defer e.mu.RUnlock()
-		cp := make([]string, len(e.projectRules))
-		copy(cp, e.projectRules)
-		return cp
-	}()
+	// 1. Read new rules and content hash from disk (no lock needed).
+	newRules, newHash, readErr := e.readProjectRules()
+	if readErr != nil {
+		slog.Warn("malformed .syncignore, keeping previous rules",
+			"path", e.syncIgnorePath, "error", readErr)
+		return false, nil
+	}
 
+	// 2. Content-hash idempotency: if file content is identical to what
+	//    we last committed, skip entirely.
+	e.mu.RLock()
+	if newHash == e.committedContentHash {
+		e.mu.RUnlock()
+		return false, nil
+	}
+	currentRules := make([]string, len(e.projectRules))
+	copy(currentRules, e.projectRules)
+	e.mu.RUnlock()
+
+	// 3. Trial-compile: merge global + new project rules into a temp matcher.
+	var all []string
+	e.mu.RLock()
+	all = append(all, e.globalRules...)
+	e.mu.RUnlock()
+	all = append(all, newRules...)
+
+	var badPatterns []string
+	var testMerged *gitignore.Matcher
+	if len(all) > 0 {
+		m := &gitignore.Matcher{}
+		m.AddPatterns([]byte(strings.Join(all, "\n")), "")
+		if errs := m.Errors(); len(errs) > 0 {
+			for _, pe := range errs {
+				slog.Warn("pattern parse error in filter rules", "error", pe)
+				badPatterns = append(badPatterns, pe.Pattern)
+			}
+		}
+		testMerged = m
+	}
+
+	// 4. If any patterns failed, refuse the change entirely.
+	if len(badPatterns) > 0 {
+		slog.Warn("malformed patterns in .syncignore, keeping previous valid rules",
+			"path", e.syncIgnorePath, "bad_patterns", badPatterns)
+		return false, nil
+	}
+
+	// 5. Rule-shrink stability check: if the new rule set is a strict subset
+	//    of the current rules, the file may be transiently truncated (Windows
+	//    writes fire truncate + content events). Double-read after 50ms to
+	//    confirm the content is stable before committing a rule removal.
+	if isStrictSubset(newRules, currentRules) {
+		time.Sleep(50 * time.Millisecond)
+		_, confirmHash, confirmErr := e.readProjectRules()
+		if confirmErr != nil || confirmHash != newHash {
+			slog.Info("syncignore content changed during stability check, deferring reload",
+				"path", e.syncIgnorePath)
+			return false, nil
+		}
+	}
+
+	// 6. New rules are valid and stable — commit under write lock.
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// FR-FILTER-11: Save previous state before loading.
-	prevProjectRules := make([]string, len(e.projectRules))
-	copy(prevProjectRules, e.projectRules)
-	prevMerged := e.merged
+	oldRules := make([]string, len(e.projectRules))
+	copy(oldRules, e.projectRules)
 
-	if err := e.loadProjectIgnore(); err != nil {
-		// Restore previous state — keep last-known-good filter rules
-		e.projectRules = prevProjectRules
-		e.merged = prevMerged
-		slog.Warn("malformed .syncignore, keeping previous rules",
-			"path", e.syncIgnorePath, "error", err)
-		return false, nil
-	}
-	e.rebuildMerged()
-
-	// SM-110: If any patterns failed to compile, the merged matcher may be
-	// incomplete (e.g., [abc is invalid → old exclusion rules lost → fail-open).
-	// Roll back to last-known-good state to prevent excluded files from syncing.
-	if len(e.badPatterns) > 0 {
-		slog.Warn("malformed patterns in .syncignore, keeping previous valid rules",
-			"path", e.syncIgnorePath, "bad_patterns", e.badPatterns)
-		e.projectRules = prevProjectRules
-		e.merged = prevMerged
-		e.badPatterns = nil
-		return false, nil
-	}
+	e.projectRules = newRules
+	e.merged = testMerged
+	e.badPatterns = nil
+	e.committedContentHash = newHash
 
 	// Detect if rules actually changed and log the diff (SM-070)
 	changed = false
-	if len(oldRules) != len(e.projectRules) {
+	if len(oldRules) != len(newRules) {
 		changed = true
 	} else {
 		for i := range oldRules {
-			if oldRules[i] != e.projectRules[i] {
+			if oldRules[i] != newRules[i] {
 				changed = true
 				break
 			}
@@ -203,7 +258,7 @@ func (e *Engine) Reload() (changed bool, err error) {
 
 	if changed {
 		e.generation++
-		logFilterDiff(e.syncIgnorePath, oldRules, e.projectRules)
+		logFilterDiff(e.syncIgnorePath, oldRules, newRules)
 	}
 	return changed, nil
 }
@@ -253,6 +308,26 @@ func trimTrailingUnescaped(s string) string {
 	return s[:i]
 }
 
+// isStrictSubset returns true when every element of newRules exists in oldRules
+// AND newRules has fewer elements. This is the signature of file truncation:
+// rules are removed but none are added.
+func isStrictSubset(newRules, oldRules []string) bool {
+	if len(newRules) >= len(oldRules) {
+		return false
+	}
+	old := make(map[string]int, len(oldRules))
+	for _, r := range oldRules {
+		old[r]++
+	}
+	for _, r := range newRules {
+		if old[r] <= 0 {
+			return false // newRules has a rule not in oldRules — not a subset
+		}
+		old[r]--
+	}
+	return true
+}
+
 // HasBadPatterns reports whether the filter engine has malformed patterns
 // that were skipped during compilation. When true, batch sync should refuse
 // to run to avoid fail-open behavior.
@@ -260,6 +335,42 @@ func (e *Engine) HasBadPatterns() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return len(e.badPatterns) > 0
+}
+
+// BadPatternSource returns a human-readable description of where malformed
+// patterns originated: ".syncignore", "global_excludes", or both.
+// Returns "" if there are no bad patterns.
+func (e *Engine) BadPatternSource() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if len(e.badPatterns) == 0 {
+		return ""
+	}
+	globalSet := make(map[string]bool, len(e.globalRules))
+	for _, r := range e.globalRules {
+		globalSet[r] = true
+	}
+	projectSet := make(map[string]bool, len(e.projectRules))
+	for _, r := range e.projectRules {
+		projectSet[r] = true
+	}
+	inGlobal, inProject := false, false
+	for _, bp := range e.badPatterns {
+		if globalSet[bp] {
+			inGlobal = true
+		}
+		if projectSet[bp] {
+			inProject = true
+		}
+	}
+	switch {
+	case inGlobal && inProject:
+		return "global_excludes and .syncignore"
+	case inGlobal:
+		return "global_excludes"
+	default:
+		return ".syncignore"
+	}
 }
 
 // SyncIgnorePath returns the path to the .syncignore file being watched.
@@ -278,6 +389,15 @@ func (e *Engine) Generation() uint64 {
 // relPath should use forward slashes. Safe for concurrent use.
 func (e *Engine) IsExcluded(relPath string) bool {
 	relPath = filepath.ToSlash(relPath)
+
+	// SM-125: Auto-exclude .syncignore control file.
+	base := filepath.Base(relPath)
+	if base == ".syncignore" {
+		return true
+	}
+	if e.syncIgnorePath != "" && base == filepath.Base(e.syncIgnorePath) && !strings.Contains(relPath, "/") {
+		return true
+	}
 
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -342,7 +462,19 @@ func (e *Engine) GenerateRcloneFilterFile() (string, error) {
 	combined = append(combined, otherGlobalRules...)
 	combined = append(combined, e.projectRules...)
 
+	// SM-125: Auto-exclude the .syncignore control file from sync.
+	// If syncignore_path is set and points inside the mirror root, exclude
+	// its basename too. Always exclude ".syncignore" (the default name).
+	syncIgnoreBasename := ""
+	if e.syncIgnorePath != "" {
+		syncIgnoreBasename = filepath.Base(e.syncIgnorePath)
+	}
+
 	var lines []string
+	lines = append(lines, "- .syncignore")
+	if syncIgnoreBasename != "" && syncIgnoreBasename != ".syncignore" {
+		lines = append(lines, "- "+syncIgnoreBasename)
+	}
 	for _, d := range globalDirExcludes {
 		if !badSet[d] {
 			lines = append(lines, toRcloneFilter(d))
@@ -374,8 +506,13 @@ func (e *Engine) GenerateRcloneFilterFile() (string, error) {
 }
 
 // toRcloneFilter converts a .gitignore-style pattern to rclone filter syntax.
+// SM-121: Use trimTrailingUnescaped instead of TrimSpace to preserve escaped
+// trailing spaces (gitignore "\ " syntax), then convert the escape to a
+// literal space for rclone's filter format.
 func toRcloneFilter(pattern string) string {
-	pattern = strings.TrimSpace(pattern)
+	pattern = trimTrailingUnescaped(pattern)
+	// Convert gitignore "\ " escapes to literal spaces for rclone filter syntax.
+	pattern = strings.ReplaceAll(pattern, "\\ ", " ")
 
 	if strings.HasPrefix(pattern, "!") {
 		return "+ " + pattern[1:]

@@ -2,11 +2,13 @@
 package config
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -396,6 +398,19 @@ func (g *Global) ProjectNames() []string {
 		names[i] = p.Name
 	}
 	return names
+}
+
+// MirrorFingerprint returns a short hex hash of the mirror configuration
+// (names, paths, remotes). Used by SM-122 to detect when the on-disk config
+// has changed while a running instance still uses the old config.
+func (g *Global) MirrorFingerprint() string {
+	var parts []string
+	for _, p := range g.Projects {
+		parts = append(parts, fmt.Sprintf("%s|%s|%s", p.Name, p.LocalPath, p.Remote))
+	}
+	sort.Strings(parts)
+	h := sha256.Sum256([]byte(strings.Join(parts, "\n")))
+	return fmt.Sprintf("%x", h[:8])
 }
 
 func expandHome(path string) string {

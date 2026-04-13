@@ -59,6 +59,12 @@ type projectWatcher struct {
 	pending map[string]Timer // per-file debounce timers (static mode only)
 	mu      gosync.Mutex
 
+	// SM-110: Debounce timer for .syncignore reloads. On Windows, a single
+	// file write fires two fsnotify events (truncate + content). Without
+	// debounce, the first event sees empty/truncated content and commits
+	// it as valid rules before the second event arrives with the real content.
+	filterReloadTimer *time.Timer
+
 	// Burst-delete detection: count deletes within a rolling window.
 	// When threshold is reached, schedule an accelerated reconciliation
 	// to catch any fsnotify events dropped under burst load (SM-050).
@@ -119,6 +125,37 @@ func (m *Manager) Start(ctx context.Context) error {
 				continue
 			}
 			m.log.Info("watching", "project", pw.project.Name, "path", pw.project.LocalPath, "dirs", count)
+		}
+	}
+
+	// SM-126: Watch external syncignore_path directories (if outside mirror root).
+	for i := range m.projects {
+		pw := m.projects[i]
+		if pw.filter == nil {
+			continue
+		}
+		syncPath := pw.filter.SyncIgnorePath()
+		if syncPath == "" {
+			continue
+		}
+		syncDir, err := filepath.Abs(filepath.Dir(syncPath))
+		if err != nil {
+			continue
+		}
+		projDir, err := filepath.Abs(pw.project.LocalPath)
+		if err != nil {
+			continue
+		}
+		// Only add watch if the syncignore is outside the project root
+		// (files inside the root are already watched by the recursive watch).
+		if !strings.HasPrefix(strings.ToLower(syncDir)+string(os.PathSeparator), strings.ToLower(projDir)+string(os.PathSeparator)) &&
+			strings.ToLower(syncDir) != strings.ToLower(projDir) {
+			if err := m.fsw.Add(syncDir); err != nil {
+				m.log.Warn("failed to watch external syncignore directory",
+					"project", pw.project.Name, "path", syncDir, "error", err)
+			} else {
+				m.log.Info("watching external syncignore", "project", pw.project.Name, "path", syncDir)
+			}
 		}
 	}
 
@@ -346,12 +383,16 @@ func (m *Manager) handleEvent(event fsnotify.Event) {
 
 	pw := m.findProject(event.Name)
 	if pw == nil {
+		// SM-126: Check if this is an external syncignore file change.
+		if epw := m.findProjectByExternalSyncIgnore(event.Name); epw != nil {
+			m.scheduleFilterReload(epw)
+		}
 		return
 	}
 
 	// Check if .syncignore was modified — hot-reload filter rules
 	if m.isSyncIgnoreFile(pw, event.Name) {
-		m.reloadFilter(pw)
+		m.scheduleFilterReload(pw)
 		return
 	}
 
@@ -654,6 +695,52 @@ func (m *Manager) queueFilesInDir(pw *projectWatcher, dirPath string) {
 	if queued > 0 {
 		m.log.Debug("queued files from new/renamed dir", "path", dirPath, "files", queued, "ms", elapsed.Milliseconds())
 	}
+}
+
+// scheduleFilterReload debounces .syncignore reloads. On Windows, a single
+// file write fires two fsnotify events (truncate + content write). Without
+// debounce, the first event reads empty/truncated content and commits it as
+// valid empty rules, causing excluded files to sync (fail-open).
+//
+// Each new event resets the 200ms timer. The reload fires only after 200ms
+// of quiescence, by which time the file write is complete.
+func (m *Manager) scheduleFilterReload(pw *projectWatcher) {
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+
+	if pw.filterReloadTimer != nil {
+		pw.filterReloadTimer.Stop()
+	}
+	pw.filterReloadTimer = time.AfterFunc(200*time.Millisecond, func() {
+		m.reloadFilter(pw)
+	})
+}
+
+// findProjectByExternalSyncIgnore checks if the path matches any project's
+// external syncignore_path (outside the mirror root). SM-126.
+func (m *Manager) findProjectByExternalSyncIgnore(absPath string) *projectWatcher {
+	a, err := filepath.Abs(absPath)
+	if err != nil {
+		return nil
+	}
+	for i := range m.projects {
+		pw := m.projects[i]
+		if pw.filter == nil {
+			continue
+		}
+		syncPath := pw.filter.SyncIgnorePath()
+		if syncPath == "" {
+			continue
+		}
+		b, err := filepath.Abs(syncPath)
+		if err != nil {
+			continue
+		}
+		if filepath.Clean(a) == filepath.Clean(b) {
+			return pw
+		}
+	}
+	return nil
 }
 
 // isSyncIgnoreFile checks if the changed file is this project's .syncignore.

@@ -512,10 +512,11 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 		return fmt.Errorf("no filter engine for project %q", proj.Name)
 	}
 
-	// SM-107: Refuse batch sync when filter has bad patterns to prevent fail-open.
+	// SM-107/SM-118: Refuse batch sync when filter has bad patterns to prevent fail-open.
 	if fe.HasBadPatterns() {
-		e.log.Error("refusing batch sync: .syncignore has malformed patterns", "project", proj.Name)
-		return fmt.Errorf("malformed .syncignore patterns — batch sync blocked to prevent syncing excluded files")
+		source := fe.BadPatternSource()
+		e.log.Error("refusing batch sync: malformed filter patterns", "project", proj.Name, "source", source)
+		return fmt.Errorf("malformed patterns in %s — batch sync blocked to prevent syncing excluded files", source)
 	}
 
 	// Capture filter generation before generating the rclone filter file.
@@ -547,9 +548,10 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 		verb = "sync"
 	}
 	args := []string{verb, proj.LocalPath, proj.Remote, "--checksum", "--filter-from", filterFile}
-	// SM-108: Enforce max_file_size_mb during batch sync (not just per-file sync).
+	// SM-108/SM-119: Enforce max_file_size_mb during batch sync.
+	// rclone --max-size interprets bare numbers as KiB, so we must use a suffix.
 	if maxSize := proj.MaxFileSize(); maxSize > 0 {
-		args = append(args, "--max-size", fmt.Sprintf("%d", maxSize))
+		args = append(args, "--max-size", fmt.Sprintf("%db", maxSize))
 	}
 	args = append(args, e.commonFlags(proj)...)
 
@@ -563,7 +565,13 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 		e.Queue.RecordSuccess(proj.Name)
 
 		// SM-083: Backfill state DB for files synced by batch reconciliation.
-		e.backfillStateAfterBatchSync(ctx, proj)
+		backfilled, totalBytes := e.backfillStateAfterBatchSync(ctx, proj)
+
+		// SM-123: Record batch sync activity in global metrics so status.json
+		// reflects startup/full-sync file counts (not just watcher syncs).
+		if e.metrics != nil && backfilled > 0 {
+			e.metrics.RecordBatchSync(proj.Name, backfilled, totalBytes, elapsed.Milliseconds())
+		}
 		return nil
 	}
 
@@ -837,6 +845,10 @@ func (e *Engine) DryRun(ctx context.Context, proj config.Project) error {
 	defer os.Remove(filterFile)
 
 	args := []string{"copy", proj.LocalPath, proj.Remote, "--checksum", "--filter-from", filterFile, "--dry-run", "--log-level", "INFO"}
+	// SM-120: Enforce max_file_size_mb in dry-run so output matches actual sync.
+	if maxSize := proj.MaxFileSize(); maxSize > 0 {
+		args = append(args, "--max-size", fmt.Sprintf("%db", maxSize))
+	}
 	// Don't append commonFlags for dry-run (they include --log-level which conflicts)
 	if e.cfg.BandwidthLimit != "" {
 		args = append(args, "--bwlimit", e.cfg.BandwidthLimit)
@@ -994,13 +1006,15 @@ func (e *Engine) findGhosts(proj config.Project) ([]GhostFile, error) {
 // for any included file that has no entry. This closes the blind spot where
 // rclone copy (batch sync) uploads files without recording per-file state.
 // Only backfills successful syncs (assumes batch sync succeeded for all files).
-func (e *Engine) backfillStateAfterBatchSync(ctx context.Context, proj config.Project) {
+// Returns count and total bytes of newly backfilled files (SM-123: for metrics).
+func (e *Engine) backfillStateAfterBatchSync(ctx context.Context, proj config.Project) (int, int64) {
 	fe, ok := e.filters[proj.Name]
 	if !ok {
-		return
+		return 0, 0
 	}
 
 	backfilled := 0
+	var totalBytes int64
 	_ = filepath.WalkDir(proj.LocalPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil || ctx.Err() != nil {
 			return nil
@@ -1047,6 +1061,7 @@ func (e *Engine) backfillStateAfterBatchSync(ctx context.Context, proj config.Pr
 
 		e.state.UpdateFileState(proj.Name, relPath, hash, info.Size(), info.ModTime().UnixNano(), 0)
 		backfilled++
+		totalBytes += info.Size()
 		return nil
 	})
 
@@ -1063,6 +1078,8 @@ func (e *Engine) backfillStateAfterBatchSync(ctx context.Context, proj config.Pr
 	} else if cleared > 0 {
 		e.log.Info("cleared stale exit codes after batch sync", "project", proj.Name, "cleared", cleared)
 	}
+
+	return backfilled, totalBytes
 }
 
 // ClassifyGhost determines why a remote-only file exists using filter rules and state DB.

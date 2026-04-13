@@ -43,10 +43,11 @@ type selfUpdateFlags struct {
 	whatsNew      bool
 	autoYes       bool
 	includeRclone bool
+	showHelp      bool
 }
 
 // parseSelfUpdateFlags parses selfupdate command flags from args.
-func parseSelfUpdateFlags(args []string) selfUpdateFlags {
+func parseSelfUpdateFlags(args []string) (selfUpdateFlags, error) {
 	var f selfUpdateFlags
 	for _, a := range args {
 		switch a {
@@ -58,13 +59,35 @@ func parseSelfUpdateFlags(args []string) selfUpdateFlags {
 			f.autoYes = true
 		case "--include-rclone":
 			f.includeRclone = true
+		case "--help", "-h":
+			f.showHelp = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				return f, fmt.Errorf("unknown flag: %s", a)
+			}
 		}
 	}
-	return f
+	return f, nil
 }
 
 func cmdSelfUpdate(configPath string, args []string) {
-	flags := parseSelfUpdateFlags(args)
+	flags, flagErr := parseSelfUpdateFlags(args)
+	if flagErr != nil {
+		fmt.Fprintf(os.Stderr, "%v\nRun 'smirror selfupdate --help' for usage.\n", flagErr)
+		os.Exit(ExitError)
+	}
+	if flags.showHelp {
+		fmt.Println(`Usage: smirror selfupdate [flags]
+
+Check for and install updates.
+
+Flags:
+  --check           Check only, don't install
+  --whatsnew         Show release notes
+  --yes, -y          Auto-approve installation
+  --include-rclone   Also check/update rclone`)
+		return
+	}
 	checkOnly := flags.checkOnly
 	whatsNew := flags.whatsNew
 	autoYes := flags.autoYes

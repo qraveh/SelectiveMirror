@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGlobalExcludes(t *testing.T) {
@@ -906,5 +907,159 @@ func TestFilterDoesNotInheritDotGitignore(t *testing.T) {
 	}
 	if fe.IsExcluded("internal/sync/sync.go") {
 		t.Error("internal/sync/sync.go should NOT be excluded")
+	}
+}
+
+// SM-110: Content-hash idempotency — same content → no change.
+func TestReload_ContentHashIdempotency(t *testing.T) {
+	dir := t.TempDir()
+	syncignore := filepath.Join(dir, ".syncignore")
+	os.WriteFile(syncignore, []byte("*.log\n"), 0644)
+
+	fe, err := New(nil, syncignore)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	gen := fe.Generation()
+
+	// Reload with identical content should be a no-op.
+	changed, err := fe.Reload()
+	if err != nil {
+		t.Fatalf("Reload error: %v", err)
+	}
+	if changed {
+		t.Error("Reload with identical content should return changed=false")
+	}
+	if fe.Generation() != gen {
+		t.Error("generation should not change on identical content")
+	}
+}
+
+// SM-110: Rule-shrink double-read catches transient truncation.
+func TestReload_RuleShrink_DetectsInstability(t *testing.T) {
+	dir := t.TempDir()
+	syncignore := filepath.Join(dir, ".syncignore")
+	os.WriteFile(syncignore, []byte("skip.txt\nsecret.key\n"), 0644)
+
+	fe, err := New(nil, syncignore)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if !fe.IsExcluded("skip.txt") {
+		t.Fatal("skip.txt should be excluded initially")
+	}
+
+	// Simulate truncation: write empty file, then immediately schedule
+	// the real content to appear during the 50ms stability check.
+	os.WriteFile(syncignore, []byte(""), 0644)
+
+	// Start Reload in a goroutine — it will sleep 50ms for the double-read.
+	done := make(chan bool)
+	go func() {
+		// While Reload is sleeping during the stability check, write real content.
+		time.Sleep(20 * time.Millisecond)
+		os.WriteFile(syncignore, []byte("[abc\n"), 0644) // malformed — content changes
+		done <- true
+	}()
+
+	changed, err := fe.Reload()
+	<-done
+	if err != nil {
+		t.Fatalf("Reload error: %v", err)
+	}
+	if changed {
+		t.Error("Reload should detect instability and return changed=false")
+	}
+	// Original rules must be preserved.
+	if !fe.IsExcluded("skip.txt") {
+		t.Error("skip.txt should still be excluded after transient truncation")
+	}
+}
+
+// SM-110: Genuinely empty file committed after stability check.
+func TestReload_RuleShrink_StableEmpty(t *testing.T) {
+	dir := t.TempDir()
+	syncignore := filepath.Join(dir, ".syncignore")
+	os.WriteFile(syncignore, []byte("*.log\n"), 0644)
+
+	fe, err := New(nil, syncignore)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if !fe.IsExcluded("test.log") {
+		t.Fatal("test.log should be excluded initially")
+	}
+
+	// Write a genuinely empty file (stable).
+	os.WriteFile(syncignore, []byte(""), 0644)
+
+	changed, err := fe.Reload()
+	if err != nil {
+		t.Fatalf("Reload error: %v", err)
+	}
+	if !changed {
+		t.Error("genuinely empty file should be committed (stable content)")
+	}
+	if fe.IsExcluded("test.log") {
+		t.Error("test.log should no longer be excluded after rules cleared")
+	}
+}
+
+// SM-110: Rules added → immediate commit, no double-read delay.
+func TestReload_RulesAdded_NoDelay(t *testing.T) {
+	dir := t.TempDir()
+	syncignore := filepath.Join(dir, ".syncignore")
+	os.WriteFile(syncignore, []byte("*.log\n"), 0644)
+
+	fe, err := New(nil, syncignore)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	// Add a rule (superset — not a strict subset).
+	os.WriteFile(syncignore, []byte("*.log\n*.tmp\n"), 0644)
+
+	start := time.Now()
+	changed, err := fe.Reload()
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Reload error: %v", err)
+	}
+	if !changed {
+		t.Error("adding rules should be committed")
+	}
+	// Should complete well under 50ms (no double-read).
+	if elapsed > 40*time.Millisecond {
+		t.Errorf("rule addition took %v — should be instant (no double-read)", elapsed)
+	}
+	if !fe.IsExcluded("scratch.tmp") {
+		t.Error("*.tmp should now be excluded")
+	}
+}
+
+// isStrictSubset unit tests.
+func TestIsStrictSubset(t *testing.T) {
+	tests := []struct {
+		name     string
+		newR     []string
+		oldR     []string
+		expected bool
+	}{
+		{"empty_of_nonempty", nil, []string{"a"}, true},
+		{"empty_of_empty", nil, nil, false},
+		{"equal", []string{"a"}, []string{"a"}, false},
+		{"strict_subset", []string{"a"}, []string{"a", "b"}, true},
+		{"superset", []string{"a", "b", "c"}, []string{"a", "b"}, false},
+		{"disjoint", []string{"c"}, []string{"a", "b"}, false},
+		{"partial_overlap", []string{"a", "c"}, []string{"a", "b"}, false},
+		{"duplicates", []string{"a", "a"}, []string{"a", "a", "b"}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isStrictSubset(tc.newR, tc.oldR)
+			if got != tc.expected {
+				t.Errorf("isStrictSubset(%v, %v) = %v, want %v", tc.newR, tc.oldR, got, tc.expected)
+			}
+		})
 	}
 }
