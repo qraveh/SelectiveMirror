@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.8.50-dev"
+var version = "0.8.51-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -2786,10 +2786,19 @@ func serviceMain() {
 			return
 		}
 
-		// SEC-C5: When the service runs as LocalSystem and hooks are configured,
-		// the config file must be owned by an administrative principal. Otherwise
-		// any user who can edit config.yaml gets LocalSystem RCE via hook injection.
-		if cfg.HasHooks() {
+		// SEC-C5: When running as a Windows Service (LocalSystem), the config
+		// file must be owned by an administrative principal — ALWAYS, not only
+		// when hooks are configured. Rationale:
+		//   * Hook-bearing configs already require this (original SEC-C5 scope).
+		//   * Even hook-free configs that LocalSystem reads are security-critical:
+		//     rclone_path / rclone_extra_flags (SEC-H1/H2) give a non-admin writer
+		//     arbitrary-binary-execution-as-SYSTEM. delete_policy, filter rules,
+		//     and remote paths control what LocalSystem touches on the filesystem.
+		//   * Task mode (smirror task install) runs as the user and does not
+		//     hit this path, so no-hooks desktop deployments are unaffected.
+		// The fix is always to move config to an admin-owned location such as
+		// %ProgramData%\SelectiveMirror\config.yaml.
+		{
 			adminOwned, aclErr := config.IsAdminOwnedPath(configPath)
 			if aclErr != nil {
 				slog.Error("config ACL check failed", "path", configPath, "error", aclErr)
@@ -2799,11 +2808,12 @@ func serviceMain() {
 				return
 			}
 			if !adminOwned {
-				slog.Error("refusing to start: hooks configured but config file is not admin-owned",
+				slog.Error("refusing to start: service-mode config must be admin-owned (SEC-C5)",
 					"path", configPath,
-					"remedy", "move config to an admin-owned location (e.g., %ProgramData%\\SelectiveMirror\\config.yaml) or remove hooks")
+					"has_hooks", cfg.HasHooks(),
+					"remedy", "move config to %ProgramData%\\SelectiveMirror\\config.yaml (admin-owned), or run in per-user task mode instead: smirror task install")
 				if crashLog != nil {
-					fmt.Fprintf(crashLog, "%s startFunc: SEC-C5 refuse: non-admin-owned config with hooks\n", time.Now().Format(time.RFC3339))
+					fmt.Fprintf(crashLog, "%s startFunc: SEC-C5 refuse: non-admin-owned config (hooks=%v)\n", time.Now().Format(time.RFC3339), cfg.HasHooks())
 				}
 				return
 			}
@@ -3209,6 +3219,31 @@ func serviceDoInstall(configPath string, compound bool) {
 		fmt.Fprintln(os.Stderr, "Cannot install the service without a valid configuration.")
 		fmt.Fprintf(os.Stderr, "Create a config file at: %s\n", configPath)
 		fmt.Fprintf(os.Stderr, "Example: smirror --config %s start  (generates default config on first run)\n", configPath)
+		os.Exit(ExitConfigError)
+	}
+
+	// SEC-C5: the running service reads this config as LocalSystem. If the
+	// config lives in a user-writable location, any standard user can pivot
+	// to SYSTEM via rclone_path / rclone_extra_flags / hooks. Fail at install
+	// time so the user doesn't end up with a broken-at-start service after
+	// a clean UAC prompt.
+	adminOwned, aclErr := config.IsAdminOwnedPath(configPath)
+	if aclErr != nil {
+		fmt.Fprintf(os.Stderr, "Error: cannot verify config ACL: %v\n", aclErr)
+		os.Exit(ExitConfigError)
+	}
+	if !adminOwned {
+		fmt.Fprintln(os.Stderr, "Error: service install refused (SEC-C5).")
+		fmt.Fprintf(os.Stderr, "\nThe service runs as LocalSystem and would read:\n  %s\n", configPath)
+		fmt.Fprintln(os.Stderr, "That file is not owned by Administrators / LocalSystem, so any user who")
+		fmt.Fprintln(os.Stderr, "can edit it could execute arbitrary code as SYSTEM via rclone_path,")
+		fmt.Fprintln(os.Stderr, "rclone_extra_flags, or pre/post-sync hooks.")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "Fix one of the following and re-run:")
+		fmt.Fprintln(os.Stderr, "  1. Move the config to %ProgramData%\\SelectiveMirror\\config.yaml")
+		fmt.Fprintln(os.Stderr, "     and re-run: smirror --config \"%ProgramData%\\SelectiveMirror\\config.yaml\" service install")
+		fmt.Fprintln(os.Stderr, "  2. Use per-user task mode instead (no admin required):")
+		fmt.Fprintln(os.Stderr, "     smirror task install")
 		os.Exit(ExitConfigError)
 	}
 
