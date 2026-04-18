@@ -3,70 +3,67 @@
 All notable changes to SelectiveMirror are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [semver](https://semver.org/).
 
-## [Unreleased] — 0.8.x-dev
+## [0.9.0] — 2026-04-18
 
-Covers work between v0.7.0 and the current `-dev` source. Patch numbers are not enumerated individually — each commit bumps the `-dev` patch; this block summarizes the cumulative changes filed as SM-081 through SM-152.
+The deployment-model and security-hardening release. Not backward-compatible with the 0.2.x–0.8.x MSI flow: fresh install required (perMachine → different install path; no auto-service-install).
 
-### Deployment model (0.8.50-dev through 0.8.52-dev)
+### Deployment model (breaking for MSI users; no wire/format breaks)
 
-This is the most consequential user-facing change since hooks. SelectiveMirror historically defaulted to a Windows Service running as LocalSystem. That overreached privilege for a desktop file-sync tool and created the SEC-C2 LPE. Three changes, intended to ship together as a single minor bump (0.9.0) when the user releases:
+- **New per-user Scheduled Task mode** (recommended default). `smirror task install/uninstall/start/stop/status`. Registers via `schtasks.exe` with an XML task definition (schema 1.2, Win 7+). Trigger: at user logon. Principal: current user, InteractiveToken, LeastPrivilege. Restart-on-failure 3x PT1M. **No admin required** — users own their own tasks. Data files stay user-owned, so `smirror clean --self` reverts everything without UAC. New package: `internal/task/` with runner indirection for test injection. 25 new tests.
+- **MSI flipped to `perMachine` + `ProgramFiles64Folder` + HKLM** (SEC-C2 fix). Binary is no longer in user-writable `%LOCALAPPDATA%`; standard users cannot replace `smirror.exe`. Each component's KeyPath is now its file with `Guid="*"` for WiX auto-generation — eliminates the prior hand-rolled-GUID collision class that caused uninstall to leave files behind.
+- **MSI no longer auto-registers a service** as a side effect of install. Background registration is an explicit user step (`smirror task install` recommended, `smirror service install` for 24/7 admin-only mode).
+- **SEC-C5 widened**: admin-owned-config gate for service mode is always-on (previously only when hooks configured). `smirror service install` refuses at install time if config isn't admin-owned; service re-checks at startup as defense-in-depth. Remedy: move config to `%ProgramData%\SelectiveMirror\config.yaml`, or use task mode instead.
+- **MSI version propagation fixed**. `ProductVersion` in the MSI now tracks the git tag (or `cmd/smirror/main.go` for local builds), flowing through `build-msi.ps1` → `/p:Version` → wixproj `DefineConstants` → `Variables.wxi`. Previously every MSI advertised 0.8.0 regardless of the bundled binary version.
 
-- **New per-user Scheduled Task mode** (`smirror task install/uninstall/start/stop/status`). Registers via `schtasks.exe` with an XML task definition (schema 1.2, Win 7+). Trigger: at logon. Principal: current user, InteractiveToken, LeastPrivilege. Restart-on-failure 3x PT1M. No admin required. Data files stay owned by the user, so `smirror clean --self` can remove everything without UAC. New package: `internal/task/` with runner indirection for test injection. 19 new tests.
-- **MSI installer flipped to perMachine + `ProgramFiles64Folder` + HKLM** (SEC-C2 fix). Binary is no longer in user-writable `%LOCALAPPDATA%` — a standard user can't replace `smirror.exe` to hijack a running service. MSI no longer auto-registers a LocalSystem service as a side effect of install; background registration is an explicit user step (`smirror task install` or `smirror service install`).
-- **SEC-C5 widened**: admin-owned-config gate for service mode is now always-on (previously only when hooks were configured). `smirror service install` checks at install time; the service also re-checks at startup. Fix: move config to `%ProgramData%\SelectiveMirror\config.yaml`, or use per-user task mode instead.
+### CLI
 
-### Command-line split
+- `smirror clean` replaced its old alias-for-`service stop uninstall --clean` with an explicit plan-and-confirm flow:
+  - `--self` (default): remove current user's task + `~/.selectivemirror/`. No admin required.
+  - `--all`: `--self` plus Windows Service uninstall + `%ProgramData%\SelectiveMirror`. Admin for service parts.
+  - Prints a preview of what will be removed; prompts for confirmation unless `--yes`.
+- `smirror task <action>` new command family. Actions: `install`, `uninstall`, `start`, `stop`, `status`.
 
-- **`smirror clean` replaced** its old alias-for-`service stop uninstall --clean` with an explicit plan-and-confirm flow:
-  - `--self` (default): remove current user's task + `~/.selectivemirror/`. No admin.
-  - `--all`: `--self` plus service uninstall + `%ProgramData%\SelectiveMirror`. Admin for the service parts.
-- `cmd/smirror/cmdclean.go` and `cmd/smirror/cmdtask.go` are new; main.go dispatch updated.
+### Security (critical audit findings)
 
-
-
-### Security (critical, all fixed pre-release)
-
-- **SEC-C1 (SM-147)**: Supply-chain hardening for `git-pkgs/gitignore v1.1.1`. Audited source (874 LOC, stdlib-only). CI now runs `go mod verify` on every build. Dependency-upgrade policy added to CONTRIBUTING.md.
-- **SEC-C3 (SM-144)**: Webhook path sanitizer was missing when running in service mode. One-line fix; webhook payloads now redact home-dir paths in both foreground and service modes.
+- **SEC-C1 (SM-147)**: Supply-chain hardening for `git-pkgs/gitignore v1.1.1`. Audited source (874 LOC, stdlib-only). CI runs `go mod verify` on every build. Dependency-upgrade policy added to CONTRIBUTING.md.
+- **SEC-C2 (SM-152)**: MSI LPE via binary-replace. Fixed by perMachine + `ProgramFiles64Folder` (this release).
+- **SEC-C3 (SM-144)**: Webhook path sanitizer missing in service mode. Fixed; webhook payloads now redact home-dir paths in both foreground and service modes.
 - **SEC-C4 (SM-145)**: Webhook SSRF hardening. Sender now rejects non-HTTPS URLs, blocks private/loopback/link-local/CGNAT IP ranges, disables HTTP redirects, and re-checks the resolved IP inside the TCP DialContext (DNS-rebind-resistant). 12 new tests.
-- **SEC-C5 (SM-146)**: Hook injection hardening. Added admin-owned-config gate for service-mode installs with hooks (`internal/config/acl_windows.go` + `acl_other.go`). `SMIRROR_*` environment values are now rejected if they contain shell metacharacters (`& | < > " ^ $ \` ( ) ;` or control chars) before hook spawn. 19 new tests.
+- **SEC-C5 (SM-146)**: Hook injection hardening. Admin-owned-config gate for service-mode installs (`internal/config/acl_windows.go` + `acl_other.go`). `SMIRROR_*` environment values are rejected if they contain shell metacharacters (`& | < > " ^ $ \` ( ) ;` or control chars) before hook spawn. 19 new tests.
+
+Outstanding from the audit: 11 HIGH findings (rclone flag allowlist, copyto TOCTOU, NTFS junctions, ACL-on-Windows accuracy, code signing, OAuth tokens in stderr logs, SHA256 on rclone download, etc.) and 16 MEDIUM / 5 LOW deferred to post-0.9.0.
+
+### CI / release pipeline
+
+- `release.yml` now runs `installer/smoke-test.ps1` between MSI build and upload. SEC-C2 regressions, registry-scope regressions, service-install regressions, version-propagation regressions, and uninstall-leftover regressions all block the release.
+- `installer/smoke-test.ps1` is the new regression harness. 16 invariants covering MSI tables, install side, task round-trip, uninstall cleanup. Runs idempotently with self-cleanup in phase 0.
 
 ### Dependencies / toolchain
 
-- **SM-148: SQLite driver swap**. `modernc.org/sqlite` → `github.com/mattn/go-sqlite3 v1.14.42`. Dependency tree collapsed from 13 transitive packages to 5 direct + 0 indirect. Binary grew from 17.6 MB → 23.5 MB (statically-linked SQLite C). First build ~65s; cached builds ~3s. **Build now requires a C toolchain** (MinGW-w64 on Windows); end users still get a zero-dependency binary.
-- **Release pipeline is now Windows-only** (SM-151). `.goreleaser.yaml` dropped linux/darwin; `installer/build-msi.ps1` flipped to `CGO_ENABLED=1`; `test/verify.ps1` cross-compile check reduced to `windows/amd64`. SRS NFR-AD-01/NFR-AD-03 and VV-Plan Portability row updated.
+- **SM-148: SQLite driver swap**. `modernc.org/sqlite` → `github.com/mattn/go-sqlite3 v1.14.42`. Dependency tree collapsed from 13 transitive packages to 5 direct + 0 indirect. Binary grew from 17.6 MB → 23.5 MB (statically-linked SQLite C). Build requires a C toolchain (MinGW-w64 on Windows); end users still get a zero-dependency binary.
+- **SM-151: Windows-only release pipeline**. `.goreleaser.yaml` dropped linux/darwin; `build-msi.ps1` flipped to `CGO_ENABLED=1`; `test/verify.ps1` cross-compile check reduced to `windows/amd64`. SRS NFR-AD-01/NFR-AD-03 and VV-Plan Portability row updated.
 
 ### Fixed
 
 - **SM-149**: Three data races in watcher/notify/sync test code. All fixed using event-based synchronisation (channels / WaitGroups) per user preference — no timeout-based fixes.
 - **SM-150**: Inverted system-validation test (`TestBugHunter_SyncIgnoreIsNotSynced` had asserted the wrong behavior for SM-125).
-- SM-117 through SM-143: Codex verification-suite fixes, validation-report fixes, misc docs/lint stragglers.
-- SM-107/108/109: Filter validation tightened; batch `--max-size` applied; `sync-now` exit code corrected.
-- SM-110..116: Fail-open filter on parse error, exit codes, ghost scan, misleading hint.
-- 0.8.20 bugs: ghost scan race, batch fail-open, UTF-8 BOM, trailing-space handling in `.syncignore`.
-- `report-bug --open` prefill; filter reload hardening; sync/status output improvements; help-flag support on every subcommand.
+- SM-107 through SM-143: filter validation, batch `--max-size`, `sync-now` exit code, fail-open filter on parse error, UTF-8 BOM handling, trailing-space in `.syncignore`, ghost scan race, `report-bug --open` prefill, filter reload hardening, sync/status output, help-flag on every subcommand, Codex verification-suite fixes, validation-report fixes.
 
 ### Changed
 
-- **SM-142**: Centralized runtime repo constants (`repoOwner` / `repoName` in main.go) so GitHub URLs are no longer scattered through the codebase.
+- **SM-142**: Centralized runtime repo constants (`repoOwner` / `repoName` in `main.go`).
 - `report-bug` title format improved.
 
-### Verification state at 0.8.48-dev
+### Verification state at release
 
 - `go build`, `go vet`, `go mod verify`: clean.
-- 14 packages pass unit tests (539 cases); 65.0% coverage on `internal/` (gate 35%).
-- Race detector clean across all 14 packages.
+- 15 packages pass unit tests (558+ cases, including 25 new in `internal/task/`). 65%+ coverage on `internal/` (gate 35%).
+- Race detector clean across all 15 packages.
 - 2 fuzz targets × 30s (18M+ execs): clean.
 - system-validation: 61/61 goals.
 - Integration tests (`test/run_tests.ps1`): 123/123 pass.
-- MSI build: succeeds (3.6 MB).
+- MSI smoke test: 16/16 invariants pass.
 - golangci-lint: clean modulo 2 documented gocyclo warnings (cmdStatus=64, cmdAddMirror=52).
-
-### Outstanding (not blocking 0.8.x release)
-
-- SEC-C2: MSI installs `smirror.exe` to user-writable `%LOCALAPPDATA%`, then registers as LocalSystem service → LPE via binary replace. Fix requires switching `Scope="perUser"` to `perMachine` + `ProgramFiles64Folder`. Changes UX; deferred to user decision.
-- 11 HIGH findings from `docs/security-audit-2026-04-18.md` (rclone flag injection, copyto TOCTOU, NTFS junctions, ACL-on-Windows accuracy, code signing, OAuth tokens in stderr logs, SHA256 on rclone download, etc.).
-- End-to-end tag-release test (`git tag v* && push --tags`) for the `release.yml` pipeline with the new CGo toolchain — untested in this cycle.
 
 ---
 
