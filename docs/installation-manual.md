@@ -234,7 +234,7 @@ rclone stores its configuration at `%APPDATA%\rclone\rclone.conf` on Windows. Th
 
 ## Option A: MSI Installer (Recommended)
 
-1. Download `SelectiveMirror-0.4.0-amd64.msi` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
+1. Download `SelectiveMirror.msi` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
 2. Double-click the MSI file
 3. Follow the installation wizard
 4. The installer places `smirror.exe` in `C:\Program Files\SelectiveMirror\` and adds it to the system PATH
@@ -249,12 +249,12 @@ smirror version
 Expected output:
 
 ```
-smirror 0.4.0
+smirror 0.8.x
 ```
 
 ## Option B: Portable Installation (ZIP)
 
-1. Download `SelectiveMirror-0.4.0-amd64.zip` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
+1. Download `SelectiveMirror-windows-amd64.zip` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
 2. Extract the ZIP to a directory of your choice (e.g., `C:\Tools\SelectiveMirror\`)
 3. Add that directory to your system PATH (same procedure as described in Section 3, Option D)
 4. Create the configuration directory manually:
@@ -328,7 +328,7 @@ heartbeat_interval_sec: 300  # Write heartbeat to log every N seconds (default: 
 reconcile_interval_sec: 300  # Periodic full sync interval in seconds (default: 300)
 sync_workers: 4              # Concurrent sync workers, 1--16 (default: 4)
 
-delete_policy: ignore        # ignore (default), mirror, or quarantine
+delete_policy: delete        # delete (default), ignore, or quarantine
 quarantine_days: 30          # Days to keep quarantined files (default: 30)
 ```
 
@@ -336,9 +336,9 @@ quarantine_days: 30          # Days to keep quarantined files (default: 30)
 
 | Policy | Behavior |
 |--------|----------|
-| `ignore` | Local deletions are not propagated to the remote (default) |
-| `mirror` | When a local file is deleted, the corresponding remote file is also deleted |
-| `quarantine` | Deleted files are moved to a `.quarantine/` directory on the remote instead of being permanently deleted. Files older than `quarantine_days` are cleaned up automatically |
+| `delete` (default) | Local deletions are mirrored to the remote. `mirror` is a deprecated alias. |
+| `ignore` | Local deletions are not propagated — the remote is append-only |
+| `quarantine` | Deleted files are moved to a `.quarantine/` directory on the remote. Files older than `quarantine_days` are cleaned up automatically |
 
 ### Timestamps
 
@@ -491,53 +491,89 @@ smirror test-mirrors
 The `test-mirrors` command runs diagnostic checks including rclone version verification, config validation, state database integrity, lock file status, remote connectivity, and drift detection.
 
 
-# 8. Running as a Windows Service
+# 8. Background Modes
 
-SelectiveMirror includes native Windows Service support via `golang.org/x/sys/windows/svc`. The service runs as LocalSystem with automatic start and crash recovery.
+SelectiveMirror supports three ways to keep the file watcher running:
 
-## Installing the Service
+| Mode | When it runs | Privilege | Admin to set up? | Best for |
+|------|--------------|-----------|------------------|----------|
+| **Foreground** (`smirror start`) | While the terminal is open | Current user | No | Development, debugging, one-off syncs |
+| **Scheduled Task** (`smirror task ...`) | From user logon to logoff | Current user | **No** | **Default recommended mode — desktop installs** |
+| **Windows Service** (`smirror service ...`) | Continuously, across logoff and reboot | LocalSystem | Yes (admin) | 24/7 unattended servers; when sync must survive logoff |
 
-Open an **elevated** PowerShell or Command Prompt and run:
+The MSI installer places `smirror.exe` in `%ProgramFiles%\SelectiveMirror\` and adds it to PATH. It does **not** automatically register a background service — you choose the mode that matches your use case.
 
-```
-smirror service install start
-```
+## Option A: Scheduled Task (recommended)
 
-This installs and starts the service in one step. You can also run them separately:
-
-```
-smirror service install
-smirror service start
-```
-
-The `install` command registers the service with Windows SCM, auto-detects rclone's path (resolving it for the SYSTEM account), and configures automatic restart on failure (10s, 30s, 60s delays).
-
-## Managing the Service
+The task mode is the equivalent of how Dropbox, Google Drive Desktop, and OneDrive run: a per-user background process that starts at logon, owned and cleanable by the user with no admin rights.
 
 ```
-smirror service start                        # Start the service
-smirror service stop                         # Stop the service
-smirror service stop uninstall               # Stop and uninstall in one step
-smirror service uninstall                    # Remove the service registration
-smirror service uninstall --clean            # Uninstall and remove all user data
-smirror service uninstall --clean --yes      # Same, skip confirmation prompts
+smirror task install   # register for current user (no admin)
+smirror task status    # show installed/running state
+smirror task start     # run once now without waiting for logon
+smirror task stop      # terminate any running instance
+smirror task uninstall # remove the task
 ```
 
-You can also manage it via Windows Services (`services.msc`) where it appears as "SelectiveMirror".
+Key properties:
 
-The `--clean` flag removes user data (config.yaml, state.db, logs) after uninstalling. This requires double confirmation unless `--yes` is passed.
+- Data files in `~/.selectivemirror/` are owned by you — `smirror clean --self` can remove them without admin.
+- The task is named `SelectiveMirror` under your user's task folder. You can also inspect/edit it from `taskschd.msc`.
+- Each user on a shared machine installs and controls their own task independently.
+- The task is disabled while your screen is locked only if you have Group Policy forcing that; by default it keeps running.
 
-## Checking Service Status
+## Option B: Windows Service (advanced, 24/7)
+
+Use the Windows Service when you need sync to continue running across user logoffs, or on a headless/unattended server. Service mode requires admin and runs as LocalSystem.
+
+### Prerequisite: admin-owned config (SEC-C5)
+
+Because the service runs as LocalSystem and reads your config as LocalSystem, the config file must be owned by an administrative principal. Otherwise any standard user who can edit `config.yaml` could use `rclone_path`, `rclone_extra_flags`, or hooks to execute arbitrary code as SYSTEM.
+
+Move the config to an admin-owned location before installing the service:
+
+```powershell
+# From an elevated (admin) terminal:
+New-Item -ItemType Directory -Path "$env:ProgramData\SelectiveMirror" -Force
+Copy-Item "$env:USERPROFILE\.selectivemirror\config.yaml" "$env:ProgramData\SelectiveMirror\config.yaml"
+# Optional: lock down the ACL so only admins can edit
+icacls "$env:ProgramData\SelectiveMirror\config.yaml" /inheritance:r /grant:r "Administrators:F" "SYSTEM:F"
+```
+
+### Install, start, stop, uninstall
+
+Open an **elevated** terminal and run:
+
+```
+smirror --config "%ProgramData%\SelectiveMirror\config.yaml" service install start
+```
+
+`smirror service install` refuses to register the service if the config is not admin-owned; follow the printed remedy.
+
+You can also run the actions separately:
+
+```
+smirror service install    # register with SCM
+smirror service start      # start the service
+smirror service stop       # stop the service
+smirror service stop uninstall        # stop and remove registration
+smirror service uninstall --clean     # remove registration and %ProgramData%\SelectiveMirror
+smirror service uninstall --clean --yes   # same, no prompts
+```
+
+The service also appears in Windows Services (`services.msc`) as "SelectiveMirror".
+
+## Checking status
 
 ```
 smirror status
 ```
 
-This shows whether the service is running, its PID, uptime, sync metrics, and ghost scan results.
+Shows whether the task and/or service is running, the PID, uptime, sync metrics, and ghost scan results.
 
 ## Foreground Mode
 
-For development or debugging, run `smirror start` directly in a terminal instead of using the service. The single-instance lock ensures only one instance runs at a time.
+For development or debugging, run `smirror start` directly in a terminal. The single-instance lock ensures only one instance runs per config.
 
 
 # 9. Upgrading and Uninstalling
@@ -572,23 +608,33 @@ After upgrading rclone, run `smirror test-mirrors` to verify continued compatibi
 
 ## Uninstalling SelectiveMirror
 
-If the service is running, stop and uninstall it first:
+### Per-user cleanup (no admin)
+
+To remove your scheduled task and personal data directory:
 
 ```
-smirror service stop uninstall --clean
+smirror clean --self
 ```
 
-This stops the service, removes the service registration, and deletes all user data (config, state DB, logs). Omit `--clean` to preserve user data.
+This removes the per-user task and `~/.selectivemirror/`. The binary in Program Files and any Windows Service remain untouched.
+
+### Full removal (admin)
+
+```
+smirror clean --all
+```
+
+Removes the task, your user data, the Windows Service (if installed), and `%ProgramData%\SelectiveMirror`. Prompts for UAC if the service is installed. Then use **Settings > Apps > Installed apps** or **Control Panel > Programs and Features** to uninstall the MSI, which removes `smirror.exe` from Program Files.
 
 ### MSI Uninstall
 
-Use **Settings > Apps > Installed apps** or **Control Panel > Programs and Features** to uninstall. The MSI uninstaller removes the binary and PATH entry but **preserves** the `~/.selectivemirror/` directory containing your configuration and state database. Run `smirror service uninstall --clean` before the MSI uninstall to remove user data, or delete `%USERPROFILE%\.selectivemirror\` manually.
+The MSI uninstaller removes the binary and PATH entry. It does **not** automatically remove scheduled tasks or user data — each user on the machine should run `smirror clean --self` from their own account before the MSI is uninstalled.
 
 ### Portable Uninstall
 
-1. Delete the `smirror.exe` binary
-2. Remove the directory from your system PATH (or use the PATH cleanup offered by `smirror service uninstall`)
-3. Optionally delete `%USERPROFILE%\.selectivemirror\`
+1. Run `smirror clean --self` (and `smirror clean --all` if you installed a service)
+2. Delete the `smirror.exe` binary
+3. Remove the directory from PATH
 
 
 # 10. Troubleshooting Installation Issues

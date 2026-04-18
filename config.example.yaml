@@ -1,5 +1,14 @@
 # SelectiveMirror configuration
 # Copy to ~/.selectivemirror/config.yaml and customize.
+#
+# Location by background mode:
+#   * Foreground (smirror start) and Scheduled Task (smirror task install):
+#       ~/.selectivemirror/config.yaml   (user-writable; default)
+#   * Windows Service (smirror service install):
+#       %ProgramData%\SelectiveMirror\config.yaml   (admin-owned per SEC-C5)
+# The service refuses to start from a user-writable config to prevent
+# standard users from pivoting to LocalSystem via rclone_path /
+# rclone_extra_flags / hooks.
 
 # Default rclone remote for new mirrors added via `smirror addmirror`.
 # Set with: smirror remote gdrive:smirror

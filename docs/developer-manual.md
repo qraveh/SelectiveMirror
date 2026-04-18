@@ -24,13 +24,26 @@ cmd/smirror/main.go          CLI entry point, command dispatch
         +-- internal/logging      Structured logging with file rotation
         +-- internal/metrics      Atomic counters, status.json generation
         +-- internal/notify       Desktop notifications + SSRF-safe webhook sender
-        +-- internal/service      Windows Service integration (SCM handler)
+        +-- internal/task         Per-user Scheduled Task registration (recommended mode)
+        +-- internal/service      Windows Service integration (SCM handler, advanced)
         +-- internal/watcher      fsnotify event loop, FairQueue dispatch, recursive watch
         +-- internal/sync         FairQueue, task processing, rclone subprocess, hash check
         +-- internal/anomaly      Classification, JSONL recording, rotation, hypotheses
         +-- internal/hooks        Pre/post-sync shell command execution (30s timeout)
         +-- internal/telemetry    Opt-in anonymous telemetry + GitHub Releases update check
 ```
+
+## Background Execution Modes
+
+SelectiveMirror supports two background modes plus foreground:
+
+| Mode | Package | Privilege | Admin to manage? | Data owner |
+|------|---------|-----------|------------------|-----------|
+| Foreground (`smirror start`) | — | Current user | No | Current user |
+| **Scheduled Task** (`smirror task ...`) | `internal/task` | Current user | **No** | Current user |
+| Windows Service (`smirror service ...`) | `internal/service` | LocalSystem | Yes | SYSTEM (service data dir under `%ProgramData%`) |
+
+Task mode is the recommended default; service mode is for 24/7 operation across logoffs. The task package wraps `schtasks.exe` via XML task definitions; tests inject a fake schtasks shell-out via the `runner` package variable.
 
 ## Data Flow
 
@@ -287,6 +300,7 @@ Creates a filter engine with no global excludes and no `.syncignore`, useful whe
 | `logging` | `internal/logging/` | slog setup, rotating file writer (10MB, 5 backups), console + file multi-writer |
 | `anomaly` | `internal/anomaly/` | 11-category classification, JSON-lines recording, 30-day/50MB rotation, causal hypothesis templates, path sanitization |
 | `hooks` | `internal/hooks/` | Pre/post-sync shell command execution (cmd.exe /C on Windows, sh -c on Unix), 30s timeout, shell-metachar rejection in env |
+| `task` | `internal/task/` | Per-user Scheduled Task registration via `schtasks.exe` + XML task definitions. Schema 1.2 (Windows 7+). Runner indirection for test injection. |
 | `telemetry` | `internal/telemetry/` | Opt-in anonymous telemetry payload builder + GitHub Releases update check (code written, not wired) |
 
 ## Dependency Graph
@@ -304,6 +318,7 @@ cmd/smirror
   +-- metrics       (no internal deps)
   +-- notify        (no internal deps, uses: golang.org/x/sys/windows)
   +-- service       depends on: config, logging (uses: golang.org/x/sys/windows/svc)
+  +-- task          (no internal deps; shells out to schtasks.exe via XML task def)
   +-- anomaly      (no internal deps)
   +-- hooks        (no internal deps)
   +-- telemetry    (no internal deps)

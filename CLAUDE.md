@@ -77,9 +77,10 @@ smirror explain Orch CLAUDE.md
 | `smirror remote [remote_path]` | Show or set the default rclone remote for new mirrors |
 | `smirror addmirror <path...> [flags]` | Add directories as mirrors (`-dest`, `--backup`, `--delete`, `--initial-sync`; aliases: `add-mirror`, `add`) |
 | `smirror unmirror <name\|path>` | Remove a mirror from config (aliases: `removemirror`, `remove-mirror`, `remove`) |
-| `smirror clean [--yes]` | Stop service, uninstall, and remove all user data |
+| `smirror clean [--self\|--all] [--yes]` | Remove user data + background registration. `--self` (default): per-user, no admin. `--all`: includes service + `%ProgramData%\SelectiveMirror`. |
 | `smirror selfupdate [flags]` | Check for and install updates (`--check`, `--whatsnew`, `--yes`, `--include-rclone`) |
-| `smirror service <action...>` | Windows Service: install [start], stop, uninstall [--clean] [--yes] |
+| `smirror task <action>` | Per-user Scheduled Task (recommended background mode; no admin): install, uninstall, start, stop, status |
+| `smirror service <action...>` | Windows Service: install [start], stop, uninstall [--clean] [--yes] (admin + admin-owned config required) |
 | `smirror version` | Show version |
 
 ### Exit codes
@@ -131,7 +132,8 @@ internal/metrics/metrics.go      — Thread-safe counters + status.json writer
 internal/logging/logging.go      — slog + rotating file handler
 internal/rclone/detect.go        — rclone binary detection + version compatibility
 internal/notify/notify.go        — Windows toast notifications (rate-limited)
-internal/service/service.go      — Windows SCM service integration
+internal/service/service.go      — Windows SCM service integration (LocalSystem; admin)
+internal/task/task.go            — Per-user Scheduled Task (schtasks.exe + XML; no admin)
 internal/anomaly/anomaly.go      — Anomaly classification, recording, rotation
 internal/hooks/hooks.go          — Pre/post-sync hook execution
 internal/telemetry/telemetry.go  — Opt-in anonymous telemetry + update check

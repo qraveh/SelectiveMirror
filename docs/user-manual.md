@@ -715,13 +715,67 @@ smirror report-bug --open       # print to console + open GitHub issue form in b
 
 Remote paths are redacted to show only the remote name (e.g., `gdrive:<REDACTED>`). User home paths are replaced with `<USER_HOME>`.
 
+## task
+
+Per-user Windows Scheduled Task management. The task registers smirror to run at user logon as the current user. **No admin privileges are required** — you own your own scheduled tasks.
+
+This is the recommended background mode for desktop installs. Use `service` only when you need 24/7 operation across logoffs.
+
+```
+smirror task install     # register for current user, trigger at next logon
+smirror task status      # show installed/running state and last run info
+smirror task start       # run the task now without waiting for logon
+smirror task stop        # terminate any running instance
+smirror task uninstall   # remove the per-user task
+```
+
+Example `status` output:
+
+```
+Task "SelectiveMirror": installed
+  State: idle (ready for next logon trigger)
+  Last run: 4/18/2026 6:12:00 PM (result=0)
+```
+
+The task is also visible in **Task Scheduler** (`taskschd.msc`) under your user folder. Each user on a shared machine installs their own task independently and controls it independently.
+
+## service
+
+Windows Service management. The service runs as LocalSystem and continues across logoff/reboot. **Admin privileges are required** for install/start/stop/uninstall.
+
+The service enforces SEC-C5: the config file must be owned by Administrators or LocalSystem (typically `%ProgramData%\SelectiveMirror\config.yaml`). See Installation Manual §8 Option B for setup.
+
+```
+smirror --config "%ProgramData%\SelectiveMirror\config.yaml" service install start
+smirror service start
+smirror service stop
+smirror service stop uninstall
+smirror service uninstall --clean         # remove service and service data dir
+smirror service uninstall --clean --yes   # skip prompts
+```
+
+Compound actions are supported: `install start`, `stop uninstall`, `stop uninstall --clean`.
+
+## clean
+
+Remove background registration and user data.
+
+```
+smirror clean              # interactive per-user cleanup (--self is the default)
+smirror clean --self       # remove current user's task + ~/.selectivemirror/ (no admin)
+smirror clean --all        # --self plus Windows Service + %ProgramData%\SelectiveMirror (admin for service)
+smirror clean --self --yes # scripted (skip confirmation)
+```
+
+The command prints a preview of what will be removed and asks for confirmation unless `--yes` is passed. If nothing is present to remove, it prints "Nothing to clean" and exits with code 0.
+
 ## version
 
 Show the smirror version.
 
 ```
 > smirror version
-smirror 1.0.0
+smirror 0.8.x
 ```
 
 

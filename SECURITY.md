@@ -36,6 +36,8 @@ SelectiveMirror handles file paths, rclone credentials (indirectly via rclone's 
 - No network listeners: smirror makes outbound connections only (via rclone subprocesses).
 - Log, status, and anomaly files are created with mode 0600 (owner-only access).
 - Webhook payloads sanitize absolute paths before transmission.
+- The MSI installer is perMachine (`%ProgramFiles%\SelectiveMirror\`) — the binary directory is admin-owned, so a standard user cannot replace `smirror.exe` to hijack a running service (SEC-C2).
+- Background registration is an opt-in post-install step (`smirror task install` or `smirror service install`), not an automatic MSI side effect — users choose their privilege model.
 
 ## Hook Security (pre_sync_hook / post_sync_hook)
 
@@ -47,8 +49,9 @@ Hooks are user-provided shell commands executed by smirror before/after each fil
 - Timeout: 30 seconds (configurable)
 
 **Privilege level:**
-- Foreground mode: runs as the current user.
-- Windows Service mode: runs as **LocalSystem** (full system access).
+- Foreground mode (`smirror start`): runs as the current user.
+- Scheduled Task mode (`smirror task install`): runs as the current user.
+- Windows Service mode (`smirror service install`): runs as **LocalSystem** (full system access; requires admin-owned config per SEC-C5).
 
 **Environment variables passed to hooks:**
 - `SMIRROR_PROJECT` — mirror name
@@ -57,7 +60,7 @@ Hooks are user-provided shell commands executed by smirror before/after each fil
 - `SMIRROR_EVENT` — `pre_sync` or `post_sync`
 
 **Security requirements (enforced by smirror):**
-1. **Admin-owned config when running as Service with hooks (SEC-C5)**. If any mirror has `pre_sync_hook` or `post_sync_hook` and smirror runs as a Windows Service, smirror refuses to start unless the config file is owned by Administrators or LocalSystem. Remedy: move config to an admin-writable-only location such as `%ProgramData%\SelectiveMirror\config.yaml`, or remove hooks.
+1. **Admin-owned config when running as Service (SEC-C5, service-wide as of 0.8.51-dev)**. If smirror is installed as a Windows Service, it refuses to start unless the config file is owned by Administrators or LocalSystem. This is enforced at `smirror service install` time and again at service startup. The requirement was originally scoped to hook-bearing configs only; it was widened because `rclone_path` / `rclone_extra_flags` / delete-policy / filter rules also give a non-admin config-writer arbitrary-code-execution-as-SYSTEM. Remedy: move config to an admin-writable-only location such as `%ProgramData%\SelectiveMirror\config.yaml`, or use per-user task mode instead (`smirror task install` — no admin required, no SYSTEM).
 2. **Shell-metacharacter rejection (SEC-C5)**. Before spawning a hook, smirror rejects any environment value (`SMIRROR_PROJECT`, `SMIRROR_FILE`, `SMIRROR_REMOTE`, `SMIRROR_EVENT`) containing `& | < > " ^ $ \` ( ) ;` or control characters. These characters in a filename — e.g., `a&calc.exe` on Windows — would be interpreted as shell operators if the hook script references the variable. Rejection is logged and the hook is skipped for that specific event.
 3. **Always quote variables** in hook scripts anyway. The metachar filter is defense-in-depth; writing `echo "%SMIRROR_FILE%"` (Windows) or `echo "$SMIRROR_FILE"` (Unix) is still good practice.
 4. **Avoid hooks in Service mode** unless necessary. The LocalSystem account has unrestricted access to the machine.

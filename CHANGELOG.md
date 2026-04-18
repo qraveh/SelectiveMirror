@@ -5,7 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased] — 0.8.x-dev
 
-Covers work between v0.7.0 and the current `-dev` source. Patch numbers are not enumerated individually — each commit bumps the `-dev` patch; this block summarizes the cumulative changes filed as SM-081 through SM-151.
+Covers work between v0.7.0 and the current `-dev` source. Patch numbers are not enumerated individually — each commit bumps the `-dev` patch; this block summarizes the cumulative changes filed as SM-081 through SM-152.
+
+### Deployment model (0.8.50-dev through 0.8.52-dev)
+
+This is the most consequential user-facing change since hooks. SelectiveMirror historically defaulted to a Windows Service running as LocalSystem. That overreached privilege for a desktop file-sync tool and created the SEC-C2 LPE. Three changes, intended to ship together as a single minor bump (0.9.0) when the user releases:
+
+- **New per-user Scheduled Task mode** (`smirror task install/uninstall/start/stop/status`). Registers via `schtasks.exe` with an XML task definition (schema 1.2, Win 7+). Trigger: at logon. Principal: current user, InteractiveToken, LeastPrivilege. Restart-on-failure 3x PT1M. No admin required. Data files stay owned by the user, so `smirror clean --self` can remove everything without UAC. New package: `internal/task/` with runner indirection for test injection. 19 new tests.
+- **MSI installer flipped to perMachine + `ProgramFiles64Folder` + HKLM** (SEC-C2 fix). Binary is no longer in user-writable `%LOCALAPPDATA%` — a standard user can't replace `smirror.exe` to hijack a running service. MSI no longer auto-registers a LocalSystem service as a side effect of install; background registration is an explicit user step (`smirror task install` or `smirror service install`).
+- **SEC-C5 widened**: admin-owned-config gate for service mode is now always-on (previously only when hooks were configured). `smirror service install` checks at install time; the service also re-checks at startup. Fix: move config to `%ProgramData%\SelectiveMirror\config.yaml`, or use per-user task mode instead.
+
+### Command-line split
+
+- **`smirror clean` replaced** its old alias-for-`service stop uninstall --clean` with an explicit plan-and-confirm flow:
+  - `--self` (default): remove current user's task + `~/.selectivemirror/`. No admin.
+  - `--all`: `--self` plus service uninstall + `%ProgramData%\SelectiveMirror`. Admin for the service parts.
+- `cmd/smirror/cmdclean.go` and `cmd/smirror/cmdtask.go` are new; main.go dispatch updated.
+
+
 
 ### Security (critical, all fixed pre-release)
 
