@@ -54,6 +54,13 @@ jobs:
       - name: Build MSI
         run: powershell -ExecutionPolicy Bypass -File installer\build-msi.ps1 -Version ${{ steps.version.outputs.VERSION }}
 
+      # SEC-C2 regression gate: block the release if any MSI invariant fails
+      # (service silently registered, wrong install scope, HKCU registry
+      # entries, uninstall leftover files, etc.). GitHub Actions
+      # windows-latest runners execute as admin, which the script requires.
+      - name: MSI smoke test (install / task round-trip / uninstall)
+        run: powershell -ExecutionPolicy Bypass -File installer\smoke-test.ps1 -SkipBuild -Version ${{ steps.version.outputs.VERSION }}
+
       - name: Upload MSI to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
