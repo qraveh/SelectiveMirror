@@ -78,17 +78,23 @@ Heading "2. MSI table invariants (no install needed)"
 $installer = New-Object -ComObject WindowsInstaller.Installer
 $db = $installer.GetType().InvokeMember('OpenDatabase','InvokeMethod',$null,$installer,@($MsiPath,0))
 function Query([string]$sql) {
+    # Silence COM method return values so they don't leak to the pipeline
+    # (PowerShell emits unassigned return values by default, which would
+    # inject spurious $null entries into the row array).
     $view = $db.GetType().InvokeMember('OpenView','InvokeMethod',$null,$db,@($sql))
-    $view.GetType().InvokeMember('Execute','InvokeMethod',$null,$view,$null)
-    $rows = @()
+    [void]$view.GetType().InvokeMember('Execute','InvokeMethod',$null,$view,$null)
+    $rows = [System.Collections.ArrayList]::new()
     while ($true) {
         $rec = $view.GetType().InvokeMember('Fetch','InvokeMethod',$null,$view,$null)
         if (-not $rec) { break }
-        $rows += ,$rec
+        [void]$rows.Add($rec)
     }
-    return $rows
+    # Return via unary comma so PowerShell doesn't unwrap a single-row result
+    # into the scalar record.
+    return ,$rows
 }
 function Field($rec,[int]$idx) {
+    if (-not $rec) { return $null }
     return $rec.GetType().InvokeMember('StringData','GetProperty',$null,$rec,@($idx))
 }
 
