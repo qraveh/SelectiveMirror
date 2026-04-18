@@ -118,15 +118,16 @@ function Invoke-UnitTests {
 }
 
 function Invoke-CrossPlatformBuilds {
-    Write-Section "Cross-platform builds"
+    # SM-148: Project is Windows-first. mattn/go-sqlite3 requires CGo; cross-
+    # compiling CGo from Windows to Linux/Darwin needs a cross-C toolchain we
+    # do not set up. If you need Linux/Darwin binaries, build natively on that
+    # platform. This check now just verifies windows/amd64 compiles.
+    Write-Section "Build (windows/amd64)"
     $savedGOOS   = $env:GOOS
     $savedGOARCH = $env:GOARCH
 
     $targets = @(
         @{ OS = 'windows'; Arch = 'amd64' }
-        @{ OS = 'linux';   Arch = 'amd64' }
-        @{ OS = 'linux';   Arch = 'arm64' }
-        @{ OS = 'darwin';  Arch = 'arm64' }
     )
 
     try {

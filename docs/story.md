@@ -22,7 +22,7 @@ SelectiveMirror, as it stands at v0.7.26-dev on April 2, 2026:
 
 - **8,331 lines** of production Go code across **14 packages**
 - **9,212 lines** of test code — more tests than production code
-- **392 unit tests** + 2 fuzz tests + 6 PowerShell integration test scripts
+- **530+ unit tests** + 2 fuzz tests + 6 PowerShell integration test scripts
 - **4,242 lines** of documentation (SRS, V&V Plan, user manual, developer manual, installation guide)
 - **83 bug reports** filed in a structured BugTracker with full causation analysis
 - **114 commits**, 4 tagged releases (v0.4.0 through v0.7.0)
@@ -66,7 +66,7 @@ For a **top-10% developer** — someone who ships production code daily, knows G
 | Trust model (remote verification) | 1 week | 30 minutes |
 | CI/CD + GoReleaser + MSI | 3-5 days | 1 day |
 | Documentation (SRS, user manual, etc.) | 2-3 weeks | Concurrent |
-| 392 tests + conformance suite | 2-3 weeks | Concurrent |
+| 530+ tests + conformance suite | 2-3 weeks | Concurrent |
 | Bug finding + analysis + fixing | Ongoing | 83 bugs in 7 days |
 | **Total** | **3-5 months** | **7 days** |
 
@@ -84,7 +84,7 @@ The production hardening phase is where the gap becomes a chasm. Every edge case
 |---|---|---|---|
 | Calendar time | **7 days** | 3-5 months | **8-14 months** |
 | Feature completeness | Full | Full | ~60% (no anomaly system, hooks, trust model, content-addressed sync) |
-| Test coverage | 392 tests | ~200 tests | ~50 tests |
+| Test coverage | 530+ tests | ~200 tests | ~50 tests |
 | Bugs found pre-production | 83 | ~20 | ~5 |
 | Documentation | 4,242 lines | ~1,000 lines | README only |
 | **Velocity ratio** | **1x** | **15-20x slower** | **40-60x slower** |

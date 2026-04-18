@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func tempStore(t *testing.T) *Store {
@@ -589,7 +589,7 @@ func TestAutoMigration_Incremental(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)")
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
 	if err != nil {
 		t.Fatal(err)
 	}

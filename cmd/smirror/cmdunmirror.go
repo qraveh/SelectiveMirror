@@ -12,20 +12,40 @@ import (
 
 // cmdUnmirror handles `smirror unmirror <name_or_path>`.
 func cmdUnmirror(configPath string, args []string) {
-	if subcommandHelp(args, `Usage: smirror unmirror <mirror_name | local_path | remote_path>
+	if subcommandHelp(args, `Usage: smirror unmirror <mirror_name | local_path | remote_path> [--yes]
 
 Remove a mirror from config.yaml.
 The local directory and remote files are NOT deleted.
+
+Flags:
+  --yes, -y    Skip confirmation prompt (required for non-interactive/scripted use)
 
 Aliases: removemirror, remove-mirror, remove
 
 Examples:
   smirror unmirror MyProject
   smirror unmirror C:\Projects\MyProject
-  smirror unmirror gdrive:backup/MyProject`) {
+  smirror unmirror gdrive:backup/MyProject --yes`) {
 		return
 	}
-	rejectUnknownFlags("unmirror", args)
+
+	// Parse --yes flag, reject unknown flags
+	autoYes := false
+	var positionalArgs []string
+	for _, a := range args {
+		switch a {
+		case "--yes", "-y":
+			autoYes = true
+		default:
+			if strings.HasPrefix(a, "-") {
+				fmt.Fprintf(os.Stderr, "unknown flag: %s\nRun 'smirror unmirror --help' for usage.\n", a)
+				os.Exit(ExitError)
+			}
+			positionalArgs = append(positionalArgs, a)
+		}
+	}
+	args = positionalArgs
+	checkMaxArgs("unmirror", args, 1)
 
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, `Usage: smirror unmirror <mirror_name | local_path | remote_path>
@@ -64,7 +84,9 @@ Examples:
 	fmt.Println("The local directory and remote files are NOT deleted.")
 	fmt.Println()
 
-	if isInteractive() {
+	if autoYes {
+		// Skip confirmation
+	} else if isInteractive() {
 		fmt.Print("Proceed? [y/N] ")
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
@@ -73,6 +95,11 @@ Examples:
 			fmt.Println("Cancelled.")
 			return
 		}
+	} else {
+		// SM-136: Non-interactive without --yes: refuse destructive operation.
+		fmt.Fprintln(os.Stderr, "Error: unmirror requires confirmation.")
+		fmt.Fprintln(os.Stderr, "Use --yes to skip the prompt in scripts/non-interactive mode.")
+		os.Exit(ExitError)
 	}
 
 	// Remove from config
@@ -102,20 +129,26 @@ func findMirror(cfg *config.Global, arg string) *config.Project {
 		return p
 	}
 
-	// Try local path match
-	absArg, _ := filepath.Abs(arg)
+	// Try local path match (SM-139: resolve junctions/symlinks for alias equivalence)
+	resolvedArg := strings.ToLower(filepath.Clean(resolveRealPath(arg)))
 	for i := range cfg.Projects {
 		p := &cfg.Projects[i]
-		absLocal, _ := filepath.Abs(p.LocalPath)
-		if strings.EqualFold(filepath.Clean(absArg), filepath.Clean(absLocal)) {
+		resolvedLocal := strings.ToLower(filepath.Clean(resolveRealPath(p.LocalPath)))
+		if resolvedArg == resolvedLocal {
 			return p
 		}
 	}
 
-	// Try remote match
+	// Try remote match (SM-140/SM-141: normalize trailing separators and slash style)
+	normalizeRemote := func(s string) string {
+		s = strings.ReplaceAll(s, `\`, `/`)
+		s = strings.TrimRight(s, `/`)
+		return strings.ToLower(s)
+	}
+	normArg := normalizeRemote(arg)
 	for i := range cfg.Projects {
 		p := &cfg.Projects[i]
-		if strings.EqualFold(p.Remote, arg) {
+		if normalizeRemote(p.Remote) == normArg {
 			return p
 		}
 	}

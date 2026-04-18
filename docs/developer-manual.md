@@ -16,17 +16,20 @@ SelectiveMirror is a real-time file synchronization engine for Windows that watc
 ```
 cmd/smirror/main.go          CLI entry point, command dispatch
         |
-        +-- internal/config       YAML config loading + validation
+        +-- internal/config       YAML config loading + validation, hook ACL gate
         +-- internal/filter       .syncignore parsing, rclone filter generation
         +-- internal/rclone       Binary detection, version parsing
         +-- internal/state        SQLite state database (sync history, hashes)
         +-- internal/lock         Single-instance file lock (Windows/Unix)
         +-- internal/logging      Structured logging with file rotation
         +-- internal/metrics      Atomic counters, status.json generation
-        +-- internal/notify       Desktop notifications (Windows toast)
+        +-- internal/notify       Desktop notifications + SSRF-safe webhook sender
         +-- internal/service      Windows Service integration (SCM handler)
         +-- internal/watcher      fsnotify event loop, FairQueue dispatch, recursive watch
         +-- internal/sync         FairQueue, task processing, rclone subprocess, hash check
+        +-- internal/anomaly      Classification, JSONL recording, rotation, hypotheses
+        +-- internal/hooks        Pre/post-sync shell command execution (30s timeout)
+        +-- internal/telemetry    Opt-in anonymous telemetry + GitHub Releases update check
 ```
 
 ## Data Flow
@@ -71,7 +74,7 @@ The core data flow follows a pipeline pattern:
 
 **Hash-based deduplication.** Before invoking rclone, the engine computes an MD5 hash of the local file and compares it against the last known hash in the state database. If the hash and mtime are unchanged and the previous sync succeeded (exit code 0), the file is skipped entirely.
 
-**Three-tier delete policy.** Local file deletions can be handled with `ignore` (do nothing on remote), `mirror` (delete remote file), or `quarantine` (move to `.quarantine/` with timestamp). Rename events always force-delete the old remote path regardless of policy.
+**Three-tier delete policy.** Local file deletions can be handled with `ignore` (do nothing on remote), `delete` (default — delete remote file; `mirror` is a deprecated alias), or `quarantine` (move to `.quarantine/` with timestamp). Rename events always force-delete the old remote path regardless of policy.
 
 
 # rclone Subprocess Architecture
@@ -86,7 +89,7 @@ SelectiveMirror deliberately invokes rclone as an external process rather than i
 
 3. **User-managed upgrades.** Users install and update rclone independently (via winget, chocolatey, scoop, or direct download). SelectiveMirror does not need to ship rclone or manage its lifecycle.
 
-4. **Binary bloat avoided.** Embedding rclone's dependency tree would add approximately 50MB to the SelectiveMirror binary. The standalone smirror binary is under 15MB.
+4. **Binary bloat avoided.** Embedding rclone's dependency tree would add approximately 50MB to the SelectiveMirror binary. The standalone smirror binary is approximately 23MB (includes statically-linked SQLite via CGo).
 
 5. **Testability.** The `RcloneRunner` function type allows tests to inject a fake implementation that returns predetermined exit codes without spawning any process.
 
@@ -149,7 +152,8 @@ Full-project syncs require an rclone filter file that mirrors the in-memory `.sy
 
 ## Prerequisites
 
-- **Go 1.22 or later** (the module uses `go 1.26.1` in go.mod, but builds with any compatible toolchain)
+- **Go 1.26+** (the module declares `go 1.26.1` in go.mod)
+- **CGo enabled** (default) with a C toolchain on PATH. On Windows: `winget install BrechtSanders.WinLibs.POSIX.UCRT` provides MinGW-w64; verify `gcc.exe` is on PATH. CGo is required because the SQLite driver (`github.com/mattn/go-sqlite3`) compiles SQLite C into the binary.
 - **Git** for cloning the repository
 - **rclone v1.73+** for runtime (not needed at build time)
 
@@ -161,7 +165,7 @@ cd SelectiveMirror
 go build -o bin/smirror.exe ./cmd/smirror/
 ```
 
-The binary is self-contained with no external dependencies (SQLite is embedded via `modernc.org/sqlite`, a pure-Go implementation).
+First build takes ~65s because SQLite C compiles; subsequent cached builds are ~3s. The resulting binary (~23 MB) is self-contained — SQLite is statically linked and end users do not need a C compiler.
 
 ## Version Injection
 
@@ -175,12 +179,14 @@ For release builds, GoReleaser handles this automatically (see the Release Proce
 
 ## Cross-Compilation
 
-SelectiveMirror is designed for Windows but the codebase compiles on Linux and macOS. Platform-specific behavior is isolated behind build tags:
+SelectiveMirror's release pipeline is **Windows-only** (windows/amd64) since SM-148 moved the SQLite driver to `mattn/go-sqlite3` (CGo). Native builds on Linux and macOS still compile with a local C toolchain but are not covered by the release pipeline or CI. Platform-specific behavior is isolated behind build tags:
 
 - `internal/watcher/recurse_windows.go` -- sets `supportsRecursiveWatch = true`
 - `internal/watcher/recurse_other.go` -- sets `supportsRecursiveWatch = false`
 - `internal/lock/lock_windows.go` -- Windows file locking via `LockFileEx`
 - `internal/lock/lock_unix.go` -- Unix file locking via `syscall.Flock`
+- `internal/config/acl_windows.go` -- Windows ACL owner check for hook config gate
+- `internal/config/acl_other.go` -- stub on non-Windows
 
 
 # Running Tests
@@ -265,20 +271,23 @@ Creates a filter engine with no global excludes and no `.syncignore`, useful whe
 
 ## Package Responsibilities
 
-| Package | Path | Approx. LOC | Responsibility |
-|---------|------|-------------|----------------|
-| `cmd/smirror` | `cmd/smirror/` | ~1400 | CLI entry point, command dispatch, heartbeat loop, reconciliation, doctor, verify, stats, report-bug |
-| `sync` | `internal/sync/` | ~700 | Task processing, rclone invocation, hash comparison, quiescence, delete policies, per-file locking |
-| `watcher` | `internal/watcher/` | ~700 | fsnotify event loop, FairQueue dispatch, recursive directory watching, symlink policy, health monitoring |
-| `config` | `internal/config/` | ~250 | YAML config loading, validation, defaults, path expansion |
-| `state` | `internal/state/` | ~300 | SQLite state database: schema, CRUD for sync_state/sync_log/meta tables, file hashing |
-| `filter` | `internal/filter/` | ~200 | .syncignore parsing via go-gitignore, hot-reload, rclone filter file generation |
-| `rclone` | `internal/rclone/` | ~170 | Binary detection (PATH + common install locations), version parsing, compatibility checking |
-| `metrics` | `internal/metrics/` | ~150 | Atomic counters, per-project status, status.json snapshot, human-readable formatting |
-| `notify` | `internal/notify/` | ~100 | Desktop notifications via Windows toast (drift alerts, sync failures) |
-| `service` | `internal/service/` | ~150 | Windows Service integration: SCM handler via `golang.org/x/sys/windows/svc`, compound commands (install [start], stop [uninstall]) |
-| `lock` | `internal/lock/` | ~80 | Single-instance file lock with PID recording, platform-specific locking |
-| `logging` | `internal/logging/` | ~80 | slog setup, rotating file writer (10MB, 5 backups), console + file multi-writer |
+| Package | Path | Responsibility |
+|---------|------|----------------|
+| `cmd/smirror` | `cmd/smirror/` | CLI entry point, command dispatch, heartbeat loop, reconciliation, doctor, verify, stats, report-bug, selfupdate, addmirror/unmirror |
+| `sync` | `internal/sync/` | Task processing, rclone invocation, hash comparison, quiescence, delete policies, per-file locking, FairQueue, circuit breaker, ghost detection |
+| `watcher` | `internal/watcher/` | fsnotify event loop, FairQueue dispatch, recursive directory watching, symlink policy, health monitoring, burst-delete detection |
+| `config` | `internal/config/` | YAML config loading, validation, defaults, path expansion, hook config ACL gate (SEC-C5) |
+| `state` | `internal/state/` | SQLite state database: schema, CRUD for sync_state/sync_log/meta tables, file hashing, auto-migration framework |
+| `filter` | `internal/filter/` | .syncignore parsing via git-pkgs/gitignore, hot-reload, rclone filter file generation, fail-open last-known-good on parse error |
+| `rclone` | `internal/rclone/` | Binary detection (PATH + common install locations), version parsing, compatibility checking |
+| `metrics` | `internal/metrics/` | Atomic counters, per-project status, status.json snapshot, human-readable formatting |
+| `notify` | `internal/notify/` | Desktop notifications (Windows toast) + SSRF-safe webhook sender (https-only, IP blocklist, no-redirect, DNS-rebind-resistant) |
+| `service` | `internal/service/` | Windows Service integration: SCM handler via `golang.org/x/sys/windows/svc`, compound commands (install [start], stop [uninstall]), Event Log integration |
+| `lock` | `internal/lock/` | Single-instance file lock with PID recording, platform-specific locking |
+| `logging` | `internal/logging/` | slog setup, rotating file writer (10MB, 5 backups), console + file multi-writer |
+| `anomaly` | `internal/anomaly/` | 11-category classification, JSON-lines recording, 30-day/50MB rotation, causal hypothesis templates, path sanitization |
+| `hooks` | `internal/hooks/` | Pre/post-sync shell command execution (cmd.exe /C on Windows, sh -c on Unix), 30s timeout, shell-metachar rejection in env |
+| `telemetry` | `internal/telemetry/` | Opt-in anonymous telemetry payload builder + GitHub Releases update check (code written, not wired) |
 
 ## Dependency Graph
 
@@ -287,16 +296,19 @@ The packages form a directed acyclic graph with `cmd/smirror` at the root:
 ```
 cmd/smirror
   +-- config       (no internal deps)
-  +-- filter        depends on: (external: go-gitignore)
+  +-- filter        depends on: (external: git-pkgs/gitignore)
   +-- rclone        (no internal deps)
-  +-- state         (no internal deps, uses: modernc.org/sqlite)
+  +-- state         (no internal deps, uses: mattn/go-sqlite3 — CGo, embeds SQLite)
   +-- lock          (no internal deps)
   +-- logging       (no internal deps)
   +-- metrics       (no internal deps)
   +-- notify        (no internal deps, uses: golang.org/x/sys/windows)
   +-- service       depends on: config, logging (uses: golang.org/x/sys/windows/svc)
-  +-- watcher       depends on: config, filter, sync
-  +-- sync          depends on: config, filter, metrics, state
+  +-- anomaly      (no internal deps)
+  +-- hooks        (no internal deps)
+  +-- telemetry    (no internal deps)
+  +-- watcher       depends on: config, filter, sync, anomaly
+  +-- sync          depends on: config, filter, metrics, state, anomaly, hooks
 ```
 
 
@@ -397,10 +409,10 @@ The critical invariant: **mutexes are never deleted from the map.** If a mutex w
 | Delete Policy | rclone Verb | Behavior |
 |---------------|-------------|----------|
 | `ignore` | (none) | No remote action on local delete |
-| `mirror` | `deletefile` | Remote file is deleted |
+| `delete` (default) | `deletefile` (file) / `purge` (directory) | Remote file or directory is deleted |
 | `quarantine` | `moveto` | Remote file is moved to `.quarantine/<path>.<timestamp>` |
 
-Rename events bypass the delete policy entirely. When a file is renamed, the old path's remote copy is an orphan. The watcher sends a `TaskDelete` with `ForceDelete: true`, which forces mirror-delete regardless of the configured policy.
+`delete_policy: mirror` is accepted as a deprecated alias for `delete`. Rename events bypass the delete policy entirely. When a file is renamed, the old path's remote copy is an orphan. The watcher sends a `TaskDelete` with `ForceDelete: true`, which forces delete regardless of the configured policy.
 
 
 # The Watcher
@@ -459,7 +471,7 @@ A background goroutine runs every 60 seconds and checks:
 
 # State Database Schema
 
-SelectiveMirror uses an embedded SQLite database (via `modernc.org/sqlite`, a pure-Go implementation) with WAL journal mode and normal synchronous mode for performance.
+SelectiveMirror uses an embedded SQLite database (via `github.com/mattn/go-sqlite3`, which statically links SQLite C into the binary through CGo) with WAL journal mode and normal synchronous mode for performance.
 
 ## Tables
 
@@ -530,7 +542,7 @@ The `mtime_ns` column was added in schema version 2. The migration is idempotent
 
 ## gitignore-Compatible Patterns
 
-The filter engine uses the `go-gitignore` library (`github.com/sabhiram/go-gitignore`) to evaluate file paths against exclusion patterns. Patterns follow `.gitignore` syntax:
+The filter engine uses the `git-pkgs/gitignore` library (`github.com/git-pkgs/gitignore`) to evaluate file paths against exclusion patterns. The library wraps git's native `wildmatch` algorithm (874 LOC, stdlib-only; see SEC-C1 in `docs/security-audit-2026-04-18.md`). Patterns follow `.gitignore` syntax:
 
 - `*.log` -- exclude all `.log` files
 - `node_modules/` -- exclude directory and everything under it

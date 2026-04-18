@@ -25,7 +25,8 @@ $ldflags = "-s -w -X main.version=$Version"
 
 Push-Location $root
 try {
-    $env:CGO_ENABLED = "0"
+    # CGo required (mattn/go-sqlite3). Ensure a C compiler is on PATH.
+    $env:CGO_ENABLED = "1"
     & go build -ldflags $ldflags -o $exe ./cmd/smirror/ 2>&1
     if ($LASTEXITCODE -ne 0) {
         Write-Host " FAILED" -ForegroundColor Red

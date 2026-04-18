@@ -35,8 +35,9 @@ import (
 // Endpoint is the telemetry server URL. Override for testing.
 var Endpoint = "https://telemetry.selectivemirror.dev/v1/report"
 
-// UpdateEndpoint is the update check URL (GitHub API).
-const UpdateEndpoint = "https://api.github.com/repos/qraveh/SelectiveMirror/releases/latest"
+// UpdateEndpoint is the update check URL (GitHub API). Override for testing
+// or repo relocation.
+var UpdateEndpoint = "https://api.github.com/repos/qraveh/SelectiveMirror/releases/latest"
 
 // Report is the anonymous telemetry payload sent periodically.
 type Report struct {

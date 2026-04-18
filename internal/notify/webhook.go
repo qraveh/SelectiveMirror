@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -67,17 +68,70 @@ type WebhookSender struct {
 	SanitizePath func(string) string
 }
 
+// AllowLoopbackWebhooks controls whether webhooks may target loopback/private
+// addresses. Set to true only in tests that use httptest.NewServer. In
+// production, leave false (the default) to enforce the SSRF defense.
+// SEC-C4.
+var AllowLoopbackWebhooks = false
+
 // NewWebhookSender creates a webhook notifier for the given URL.
+// SEC-C4: client is hardened against SSRF:
+//   - CheckRedirect: redirects are not followed (would bypass URL validation)
+//   - DialContext: rejects connections to loopback/private/link-local IPs
+//     at each resolution step (defends against DNS rebinding)
 func NewWebhookSender(url string) *WebhookSender {
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ipAddr := range ips {
+				if isBlockedWebhookIP(ipAddr.IP) {
+					return nil, fmt.Errorf("webhook: refusing to connect to blocked IP %s (SSRF defense)", ipAddr.IP)
+				}
+			}
+			// Dial using the first safe resolved IP to ensure we connect to
+			// what we checked (defense against TOCTOU between lookup and dial).
+			d := net.Dialer{Timeout: 5 * time.Second}
+			return d.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+		},
+	}
 	w := &WebhookSender{
-		url:           url,
-		client:        &http.Client{Timeout: 5 * time.Second},
+		url: url,
+		client: &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: transport,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse // do not follow redirects
+			},
+		},
 		log:           slog.Default().With("component", "webhook"),
 		incidents:     make(map[string]*incident),
 		EscalateAfter: 30 * time.Minute,
 		ResolveAfter:  10 * time.Minute,
 	}
 	return w
+}
+
+// isBlockedWebhookIP rejects loopback, private, link-local, and multicast
+// addresses to prevent SSRF against internal metadata/services. SEC-C4.
+// Tests that use httptest.NewServer must set AllowLoopbackWebhooks = true.
+func isBlockedWebhookIP(ip net.IP) bool {
+	if AllowLoopbackWebhooks && (ip.IsLoopback() || ip.IsPrivate()) {
+		return false
+	}
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified() ||
+		ip.IsInterfaceLocalMulticast()
 }
 
 // Record processes an anomaly event through the incident state machine.

@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"unsafe"
 
 	"github.com/mattn/go-isatty"
 	"github.com/qraveh/SelectiveMirror/internal/config"
@@ -15,6 +17,54 @@ import (
 	"github.com/qraveh/SelectiveMirror/internal/state"
 	msync "github.com/qraveh/SelectiveMirror/internal/sync"
 )
+
+// resolveRealPath resolves symlinks, junctions, and other reparse points to
+// the final physical path. On Windows, uses GetFinalPathNameByHandle which
+// resolves NTFS junctions that filepath.EvalSymlinks does not (SM-138).
+// Falls back to filepath.EvalSymlinks → filepath.Abs on failure.
+func resolveRealPath(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return path
+	}
+
+	p, err := syscall.UTF16PtrFromString(abs)
+	if err != nil {
+		return abs
+	}
+	h, err := syscall.CreateFile(p,
+		syscall.GENERIC_READ,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
+		nil,
+		syscall.OPEN_EXISTING,
+		syscall.FILE_FLAG_BACKUP_SEMANTICS,
+		0)
+	if err != nil {
+		// Fall back to EvalSymlinks
+		if r, err := filepath.EvalSymlinks(abs); err == nil {
+			return r
+		}
+		return abs
+	}
+	defer func() { _ = syscall.CloseHandle(h) }()
+
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	getFinalPath := kernel32.NewProc("GetFinalPathNameByHandleW")
+
+	buf := make([]uint16, 512)
+	n, _, _ := getFinalPath.Call(
+		uintptr(h),
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(len(buf)),
+		0,
+	)
+	if n == 0 || n >= uintptr(len(buf)) {
+		return abs
+	}
+	result := syscall.UTF16ToString(buf[:n])
+	result = strings.TrimPrefix(result, `\\?\`)
+	return result
+}
 
 // cmdAddMirror handles `smirror addmirror <path> [<path2> ...] [-dest <remote>]`.
 func cmdAddMirror(configPath string, args []string) {
@@ -86,6 +136,38 @@ Examples:
 		fmt.Fprintln(os.Stderr, "Error: at least one local path is required")
 		os.Exit(ExitConfigError)
 	}
+
+	// SM-133: Pre-validate all paths before modifying config (atomicity).
+	// Without this, `addmirror valid_path bogus` adds the first mirror to
+	// config.yaml, then errors on "bogus" — leaving config in a partial state.
+	// SM-134: Also deduplicate by resolved absolute path.
+	seen := make(map[string]bool, len(localPaths))
+	var validPaths []string
+	for _, lp := range localPaths {
+		abs, err := filepath.Abs(lp)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving path %s: %v\n", lp, err)
+			os.Exit(ExitError)
+		}
+		info, err := os.Stat(abs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %s does not exist: %v\n", abs, err)
+			os.Exit(ExitError)
+		}
+		if !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "Error: %s is not a directory\n", abs)
+			os.Exit(ExitError)
+		}
+		// SM-138: Resolve symlinks/junctions to detect aliases to the same directory.
+		key := strings.ToLower(filepath.Clean(resolveRealPath(abs)))
+		if seen[key] {
+			fmt.Fprintf(os.Stderr, "Warning: duplicate path %s (skipped)\n", abs)
+			continue
+		}
+		seen[key] = true
+		validPaths = append(validPaths, lp)
+	}
+	localPaths = validPaths
 
 	// SM-104: Use LoadRaw first to read default_remote even when config has no
 	// mirrors yet (validation would reject it). Fall back to full Load for the
@@ -239,6 +321,25 @@ global_excludes:
 		existingNames = cfg.ProjectNames()
 	}
 
+	// SM-137/SM-138: Check that none of the new paths are already configured as
+	// mirrors. Resolves symlinks/junctions so aliases to the same directory are caught.
+	if cfg != nil {
+		existingPaths := make(map[string]string) // normalized path → mirror name
+		for _, p := range cfg.Projects {
+			if abs, err := filepath.Abs(p.LocalPath); err == nil {
+				existingPaths[strings.ToLower(filepath.Clean(resolveRealPath(abs)))] = p.Name
+			}
+		}
+		for _, lp := range localPaths {
+			abs, _ := filepath.Abs(lp) // already validated in pre-validation
+			key := strings.ToLower(filepath.Clean(resolveRealPath(abs)))
+			if name, exists := existingPaths[key]; exists {
+				fmt.Fprintf(os.Stderr, "Error: %s is already configured as mirror '%s'\n", abs, name)
+				os.Exit(ExitError)
+			}
+		}
+	}
+
 	// Process each path
 	var addedMirrors []string
 	for _, lp := range localPaths {
@@ -259,6 +360,11 @@ global_excludes:
 		if doSync {
 			runInitialSync(configPath, addedMirrors)
 		}
+	}
+
+	// SM-133: Exit non-zero if any mirrors failed to add (defense in depth).
+	if len(addedMirrors) < len(localPaths) {
+		os.Exit(ExitError)
 	}
 }
 

@@ -28,6 +28,7 @@ Examples:
 		return
 	}
 	rejectUnknownFlags("remote", args)
+	checkMaxArgs("remote", args, 1)
 
 	if len(args) == 0 {
 		cmdRemoteShow(configPath)

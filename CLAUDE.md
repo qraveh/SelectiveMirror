@@ -9,7 +9,7 @@
 
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (raveh@qodeh.com)
-**Status**: v0.5.0 released (Phase 1+1.5+2+2.5+4 complete; Phase 6 anomaly intelligence next; Phase 3 USN journal + Phase 5 telemetry pending)
+**Status**: v0.8.x-dev (Phase 1+1.5+2+2.5+4+6+7 complete; Phase 3 USN journal pending; Phase 5 telemetry code written, not enabled)
 **License**: MIT
 **Language**: Go 1.26+
 
@@ -66,7 +66,7 @@ smirror explain Orch CLAUDE.md
 | Command | What it does |
 |---------|-------------|
 | `smirror start` | Start foreground watcher (single-instance locked) |
-| `smirror sync-now [mirror]` | Immediate full sync + ghost cleanup |
+| `smirror sync-now [mirror]` | Immediate full sync + ghost cleanup (alias: `syncnow`) |
 | `smirror dry-run [mirror]` | Show what would sync + ghost cleanup preview |
 | `smirror status [mirror]` | Show sync status, metrics, instance state |
 | `smirror test-mirrors [mirror]` | Run diagnostics and verify sync state (aliases: `doctor`, `verify`) |
@@ -81,6 +81,18 @@ smirror explain Orch CLAUDE.md
 | `smirror selfupdate [flags]` | Check for and install updates (`--check`, `--whatsnew`, `--yes`, `--include-rclone`) |
 | `smirror service <action...>` | Windows Service: install [start], stop, uninstall [--clean] [--yes] |
 | `smirror version` | Show version |
+
+### Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Config load/validation failure |
+| 3 | rclone-related failure (unreachable, auth, binary missing) |
+| 4 | Another instance is running (lock conflict) |
+| 5 | Diagnostic found drift (leaks, orphans, mismatches) |
+| 6 | selfupdate: new version available but user declined or preflight failed |
 
 ---
 
@@ -120,15 +132,18 @@ internal/logging/logging.go      — slog + rotating file handler
 internal/rclone/detect.go        — rclone binary detection + version compatibility
 internal/notify/notify.go        — Windows toast notifications (rate-limited)
 internal/service/service.go      — Windows SCM service integration
+internal/anomaly/anomaly.go      — Anomaly classification, recording, rotation
+internal/hooks/hooks.go          — Pre/post-sync hook execution
+internal/telemetry/telemetry.go  — Opt-in anonymous telemetry + update check
 ```
 
 ### Dependencies
 
 ```
 github.com/fsnotify/fsnotify      — Filesystem monitoring
-github.com/sabhiram/go-gitignore  — .gitignore-style pattern matching
-gopkg.in/yaml.v3                  — Config parsing
-modernc.org/sqlite                — Pure Go SQLite (no CGo)
+github.com/git-pkgs/gitignore     — .gitignore-style pattern matching
+go.yaml.in/yaml/v3               — Config parsing
+github.com/mattn/go-sqlite3       — SQLite driver (CGo; statically linked, no runtime deps)
 golang.org/x/sys                  — Windows syscalls (LockFileEx, OpenProcess)
 ```
 
@@ -169,7 +184,7 @@ See `config.example.yaml` for full annotated example.
 ## Testing
 
 ```bash
-# Run all unit tests (570+ tests across 15 packages)
+# Run all unit tests (530+ tests across 14 packages)
 go test ./internal/... ./cmd/... -p 24 -count=1
 
 # Run integration tests (adversarial, uses local rclone backend)
@@ -193,7 +208,7 @@ powershell -ExecutionPolicy Bypass -File test\run_tests.ps1
 |----------|-----------|
 | Go | Single binary, native Windows service (Phase 2), rclone is Go |
 | rclone subprocess | Clean error codes, zero coupling. Inherits rclone's per-backend rate limiting (pacer), exponential backoff, chunked uploads, checksum verification, and 70+ backend support — none of which smirror reimplements |
-| `modernc.org/sqlite` | Pure Go — no CGo, no gcc needed. Binary stays dependency-free |
+| `github.com/mattn/go-sqlite3` | Canonical Go SQLite driver; mature (since 2014), ~1 release/year, zero transitive deps. CGo is required at build time (one-time MinGW-w64 setup on Windows), but the resulting binary statically links SQLite and runs with no runtime dependencies. Trade: build-time toolchain vs. a 7-package churn-heavy modernc subtree |
 | `rclone copy` not `sync` | Never deletes remote files (unless delete_policy=mirror) |
 | MD5 hashing | Matches rclone's checksum for Google Drive / most backends |
 | Single rclone per backend | rclone's internal pacer handles API rate limits per-process. Multiple concurrent rclone processes to the same backend cause uncoordinated backoff (thundering herd). One process with `--transfers 4` is optimal for code-file workloads |
@@ -227,6 +242,8 @@ Follows [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
 - [ ] **Phase 3**: USN journal recovery — fast restart reconciliation
 - [x] **Phase 4**: OSS polish — CONTRIBUTING, SECURITY, PR template, winget manifest, CHANGELOG
 - [ ] **Phase 5**: Telemetry — opt-in analytics, update check (code written, set aside)
+- [x] **Phase 6**: Anomaly detection — classification, recording, rotation, webhook alerts
+- [x] **Phase 7**: Hooks — pre/post-sync hook execution with environment variables
 
 ---
 
@@ -241,6 +258,7 @@ Mirror `C:\ClaudeWork`, `C:\Orch`, `C:\HPL`, `C:\Zotero` → Google Drive `AI-hu
 - **rclone** (v1.73+): `winget install Rclone.Rclone`
 - **rclone remote**: Configure with `rclone config` (one-time)
 - **Go** (for building): `winget install GoLang.Go`
+- **MinGW-w64** (for building; CGo is required for the SQLite driver): `winget install BrechtSanders.WinLibs.POSIX.UCRT`
 
 ---
 
@@ -264,7 +282,7 @@ All dependencies are permissive-licensed (MIT, BSD, Apache 2.0). See CREDITS.md 
 **Upgrade policy**:
 - `go get -u ./...` to update all dependencies.
 - Run `go test ./internal/...` and `test/run_tests.ps1` after any dependency update.
-- `modernc.org/sqlite` is the most sensitive dependency (pure-Go SQLite). Major upgrades should be tested carefully against the state database.
+- `github.com/mattn/go-sqlite3` is the most sensitive dependency (SQLite driver). Mature and stable (~1 release/year); major upgrades should be tested carefully against the state database (WAL mode, concurrent goroutines, PRAGMA syntax).
 
 ### Licenses
 

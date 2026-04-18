@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // baseSchema creates the core tables. Applied once when the database is first created.
@@ -111,7 +111,7 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating state dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(wal)&_pragma=synchronous(normal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=ON&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("opening state db: %w", err)
 	}

@@ -158,10 +158,9 @@ func offerCrashSubmission(reportPath string) {
 		return
 	}
 
-	issueURL := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
-	issueURL += "&title=" + url.QueryEscape("[Crash] panic in smirror "+version)
+	crashURL := issueBugURL + "&title=" + url.QueryEscape("[Crash] panic in smirror "+version)
 	encoded := url.QueryEscape(string(report))
-	fullURL := issueURL + "&environment=" + encoded
+	fullURL := crashURL + "&environment=" + encoded
 
 	// Windows cmd.exe has ~8191 char limit for URLs
 	if len(fullURL) > 8000 {
@@ -169,7 +168,7 @@ func offerCrashSubmission(reportPath string) {
 		if len(truncated) > 3500 {
 			truncated = truncated[:3500] + "\n... (truncated, paste full report from " + reportPath + ")"
 		}
-		fullURL = issueURL + "&environment=" + url.QueryEscape(truncated)
+		fullURL = crashURL + "&environment=" + url.QueryEscape(truncated)
 	}
 
 	fmt.Fprintln(os.Stderr, "Opening browser...")

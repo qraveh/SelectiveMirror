@@ -1216,9 +1216,14 @@ func TestReloadFilter_ChangedRules_Enqueues(t *testing.T) {
 	// Change filter rules
 	os.WriteFile(syncignore, []byte("*.tmp\n*.bak\n"), 0644)
 
-	var callbackCalled bool
+	// Event-based wait for the async callback (SM-hooks preference: no timeouts
+	// for test synchronization — use a channel).
+	callbackFired := make(chan struct{}, 1)
 	m.OnFilterChange = func(proj config.Project) {
-		callbackCalled = true
+		select {
+		case callbackFired <- struct{}{}:
+		default:
+		}
 	}
 
 	m.reloadFilter(pw)
@@ -1228,9 +1233,12 @@ func TestReloadFilter_ChangedRules_Enqueues(t *testing.T) {
 		t.Errorf("filter reload should enqueue full sync, got %d tasks", queue.Len())
 	}
 
-	// Give async callback time to fire
-	time.Sleep(50 * time.Millisecond)
-	if !callbackCalled {
+	// Wait for async callback (bounded by a safety timeout, but the test
+	// passes/fails on the channel, not on the clock).
+	select {
+	case <-callbackFired:
+		// ok
+	case <-time.After(2 * time.Second):
 		t.Error("OnFilterChange callback should have been called")
 	}
 }

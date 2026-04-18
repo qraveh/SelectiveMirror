@@ -11,18 +11,17 @@ Development assistance and technical sparring:
 | Package | License | URL |
 |---------|---------|-----|
 | fsnotify/fsnotify | BSD 3-Clause | https://github.com/fsnotify/fsnotify |
-| sabhiram/go-gitignore | MIT | https://github.com/sabhiram/go-gitignore |
-| gopkg.in/yaml.v3 | MIT + Apache 2.0 | https://github.com/go-yaml/yaml |
-| modernc.org/sqlite | BSD 3-Clause | https://gitlab.com/cznic/sqlite |
-| golang.org/x/sys | BSD 3-Clause | https://pkg.go.dev/golang.org/x/sys |
-| dustin/go-humanize | MIT | https://github.com/dustin/go-humanize |
-| google/uuid | BSD 3-Clause | https://github.com/google/uuid |
+| git-pkgs/gitignore | MIT | https://github.com/git-pkgs/gitignore |
+| go.yaml.in/yaml/v3 | MIT + Apache 2.0 | https://github.com/go-yaml/yaml |
+| mattn/go-sqlite3 | MIT | https://github.com/mattn/go-sqlite3 |
 | mattn/go-isatty | MIT | https://github.com/mattn/go-isatty |
-| ncruces/go-strftime | MIT | https://github.com/ncruces/go-strftime |
-| modernc.org/libc | BSD 3-Clause | https://gitlab.com/cznic/libc |
-| modernc.org/mathutil | BSD 3-Clause | https://gitlab.com/cznic/mathutil |
-| modernc.org/memory | BSD 3-Clause | https://gitlab.com/cznic/memory |
-| remyoudompheng/bigfft | BSD 3-Clause | https://github.com/remyoudompheng/bigfft |
+| golang.org/x/sys | BSD 3-Clause | https://pkg.go.dev/golang.org/x/sys |
+
+### Embedded C (via mattn/go-sqlite3, statically linked at build time)
+
+| Component | License | URL |
+|-----------|---------|-----|
+| SQLite | Public Domain | https://www.sqlite.org/copyright.html |
 
 ### Runtime dependency (external process)
 

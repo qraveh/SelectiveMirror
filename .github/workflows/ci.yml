@@ -16,8 +16,18 @@ jobs:
         with:
           go-version: '1.26.1'
 
+      - name: Verify C toolchain present (CGo required for SQLite driver)
+        shell: pwsh
+        run: |
+          gcc --version
+          # GitHub-hosted windows-latest runners ship with mingw-w64 on PATH.
+          # If this ever fails, add: choco install mingw -y
+
       - name: Build
         run: go build -v ./cmd/smirror/
+
+      - name: Verify module bytes match go.sum (SEC-C1 supply-chain guard)
+        run: go mod verify
 
       - name: Vet
         run: go vet ./...
@@ -56,7 +66,7 @@ jobs:
 
       - name: Race detection (CGO-free packages)
         run: |
-          go test -race -v ./internal/filter/ ./internal/logging/ ./internal/lock/ ./internal/metrics/ ./internal/watcher/
+          go test -race -v ./internal/config/ ./internal/filter/ ./internal/logging/ ./internal/lock/ ./internal/metrics/ ./internal/watcher/
         env:
           CGO_ENABLED: 1
 
@@ -67,9 +77,9 @@ jobs:
 
       - name: Verify smirror version
         run: |
-          go build -o smirror.exe ./cmd/smirror/
-          .\smirror.exe version
+          go build -o bin\smirror.exe ./cmd/smirror/
+          .\bin\smirror.exe version
 
       - name: Verify smirror test-mirrors
-        run: .\smirror.exe test-mirrors
+        run: .\bin\smirror.exe test-mirrors
         continue-on-error: true  # may warn if no config or rclone remote

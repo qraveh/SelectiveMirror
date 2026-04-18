@@ -56,10 +56,11 @@ Hooks are user-provided shell commands executed by smirror before/after each fil
 - `SMIRROR_REMOTE` — rclone remote path
 - `SMIRROR_EVENT` — `pre_sync` or `post_sync`
 
-**Security requirements:**
-1. **Always quote variables** in hook scripts. Unquoted `$SMIRROR_FILE` or `%SMIRROR_FILE%` with adversarial filenames enables command injection.
-2. **Restrict config.yaml permissions** to 0600 (owner-only). Anyone who can edit config.yaml can execute arbitrary commands as the service account.
-3. **Avoid hooks in Service mode** unless necessary. The LocalSystem account has unrestricted access to the machine.
+**Security requirements (enforced by smirror):**
+1. **Admin-owned config when running as Service with hooks (SEC-C5)**. If any mirror has `pre_sync_hook` or `post_sync_hook` and smirror runs as a Windows Service, smirror refuses to start unless the config file is owned by Administrators or LocalSystem. Remedy: move config to an admin-writable-only location such as `%ProgramData%\SelectiveMirror\config.yaml`, or remove hooks.
+2. **Shell-metacharacter rejection (SEC-C5)**. Before spawning a hook, smirror rejects any environment value (`SMIRROR_PROJECT`, `SMIRROR_FILE`, `SMIRROR_REMOTE`, `SMIRROR_EVENT`) containing `& | < > " ^ $ \` ( ) ;` or control characters. These characters in a filename — e.g., `a&calc.exe` on Windows — would be interpreted as shell operators if the hook script references the variable. Rejection is logged and the hook is skipped for that specific event.
+3. **Always quote variables** in hook scripts anyway. The metachar filter is defense-in-depth; writing `echo "%SMIRROR_FILE%"` (Windows) or `echo "$SMIRROR_FILE"` (Unix) is still good practice.
+4. **Avoid hooks in Service mode** unless necessary. The LocalSystem account has unrestricted access to the machine.
 
 **Safe hook examples:**
 ```yaml

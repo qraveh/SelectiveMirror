@@ -530,3 +530,74 @@ func TestIsNotifyEnabled_ExplicitTrue(t *testing.T) {
 		t.Error("IsNotifyEnabled() should return true when set to true")
 	}
 }
+
+// SEC-C4: webhook URL validation
+func TestValidateWebhookURL(t *testing.T) {
+	tests := []struct {
+		name      string
+		url       string
+		wantError bool
+	}{
+		{"valid_https", "https://hooks.example.com/webhook", false},
+		{"reject_http", "http://example.com/webhook", true},
+		{"reject_loopback_ipv4", "https://127.0.0.1/webhook", true},
+		{"reject_loopback_ipv6", "https://[::1]/webhook", true},
+		{"reject_private_10", "https://10.0.0.1/webhook", true},
+		{"reject_private_192", "https://192.168.1.1/webhook", true},
+		{"reject_private_172", "https://172.16.0.1/webhook", true},
+		{"reject_link_local", "https://169.254.169.254/latest/meta-data", true},
+		{"reject_empty_host", "https:///path", true},
+		{"reject_invalid_scheme", "ftp://example.com/", true},
+		{"reject_file_scheme", "file:///etc/passwd", true},
+		{"reject_malformed", "not a url at all", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateWebhookURL(tc.url)
+			if (err != nil) != tc.wantError {
+				t.Errorf("validateWebhookURL(%q): want error=%v, got %v", tc.url, tc.wantError, err)
+			}
+		})
+	}
+}
+
+// SEC-C5: HasHooks detects any configured hook (global or per-mirror).
+func TestHasHooks(t *testing.T) {
+	tests := []struct {
+		name string
+		g    Global
+		want bool
+	}{
+		{"no_hooks", Global{Projects: []Project{{Name: "p"}}}, false},
+		{"global_pre", Global{PreSyncHook: "echo"}, true},
+		{"global_post", Global{PostSyncHook: "echo"}, true},
+		{"per_mirror_pre", Global{Projects: []Project{{Name: "p", PreSyncHook: "echo"}}}, true},
+		{"per_mirror_post", Global{Projects: []Project{{Name: "p", PostSyncHook: "echo"}}}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.g.HasHooks(); got != tc.want {
+				t.Errorf("HasHooks() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// SEC-C5: IsAdminOwnedPath reports true for admin-owned files (sanity check
+// that the API exists and returns without panic on both platforms).
+func TestIsAdminOwnedPath_TempFileIsNotAdminOwned(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "userfile.txt")
+	if err := os.WriteFile(f, []byte("x"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	// A file we just created in our own temp dir should NOT be admin-owned
+	// (we are running tests as a normal user, not as SYSTEM/root).
+	ownedByAdmin, err := IsAdminOwnedPath(f)
+	if err != nil {
+		t.Fatalf("IsAdminOwnedPath: %v", err)
+	}
+	if ownedByAdmin {
+		t.Skip("test is running with admin privileges; skipping user-owned assertion")
+	}
+}

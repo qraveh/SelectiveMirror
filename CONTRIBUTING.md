@@ -7,6 +7,7 @@ Thank you for your interest in contributing to SelectiveMirror.
 - **Go 1.26+** -- `winget install GoLang.Go`
 - **rclone v1.73+** -- `winget install Rclone.Rclone`
 - **Git** -- `winget install Git.Git`
+- **MinGW-w64** (C toolchain for CGo; required by the SQLite driver) -- `winget install BrechtSanders.WinLibs.POSIX.UCRT`. After install, ensure `gcc.exe` is on your PATH (the WinLibs installer creates it under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT_*\mingw64\bin\`). The built `smirror.exe` statically links SQLite — end users don't need a C compiler.
 
 ## Building
 
@@ -19,11 +20,11 @@ go build -o bin/smirror.exe ./cmd/smirror/
 ## Testing
 
 ```bash
-# Unit tests (287 tests across 11 packages)
+# Unit tests (500+ tests across 14 packages)
 go test ./internal/... -v
 
 # Race detector (CGo-free packages)
-go test -race ./internal/config/ ./internal/filter/ ./internal/lock/ ./internal/metrics/ ./internal/logging/
+go test -race ./internal/config/ ./internal/filter/ ./internal/logging/ ./internal/lock/ ./internal/metrics/ ./internal/watcher/
 
 # Lint
 go vet ./...
@@ -49,7 +50,10 @@ internal/
   logging/               slog + file handler with shared access
   rclone/                rclone binary detection
   service/               Windows Service (SCM integration)
-  notify/                Desktop notifications
+  notify/                Desktop notifications and webhook alerts
+  anomaly/               Anomaly classification, recording, rotation
+  hooks/                 Pre/post-sync hook execution
+  telemetry/             Opt-in anonymous telemetry + update check
 installer/               WiX MSI installer source
 test/                    Integration test suite
 docs/                    User, installation, and developer manuals
@@ -85,6 +89,34 @@ Patch numbers increment on each change. Tags are created only for minor releases
 ## Reporting Bugs
 
 Use `smirror report-bug --stdout` to generate a diagnostic report, then file an issue using the [bug report template](https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml).
+
+## Dependency Policy (supply-chain)
+
+All Go dependencies are pinned by cryptographic hash in `go.sum`. CI runs
+`go mod verify` on every build to detect tampering with cached module bytes.
+
+**Do not run `go get -u` without deliberate review.** Dependency upgrades require:
+
+1. Reading the upstream changelog/commits between the pinned and target versions
+2. For security-critical packages (see list below), an explicit re-audit of
+   the new bytes before committing the `go.sum` update
+3. Full test suite passing
+
+**Security-critical dependencies** (touched on every file event or handling
+untrusted input):
+
+| Package | Role | Last audit |
+|---------|------|------------|
+| `github.com/git-pkgs/gitignore` | `.syncignore` pattern matching | v1.1.1 — see `docs/security-audit-2026-04-18.md` SEC-C1 |
+| `github.com/fsnotify/fsnotify` | filesystem events | (upstream maintained, widely used) |
+| `github.com/mattn/go-sqlite3` | state DB (SQLite driver, CGo) | (upstream mature since 2014, battle-tested; upstream SQLite CVEs handled via library updates) |
+| `go.yaml.in/yaml/v3` | config parsing | (upstream maintained) |
+
+When upgrading `git-pkgs/gitignore` specifically: audit the diff in
+`gitignore.go` and `wildmatch.go` before merging. We only use the bare
+`Matcher{}` struct literal plus `AddPatterns`, `Errors`, and `MatchPath` —
+do not enable the `New()` filesystem auto-loader without re-evaluating
+the attack surface.
 
 ## License
 

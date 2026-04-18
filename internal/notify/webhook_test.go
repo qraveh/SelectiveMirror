@@ -9,32 +9,71 @@ import (
 	"time"
 )
 
-// collectPayloads returns a test server and a thread-safe slice of received payloads.
-func collectPayloads(t *testing.T) (*httptest.Server, *[]WebhookPayload) {
+// payloadCollector captures payloads from a test webhook server safely
+// across the HTTP handler goroutine and the test goroutine.
+type payloadCollector struct {
+	mu       sync.Mutex
+	payloads []WebhookPayload
+	arrived  chan struct{}
+}
+
+func (pc *payloadCollector) add(p WebhookPayload) {
+	pc.mu.Lock()
+	pc.payloads = append(pc.payloads, p)
+	pc.mu.Unlock()
+	// Non-blocking notify — drop if nobody is listening yet.
+	select {
+	case pc.arrived <- struct{}{}:
+	default:
+	}
+}
+
+func (pc *payloadCollector) len() int {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	return len(pc.payloads)
+}
+
+func (pc *payloadCollector) at(i int) WebhookPayload {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	return pc.payloads[i]
+}
+
+// waitFor blocks until at least n payloads have arrived or timeout elapses.
+// Returns true if n arrived. Event-based: each arrival sends on the channel.
+func (pc *payloadCollector) waitFor(n int, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for pc.len() < n {
+		select {
+		case <-pc.arrived:
+			// loop and re-check pc.len()
+		case <-deadline:
+			return pc.len() >= n
+		}
+	}
+	return true
+}
+
+// collectPayloads returns a test server and a payload collector.
+func collectPayloads(t *testing.T) (*httptest.Server, *payloadCollector) {
 	t.Helper()
-	var mu sync.Mutex
-	var payloads []WebhookPayload
+	pc := &payloadCollector{arrived: make(chan struct{}, 32)}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var p WebhookPayload
 		json.NewDecoder(r.Body).Decode(&p)
-		mu.Lock()
-		payloads = append(payloads, p)
-		mu.Unlock()
+		pc.add(p)
 		w.WriteHeader(200)
 	}))
 	t.Cleanup(srv.Close)
 
-	return srv, &payloads
+	return srv, pc
 }
 
-func waitForPayloads(payloads *[]WebhookPayload, n int) {
-	for i := 0; i < 100; i++ {
-		if len(*payloads) >= n {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+// Backward-compatible shim used by existing tests.
+func waitForPayloads(pc *payloadCollector, n int) {
+	pc.waitFor(n, 1*time.Second)
 }
 
 func TestIncident_OpenOnFirstEvent(t *testing.T) {
@@ -44,10 +83,10 @@ func TestIncident_OpenOnFirstEvent(t *testing.T) {
 	ws.Record("CircuitBreaker", "error", "MyProject", "", "tripped after 5 failures", "")
 	waitForPayloads(payloads, 1)
 
-	if len(*payloads) != 1 {
-		t.Fatalf("expected 1 payload, got %d", len(*payloads))
+	if payloads.len() != 1 {
+		t.Fatalf("expected 1 payload, got %d", payloads.len())
 	}
-	p := (*payloads)[0]
+	p := payloads.at(0)
 	if p.Event != "incident_opened" {
 		t.Errorf("event: got %q, want incident_opened", p.Event)
 	}
@@ -77,8 +116,8 @@ func TestIncident_AccumulateSilently(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	if len(*payloads) != 1 {
-		t.Errorf("expected 1 payload (only opener), got %d", len(*payloads))
+	if payloads.len() != 1 {
+		t.Errorf("expected 1 payload (only opener), got %d", payloads.len())
 	}
 }
 
@@ -95,14 +134,14 @@ func TestIncident_EscalateAfterDuration(t *testing.T) {
 	ws.Record("CircuitBreaker", "error", "P", "", "still failing", "")
 	waitForPayloads(payloads, 2)
 
-	if len(*payloads) != 2 {
-		t.Fatalf("expected 2 payloads (open + escalate), got %d", len(*payloads))
+	if payloads.len() != 2 {
+		t.Fatalf("expected 2 payloads (open + escalate), got %d", payloads.len())
 	}
-	if (*payloads)[1].Event != "incident_escalated" {
-		t.Errorf("second event: got %q, want incident_escalated", (*payloads)[1].Event)
+	if payloads.at(1).Event != "incident_escalated" {
+		t.Errorf("second event: got %q, want incident_escalated", payloads.at(1).Event)
 	}
-	if (*payloads)[1].Count < 2 {
-		t.Errorf("escalation count: got %d, want >= 2", (*payloads)[1].Count)
+	if payloads.at(1).Count < 2 {
+		t.Errorf("escalation count: got %d, want >= 2", payloads.at(1).Count)
 	}
 }
 
@@ -119,11 +158,11 @@ func TestIncident_ResolveAfterSilence(t *testing.T) {
 	ws.CheckResolved()
 	waitForPayloads(payloads, 2)
 
-	if len(*payloads) != 2 {
-		t.Fatalf("expected 2 payloads (open + resolve), got %d", len(*payloads))
+	if payloads.len() != 2 {
+		t.Fatalf("expected 2 payloads (open + resolve), got %d", payloads.len())
 	}
-	if (*payloads)[1].Event != "incident_resolved" {
-		t.Errorf("second event: got %q, want incident_resolved", (*payloads)[1].Event)
+	if payloads.at(1).Event != "incident_resolved" {
+		t.Errorf("second event: got %q, want incident_resolved", payloads.at(1).Event)
 	}
 	if ws.OpenIncidents() != 0 {
 		t.Errorf("open incidents after resolve: got %d, want 0", ws.OpenIncidents())
@@ -138,8 +177,8 @@ func TestIncident_DifferentProjectsSeparate(t *testing.T) {
 	ws.Record("CircuitBreaker", "error", "ProjectB", "", "tripped", "")
 	waitForPayloads(payloads, 2)
 
-	if len(*payloads) != 2 {
-		t.Fatalf("expected 2 payloads (separate incidents), got %d", len(*payloads))
+	if payloads.len() != 2 {
+		t.Fatalf("expected 2 payloads (separate incidents), got %d", payloads.len())
 	}
 	if ws.OpenIncidents() != 2 {
 		t.Errorf("open incidents: got %d, want 2", ws.OpenIncidents())
@@ -155,10 +194,11 @@ func TestIncident_PanicAlwaysAlerts(t *testing.T) {
 	ws.Record("Panic", "critical", "P", "", "goroutine panic 2", "stack2")
 	waitForPayloads(payloads, 2)
 
-	if len(*payloads) != 2 {
-		t.Fatalf("expected 2 payloads (panics always alert), got %d", len(*payloads))
+	if payloads.len() != 2 {
+		t.Fatalf("expected 2 payloads (panics always alert), got %d", payloads.len())
 	}
-	for _, p := range *payloads {
+	for i := 0; i < payloads.len(); i++ {
+		p := payloads.at(i)
 		if p.Event != "incident_opened" {
 			t.Errorf("panic event: got %q, want incident_opened", p.Event)
 		}
@@ -183,10 +223,10 @@ func TestIncident_ReopenAfterResolve(t *testing.T) {
 	ws.Record("SyncFailure", "error", "P", "", "fail again", "")
 	waitForPayloads(payloads, 3)
 
-	if len(*payloads) != 3 {
-		t.Fatalf("expected 3 payloads (open, resolve, reopen), got %d", len(*payloads))
+	if payloads.len() != 3 {
+		t.Fatalf("expected 3 payloads (open, resolve, reopen), got %d", payloads.len())
 	}
-	events := []string{(*payloads)[0].Event, (*payloads)[1].Event, (*payloads)[2].Event}
+	events := []string{payloads.at(0).Event, payloads.at(1).Event, payloads.at(2).Event}
 	want := []string{"incident_opened", "incident_resolved", "incident_opened"}
 	for i, e := range events {
 		if e != want[i] {

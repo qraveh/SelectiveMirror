@@ -37,10 +37,21 @@ import (
 	msync "github.com/qraveh/SelectiveMirror/internal/sync"
 	"github.com/qraveh/SelectiveMirror/internal/watcher"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.8.31-dev"
+var version = "0.8.49-dev"
+
+// Repository coordinates. All runtime references to the GitHub repo (issue
+// URLs, selfupdate API, duplicate search) derive from these two constants.
+// On a repo rename/move, update these — no other source files need to change.
+const (
+	repoOwner = "qraveh"
+	repoName  = "SelectiveMirror"
+	repoURL   = "https://github.com/" + repoOwner + "/" + repoName
+	issueNewURL  = repoURL + "/issues/new"
+	issueBugURL  = issueNewURL + "?template=bug_report.yml"
+)
 
 // FR-CLI-07: Documented exit codes for script/CI integration.
 const (
@@ -240,6 +251,15 @@ func rejectUnknownFlags(command string, args []string) {
 			fmt.Fprintf(os.Stderr, "unknown flag: %s\nRun 'smirror %s --help' for usage.\n", a, command)
 			os.Exit(ExitError)
 		}
+	}
+}
+
+// checkMaxArgs exits with an error if more than maxArgs positional arguments
+// are provided. Call after rejectUnknownFlags to catch extra trailing args.
+func checkMaxArgs(command string, args []string, maxArgs int) {
+	if len(args) > maxArgs {
+		fmt.Fprintf(os.Stderr, "too many arguments\nRun 'smirror %s --help' for usage.\n", command)
+		os.Exit(ExitError)
 	}
 }
 
@@ -625,6 +645,7 @@ Examples:
 		return
 	}
 	rejectUnknownFlags("sync-now", args)
+	checkMaxArgs("sync-now", args, 1)
 
 	cfg := loadConfig(configPath)
 	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
@@ -721,6 +742,7 @@ Examples:
 		return
 	}
 	rejectUnknownFlags("dry-run", args)
+	checkMaxArgs("dry-run", args, 1)
 
 	cfg := loadConfig(configPath)
 	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
@@ -789,6 +811,7 @@ Examples:
 		return
 	}
 	rejectUnknownFlags("status", args)
+	checkMaxArgs("status", args, 1)
 
 	// Non-blocking update check (rate-limited to once/24h)
 	go checkForUpdateOnStartup(configPath)
@@ -810,9 +833,14 @@ Examples:
 
 	cfg, cfgErr := config.Load(configPath)
 	if cfgErr != nil {
-		fmt.Printf("Config: %s (not found)\n", configPath)
-		fmt.Fprintf(os.Stderr, "\nError: %v\n", cfgErr)
-		fmt.Fprintln(os.Stderr, "Create a config file to see full status.")
+		// Distinguish file-not-found from validation errors (SM-135).
+		if _, statErr := os.Stat(configPath); statErr != nil {
+			fmt.Printf("Config: %s (not found)\n", configPath)
+			fmt.Fprintln(os.Stderr, "\nCreate a config file to see full status.")
+		} else {
+			fmt.Printf("Config: %s (invalid)\n", configPath)
+			fmt.Fprintf(os.Stderr, "\nError: %v\n", cfgErr)
+		}
 		os.Exit(ExitConfigError)
 	}
 
@@ -1143,6 +1171,7 @@ Examples:
 		return
 	}
 	rejectUnknownFlags("test-mirrors", args)
+	checkMaxArgs("test-mirrors", args, 1)
 
 	fmt.Println()
 	passed := 0
@@ -1277,7 +1306,7 @@ Examples:
 
 	// 7. State DB integrity
 	check("State DB integrity check", func() error {
-		db, err := sql.Open("sqlite", cfg.StateDB)
+		db, err := sql.Open("sqlite3", cfg.StateDB)
 		if err != nil {
 			return err
 		}
@@ -1406,6 +1435,7 @@ Examples:
 		return
 	}
 	rejectUnknownFlags("list-filters", args)
+	checkMaxArgs("list-filters", args, 1)
 
 	cfg := loadConfig(configPath)
 	filters := buildFilters(cfg)
@@ -1448,6 +1478,7 @@ Examples:
 		return
 	}
 	rejectUnknownFlags("explain", args)
+	checkMaxArgs("explain", args, 2)
 
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: smirror explain <mirror> <relative-path>")
@@ -2077,8 +2108,7 @@ sanitized and remote paths are redacted.`)
 
 		// Pre-fill title, environment, and logs as separate form fields
 		title := fmt.Sprintf("smirror %s (%s/%s): ", version, runtime.GOOS, runtime.GOARCH)
-		baseURL := "https://github.com/qraveh/SelectiveMirror/issues/new?template=bug_report.yml"
-		issueURL := baseURL +
+		issueURL := issueBugURL +
 			"&title=" + url.QueryEscape(title) +
 			"&environment=" + url.QueryEscape(envReport)
 		if logReport != "" {
@@ -2096,13 +2126,13 @@ sanitized and remote paths are redacted.`)
 			if len(truncLog) > 1500 {
 				truncLog = truncLog[:1500] + "\n... (truncated)"
 			}
-			issueURL = baseURL +
+			issueURL = issueBugURL +
 				"&title=" + url.QueryEscape(title) +
 				"&environment=" + url.QueryEscape(truncEnv) +
 				"&logs=" + url.QueryEscape(truncLog)
 			// If still too long, drop logs entirely
 			if len(issueURL) > maxURL {
-				issueURL = baseURL +
+				issueURL = issueBugURL +
 					"&title=" + url.QueryEscape(title) +
 					"&environment=" + url.QueryEscape(truncEnv)
 			}
@@ -2120,7 +2150,7 @@ sanitized and remote paths are redacted.`)
 		os.Exit(1)
 	}
 	fmt.Printf("Bug report written to: %s\n", filename)
-	fmt.Println("Paste into a GitHub issue at: https://github.com/qraveh/SelectiveMirror/issues/new")
+	fmt.Printf("Paste into a GitHub issue at: %s\n", issueNewURL)
 }
 
 func cmdStats(configPath string, args []string) {
@@ -2137,6 +2167,7 @@ Examples:
 		return
 	}
 	rejectUnknownFlags("project-stats", args)
+	checkMaxArgs("project-stats", args, 1)
 
 	cfg := loadConfig(configPath)
 	if _, err := logging.Setup(cfg.LogLevel, "", true); err != nil {
@@ -2768,6 +2799,29 @@ func serviceMain() {
 			return
 		}
 
+		// SEC-C5: When the service runs as LocalSystem and hooks are configured,
+		// the config file must be owned by an administrative principal. Otherwise
+		// any user who can edit config.yaml gets LocalSystem RCE via hook injection.
+		if cfg.HasHooks() {
+			adminOwned, aclErr := config.IsAdminOwnedPath(configPath)
+			if aclErr != nil {
+				slog.Error("config ACL check failed", "path", configPath, "error", aclErr)
+				if crashLog != nil {
+					fmt.Fprintf(crashLog, "%s startFunc: config ACL check failed: %v\n", time.Now().Format(time.RFC3339), aclErr)
+				}
+				return
+			}
+			if !adminOwned {
+				slog.Error("refusing to start: hooks configured but config file is not admin-owned",
+					"path", configPath,
+					"remedy", "move config to an admin-owned location (e.g., %ProgramData%\\SelectiveMirror\\config.yaml) or remove hooks")
+				if crashLog != nil {
+					fmt.Fprintf(crashLog, "%s startFunc: SEC-C5 refuse: non-admin-owned config with hooks\n", time.Now().Format(time.RFC3339))
+				}
+				return
+			}
+		}
+
 		lk, err := lock.Acquire(dataDir(cfg))
 		if err != nil {
 			slog.Error("lock acquire failed", "error", err)
@@ -2865,6 +2919,7 @@ func serviceMain() {
 		var webhookSender *notify.WebhookSender
 		if cfg.AlertWebhookURL != "" {
 			webhookSender = notify.NewWebhookSender(cfg.AlertWebhookURL)
+			webhookSender.SanitizePath = anomaly.SanitizePath // SEC-C3
 			minSev := cfg.AlertMinSeverity
 			if minSev == "" {
 				minSev = "error"

@@ -6,22 +6,21 @@ before:
     - go vet ./...
 
 builds:
+  # Windows-only release. The mattn/go-sqlite3 driver requires CGo; cross-
+  # compiling CGo from a single runner to Linux/Darwin needs Zig or separate
+  # runners, which we do not set up. Project is positioned Windows-first
+  # (CLAUDE.md) — no Linux/Darwin integration or users exist. MSI (installer/
+  # build-msi.ps1) is the primary distribution channel; this ZIP is secondary.
   - main: ./cmd/smirror/
     binary: smirror
     ldflags:
       - -s -w -X main.version={{.Version}}
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     goos:
       - windows
-      - linux
-      - darwin
     goarch:
       - amd64
-      - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
 
 archives:
   - formats: ['zip']

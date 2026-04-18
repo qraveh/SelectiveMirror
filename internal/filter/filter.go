@@ -119,10 +119,7 @@ func (e *Engine) readProjectRules() ([]string, [32]byte, error) {
 
 	contentHash := sha256.Sum256(data)
 
-	content := string(data)
-	if strings.HasPrefix(content, "\xEF\xBB\xBF") {
-		content = content[3:] // strip UTF-8 BOM
-	}
+	content := strings.TrimPrefix(string(data), "\xEF\xBB\xBF") // strip UTF-8 BOM
 
 	var rules []string
 	for _, line := range strings.Split(content, "\n") {

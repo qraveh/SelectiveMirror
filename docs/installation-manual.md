@@ -27,9 +27,16 @@ rclone is not bundled with SelectiveMirror. It must be installed separately. See
 
 ## Disk Space
 
-- **SelectiveMirror binary**: approximately 15 MB
+- **SelectiveMirror binary**: approximately 23 MB (statically links SQLite via CGo)
 - **State database**: grows proportionally to the number of tracked files. A typical installation with 10,000 files uses under 5 MB
 - **Log files**: configurable, typically under 50 MB with log rotation
+
+## Building from Source (optional)
+
+End users do **not** need a C compiler — the MSI/ZIP binaries have SQLite embedded. If you build from source:
+
+- **Go 1.26+** and **CGo enabled** (default).
+- **MinGW-w64** (for `gcc.exe` on PATH) — `winget install BrechtSanders.WinLibs.POSIX.UCRT`. CGo is required because the SQLite driver (`github.com/mattn/go-sqlite3`) compiles SQLite C into the binary.
 
 ## .NET Framework (MSI installer only)
 

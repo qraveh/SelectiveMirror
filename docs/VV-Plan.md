@@ -2,9 +2,9 @@
 
 ## SelectiveMirror — V&V per ISO/IEC/IEEE 29119 & ISO/IEC 25010
 
-**Document Version**: 0.2
-**Date**: 2026-04-06
-**SRS Reference**: docs/SRS.md v1.0 (Baseline)
+**Document Version**: 0.3
+**Date**: 2026-04-06 (baseline); last status refresh 2026-04-18
+**SRS Reference**: docs/SRS.md v1.0 (Baseline, status refreshed 2026-04-18)
 
 ---
 
@@ -54,7 +54,7 @@
        / T4-T6: Stress \        ← Targeted, nightly
       / T3: Integration  \      ← Per-release
      / T2: Race Detection  \    ← Every commit
-    / T1: Unit Tests (287+)  \  ← Every commit, fast
+    / T1: Unit Tests (530+)  \  ← Every commit, fast
    / T0: Static Analysis (vet) \ ← Every commit, instant
   ──────────────────────────────
 ```
@@ -87,7 +87,7 @@ Each 25010 quality characteristic maps to verification techniques:
 | Reliability | Fault injection, stress tests | Stress scripts, panic injection |
 | Security | Static analysis, credential scanning | `go vet`, `gosec`, `gitleaks` |
 | Maintainability | Coverage metrics, cyclomatic complexity | `go test -cover`, `gocyclo` |
-| Portability | Cross-compile + build tag verification | `GOOS=linux go build` |
+| Portability | Native-build + build tag verification (Windows-first; Linux/Darwin require native CGo toolchain since SM-148) | Native `go build` on target OS |
 
 ### 2.3 ISO/IEC 25023 Quality Measurement
 
@@ -237,16 +237,15 @@ For each package, identify:
 
 ### 5.1 Summary
 
-| Metric | Value |
-|--------|-------|
-| Total statement coverage | 35.8% |
-| Total functions | 184 |
-| Functions at 0% | 137 (74.5%) |
-| Functions at 100% | 25 (13.6%) |
-| Partially covered | 22 (11.9%) |
-| Unit test count | 287 |
-| Integration tests | 66 + 11 stress |
-| Test code lines | 6,798 (Go) + 1,150 (PowerShell) |
+| Metric | Value (baseline v0.5.0 → current v0.8.x) |
+|--------|------------------------------------------|
+| Total statement coverage (internal/) | 35.8% → ~65% |
+| Total functions | 184 → grown with anomaly/hooks/telemetry packages |
+| Functions at 0% | 137 (74.5%) at baseline; reduced materially by anomaly/hooks/watcher refactors |
+| Unit test count | 530+ → 539+ |
+| Integration tests | 66 + 11 stress → 123 integration cases |
+| Fuzz tests | 2 targets (filter, config); 30s × 2 targets, 18M+ execs clean |
+| Test code lines | 6,798 (Go) + 1,150 (PowerShell) at baseline; grown with anomaly/hooks test files |
 
 ### 5.2 Per-Package Analysis
 
@@ -316,7 +315,7 @@ For each package, identify:
 | **P1** | No fuzz testing for config/filter/filenames | Edge cases discovered by SM-036/041/046 suggest more lurk | Medium |
 | **P1** | No performance benchmarks | SLA targets exist but aren't measured | Medium |
 | **P2** | Integration test coverage not aggregated | cmd/smirror shows 2.1% but integration tests cover it | Small |
-| **P2** | No coverage gate in CI | Coverage can decrease without warning | Small |
+| ~~**P2**~~ | ~~No coverage gate in CI~~ | **Resolved**: CI has 35% coverage gate since v0.5.0 (ci.yml) | ~~Small~~ |
 | **P3** | No mutation testing | High coverage doesn't guarantee test quality | Large |
 
 ---
@@ -374,7 +373,7 @@ Each feature test plan follows ISO/IEC/IEEE 29119 Part 4 test techniques:
 | T-FILTER-11 | EP | Pattern with character class `[abc]` | Matches correctly | Not tested | — |
 | T-FILTER-12 | EP | Escaped hash `\#comment` | Treated as pattern, not comment | Not tested | — |
 | T-FILTER-13 | BVA | .syncignore with 10,000 rules | Loads within 1s | Not tested | — |
-| T-FILTER-14 | EP | Malformed .syncignore (FR-FILTER-11) | Reject, keep last-known-good | Not impl | — |
+| T-FILTER-14 | EP | Malformed .syncignore (FR-FILTER-11) | Reject, keep last-known-good | Pass (v0.5.0) | — |
 | T-FILTER-15 | EP | Unicode pattern matching | Correct match | Not tested | — |
 
 **Coverage**: 9/15 scenarios tested. Gaps: gitignore edge cases, performance, error handling.
@@ -396,10 +395,10 @@ Each feature test plan follows ISO/IEC/IEEE 29119 Part 4 test techniques:
 | T-SYNC-11 | EP | Sync failure recorded in state | Exit code + timestamp in DB | Pass | — |
 | T-SYNC-12 | EP | Rename: delete old + sync new | Old remote deleted, new synced | Pass | — |
 | T-SYNC-13 | EP | Mtime-only change (no content) | Re-sync (mtime is a signal) | Pass | — |
-| T-SYNC-14 | EP | Adaptive cooldown (FR-SYNC-13) | Cooldown = f(frequency, duration) | Not impl | — |
-| T-SYNC-15 | EP | Adaptive reconciliation (FR-SYNC-09) | Interval extends when stable | Not impl | — |
-| T-SYNC-16 | EP | Transient failure retry (FR-SYNC-16) | Retry once before circuit breaker | Not impl | — |
-| T-SYNC-17 | EP | Per-mirror rclone flags (FR-SYNC-14) | Flags passed to rclone | Not impl | — |
+| T-SYNC-14 | EP | Adaptive cooldown (FR-SYNC-13) | Cooldown = f(frequency, duration) | Pass | — |
+| T-SYNC-15 | EP | Adaptive reconciliation (FR-SYNC-09) | Interval extends when stable | Pass | — |
+| T-SYNC-16 | EP | Transient failure retry (FR-SYNC-16) | Retry once before circuit breaker | Pass (v0.5.0 — rclone exit 1/5) | — |
+| T-SYNC-17 | EP | Per-mirror rclone flags (FR-SYNC-14) | Flags passed to rclone | Pass | — |
 | T-SYNC-18 | BVA | Zero-byte file sync | Synced correctly | Pass | — |
 | T-SYNC-19 | BVA | File with special chars in name | Synced correctly | Pass | — |
 | T-SYNC-20 | EP | rclone timeout (process hangs) | Killed after timeout, failure recorded | Not tested | — |
@@ -411,14 +410,14 @@ Each feature test plan follows ISO/IEC/IEEE 29119 Part 4 test techniques:
 | Test ID | Technique | Scenario | Expected | Status | SM |
 |---------|-----------|----------|----------|--------|-----|
 | T-DEL-01 | DT | delete_policy=ignore, file deleted | Remote preserved | Pass | — |
-| T-DEL-02 | DT | delete_policy=delete(mirror), file deleted | Remote deleted | Pass | — |
+| T-DEL-02 | DT | delete_policy=delete (default), file deleted | Remote deleted | Pass | — |
 | T-DEL-03 | DT | delete_policy=quarantine, file deleted | Remote moved to .quarantine/ | Pass | — |
 | T-DEL-04 | EP | Delete event priority | Enqueued at head | Pass | — |
-| T-DEL-05 | EP | Directory deleted (all children) | Each child deleted individually | Pass | — |
+| T-DEL-05 | EP | Directory deleted (all children) | `rclone purge` on `delete`, per-file move on `quarantine` | Pass | — |
 | T-DEL-06 | EP | Rename cleanup (force delete) | Old remote path deleted | Pass | — |
 | T-DEL-07 | EP | Delete file never synced | No remote action (not in state) | Pass | — |
-| T-DEL-08 | EP | Atomic directory purge (FR-DEL-07) | rclone purge instead of per-file | Not impl | — |
-| T-DEL-09 | EP | Quarantine auto-purge (FR-DEL-09) | Files > retention deleted | Not impl | — |
+| T-DEL-08 | EP | Atomic directory purge (FR-DEL-07) | rclone purge instead of per-file | Pass (v0.5.0) | — |
+| T-DEL-09 | EP | Quarantine auto-purge (FR-DEL-09) | Files > retention deleted | Pass (v0.5.0) | — |
 | T-DEL-10 | BVA | Delete 10,000 files in one directory | Completes without timeout/OOM | Not tested | — |
 
 #### FR-GHOST: Ghost Cleanup
@@ -444,13 +443,13 @@ Each feature test plan follows ISO/IEC/IEEE 29119 Part 4 test techniques:
 | T-QUEUE-05 | ST | Circuit breaker: 3 failures | Exponential backoff begins | Pass | SM-059 |
 | T-QUEUE-06 | EP | Circuit breaker: delete bypasses | Delete dequeued despite backoff | Pass | — |
 | T-QUEUE-07 | ST | Circuit breaker: success resets | Counter zeroed, backoff cleared | Pass | SM-060 |
-| T-QUEUE-08 | BVA | Queue at max capacity | Warning logged, reconciliation triggered | Not impl | — |
+| T-QUEUE-08 | BVA | Queue at max capacity | Warning logged, reconciliation triggered | Pass (v0.5.0 — unbounded w/ 50K warning) | — |
 | T-QUEUE-09 | EP | Full-project sync skips cooldown | Dequeued immediately | Pass | — |
 | T-QUEUE-10 | BVA | Empty queue dequeue blocks | Blocks until item or context cancel | Pass | — |
 
-### 6.3 Unimplemented Features — Test Plans
+### 6.3 Shipped-Feature Extended Test Plans
 
-#### FR-ANOM: Anomaly Detection (v0.7.0+)
+#### FR-ANOM: Anomaly Detection (shipped v0.6.0; pattern detection FR-ANOM-06 still pending)
 
 | Test ID | Technique | Scenario | Expected | Req |
 |---------|-----------|----------|----------|-----|
@@ -468,7 +467,7 @@ Each feature test plan follows ISO/IEC/IEEE 29119 Part 4 test techniques:
 | T-ANOM-12 | EP | Anomaly summary in status output | Summary visible in `status` command | FR-ANOM-07 |
 | T-ANOM-13 | EP | Reconciliation stale (2x interval) | Anomaly generated | FR-ANOM-02 |
 
-#### FR-SYNC-13: Adaptive Cooldown (v0.5.0)
+#### FR-SYNC-13: Adaptive Cooldown (shipped v0.5.0)
 
 | Test ID | Technique | Scenario | Expected | Req |
 |---------|-----------|----------|----------|-----|
@@ -481,7 +480,7 @@ Each feature test plan follows ISO/IEC/IEEE 29119 Part 4 test techniques:
 | T-COOL-07 | EP | Delete bypasses cooldown | Always dequeued | FR-SYNC-13 |
 | T-COOL-08 | ST | File transitions: cold → hot → cold | Cooldown follows transitions | FR-SYNC-13 |
 
-#### FR-ASP-17: Hook System (v0.6.0)
+#### FR-ASP-17: Hook System (shipped v0.7.0; SEC-C5 hardening v0.8.x)
 
 | Test ID | Technique | Scenario | Expected | Req |
 |---------|-----------|----------|----------|-----|
@@ -631,7 +630,7 @@ func FuzzFilenameSafety(f *testing.F) {
 
 | Rule | Location | V&V Relevance |
 |------|----------|---------------|
-| "287 tests across 11 packages" | CLAUDE.md: Testing | Test count baseline; regression gate |
+| "530+ tests across 14 packages" | CLAUDE.md: Testing | Test count baseline; regression gate |
 | "Run all unit tests" command | CLAUDE.md: Testing | T1 execution procedure |
 | "Run integration tests" command | CLAUDE.md: Testing | T3 execution procedure |
 | Test tiers (Unit/Local/Backend) | CLAUDE.md: Testing | Test tier definitions |
@@ -667,7 +666,7 @@ func FuzzFilenameSafety(f *testing.F) {
 
 | Missing Rule | Impact | Recommendation |
 |-------------|--------|----------------|
-| No coverage gate in CI | Coverage can silently decrease | Add `go test -cover` threshold check |
+| ~~No coverage gate in CI~~ | **Resolved**: 35% gate in ci.yml since v0.5.0 | — |
 | No lint beyond `go vet` | Bugs caught only by review | Add `golangci-lint` to CI |
 | No fuzz test schedule | Edge cases found by chance | Add nightly fuzz runs |
 | No performance benchmark gate | SLA drift undetected | Add benchmark comparison in CI |
@@ -684,7 +683,7 @@ func FuzzFilenameSafety(f *testing.F) {
 |-----------|--------|--------|
 | Add `golangci-lint` to CI with recommended config | Small | Catches bug classes unit tests miss |
 | Add coverage reporting to CI (`go test -cover`) | Small | Visibility |
-| Add coverage gate (fail if total < current baseline) | Small | Prevent regression |
+| ~~Add coverage gate~~ | ~~Small~~ | **Done**: 35% gate in ci.yml |
 | Add fuzz tests: config parsing, filter patterns | Medium | Edge case discovery |
 | Refactor watcher for testability (extract pure logic) | Large | Raise watcher from 16.6% to 40%+ |
 | Adopt test naming convention (`TestFR_XXX_YY`) | Medium | Automated traceability |

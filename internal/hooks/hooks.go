@@ -10,8 +10,29 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 )
+
+// shellMetachars are characters that have special meaning to cmd.exe and
+// POSIX shells. If a hook env var value contains any of these, shell
+// expansion in the user's hook command (e.g., `echo %SMIRROR_FILE%` or
+// `echo "$SMIRROR_FILE"`) can lead to command injection. SEC-C5.
+//
+// Examples:
+//   Windows filename "a&calc.exe" → `echo Synced: %SMIRROR_FILE%` →
+//     cmd.exe expands to `echo Synced: a&calc.exe` → runs calc.exe
+//   Unix filename "$(rm -rf /)"   → `echo $SMIRROR_FILE` → shell executes
+//
+// We reject rather than escape because safe escaping varies by shell and by
+// quoting style in the user's hook script — we cannot know.
+const shellMetachars = "&|<>\"^$`();\n\r"
+
+// containsShellMetachar reports whether s has any character that shells
+// interpret specially.
+func containsShellMetachar(s string) bool {
+	return strings.ContainsAny(s, shellMetachars)
+}
 
 // Env provides context to hook scripts via environment variables.
 type Env struct {
@@ -46,6 +67,23 @@ func New(timeout time.Duration) *Runner {
 func (r *Runner) Run(ctx context.Context, hookCmd string, env Env) error {
 	if r == nil || hookCmd == "" {
 		return nil
+	}
+
+	// SEC-C5: Reject env values containing shell metacharacters. Hooks run
+	// under `cmd.exe /C` or `sh -c`, and users typically reference env vars
+	// unquoted in their hook scripts — a filename containing `&` or `$(...)`
+	// chains commands.
+	for field, val := range map[string]string{
+		"SMIRROR_PROJECT": env.Project,
+		"SMIRROR_FILE":    env.File,
+		"SMIRROR_REMOTE":  env.Remote,
+		"SMIRROR_EVENT":   env.Event,
+	} {
+		if containsShellMetachar(val) {
+			r.log.Warn("hook skipped: env value contains shell metacharacter",
+				"event", env.Event, "project", env.Project, "field", field)
+			return fmt.Errorf("hook skipped: %s contains shell metacharacter", field)
+		}
 	}
 
 	hookCtx, cancel := context.WithTimeout(ctx, r.timeout)

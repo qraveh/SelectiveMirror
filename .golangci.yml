@@ -11,7 +11,7 @@ linters:
 
 linters-settings:
   gocyclo:
-    min-complexity: 50  # cmdStatus=49 after CLI additions (status, addmirror, remote); refactoring deferred
+    min-complexity: 50  # cmdStatus=64, cmdAddMirror=52 exceed threshold; refactoring deferred post-v1.0
   gosec:
     excludes:
       - G104  # unhandled errors on Close (covered by errcheck)

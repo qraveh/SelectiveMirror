@@ -2,10 +2,10 @@
 
 ## SelectiveMirror — Selective Near-Real-Time File Mirror
 
-**Document Version**: 1.0 (Baseline)
-**Date**: 2026-04-06
+**Document Version**: 1.0 (Baseline) — status refreshed 2026-04-18
+**Date**: 2026-04-06 (baseline); last status refresh 2026-04-18
 **Author**: Raveh / Claude (iterative collaboration)
-**Project Version**: 0.8.1-dev
+**Project Version**: 0.8.49-dev (source-current at last refresh)
 **Status**: BASELINED — approved for v1.0 release planning
 
 ---
@@ -158,7 +158,7 @@ SelectiveMirror is the **missing link**: real-time + selective + backend-agnosti
 | FR-FILTER-08 | System SHALL generate rclone-compatible filter files for batch operations | Must | Batch sync uses `rclone copy --filter-from`; filter must translate correctly | Done |
 | FR-FILTER-09 | System SHALL provide a command to list effective filter rules per mirror | Must | Users need to audit merged filter state | Done |
 | FR-FILTER-10 | System SHALL provide a command to explain whether a specific file is included/excluded and which rule matched | Must | Debugging "why isn't this file syncing?" is the #1 support question | Done |
-| FR-FILTER-11 | System SHALL reject malformed `.syncignore` files, log the parse error, and continue with the previous valid filter generation | Must | Fail-open (sync everything) or fail-closed (sync nothing) on bad syntax are both dangerous. Preserving last-known-good is the only safe behavior. | Not Done |
+| FR-FILTER-11 | System SHALL reject malformed `.syncignore` files, log the parse error, and continue with the previous valid filter generation | Must | Fail-open (sync everything) or fail-closed (sync nothing) on bad syntax are both dangerous. Preserving last-known-good is the only safe behavior. | Done (v0.5.0) |
 
 ### 3.3 Synchronization (FR-SYNC)
 
@@ -172,28 +172,28 @@ SelectiveMirror is the **missing link**: real-time + selective + backend-agnosti
 | FR-SYNC-06 | System SHALL use MD5 checksums to avoid unnecessary uploads of unchanged files | Must | Matches rclone's native checksum for Google Drive and most backends | Done |
 | FR-SYNC-07 | System SHALL support configurable bandwidth limiting | Should | Users on metered connections need throttling | Done |
 | FR-SYNC-08 | System SHALL support configurable concurrent sync workers (1-16) | Should | Parallelism vs API quota tradeoff varies by backend | Done |
-| FR-SYNC-09 | System SHALL perform adaptive periodic reconciliation: start at configured interval (default 5 min), extend to longer intervals (up to 30 min) when no drift detected for N consecutive cycles, reset to base interval on drift detection | Must | Catches changes invisible to fsnotify. Adaptive interval reduces API quota usage by ~85% during stable periods while maintaining fast detection on drift. | Not Done (fixed interval: Done) |
+| FR-SYNC-09 | System SHALL perform adaptive periodic reconciliation: start at configured interval (default 5 min), extend to longer intervals (up to 30 min) when no drift detected for N consecutive cycles, reset to base interval on drift detection | Must | Catches changes invisible to fsnotify. Adaptive interval reduces API quota usage by ~85% during stable periods while maintaining fast detection on drift. | Done (v0.5.0) |
 | FR-SYNC-10 | System SHALL support immediate full sync via `sync-now` command | Must | User-initiated "sync everything now" is essential for trust | Done |
 | FR-SYNC-11 | System SHALL support dry-run mode showing what would sync without executing | Must | Preview before commit; user error protection per 25010 | Done |
 | FR-SYNC-12 | System SHALL record sync results (success/failure, timing, exit code) in state database | Must | Audit trail and debugging require persistent action history | Done |
-| FR-SYNC-13 | System SHALL use signal-based adaptive cooldown: `cooldown = max(base * event_frequency_factor, last_sync_duration * 1.5)`. Cooldown is a function of both file temperature (event frequency) AND sync cost (file size / connection speed, measured as actual sync duration). No fixed constant. | Must | A fixed cooldown is universally wrong. A 100 MB file that took 45s to sync should not re-sync before ~67s. A hot auto-save file should converge to one sync per editing session. The signal is: "don't re-sync more often than it costs to sync." | Not Done (fixed 30s: Done) |
-| FR-SYNC-14 | System SHALL support per-mirror rclone extra flags (configured in mirrors[].rclone_extra_flags) | Must | Different backends need different flags (e.g., `--drive-chunk-size`, `--s3-storage-class`). Essential for multi-backend deployments. | Not Done |
+| FR-SYNC-13 | System SHALL use signal-based adaptive cooldown: `cooldown = max(base * event_frequency_factor, last_sync_duration * 1.5)`. Cooldown is a function of both file temperature (event frequency) AND sync cost (file size / connection speed, measured as actual sync duration). No fixed constant. | Must | A fixed cooldown is universally wrong. A 100 MB file that took 45s to sync should not re-sync before ~67s. A hot auto-save file should converge to one sync per editing session. The signal is: "don't re-sync more often than it costs to sync." | Done (v0.5.0) |
+| FR-SYNC-14 | System SHALL support per-mirror rclone extra flags (configured in mirrors[].rclone_extra_flags) | Must | Different backends need different flags (e.g., `--drive-chunk-size`, `--s3-storage-class`). Essential for multi-backend deployments. | Done (v0.5.0) |
 | FR-SYNC-15 | System SHALL handle file renames as delete-old + sync-new | Must | Windows reports renames as two events; old remote path must be cleaned | Done |
-| FR-SYNC-16 | System SHALL retry individual sync failures once (with short delay) before recording failure and engaging the circuit breaker | Should | Circuit breaker handles systemic failures; single-retry handles transient ones (momentary network glitch, temporary file lock). Without retry, a single timeout waits for the next reconciliation cycle. | Not Done |
+| FR-SYNC-16 | System SHALL retry individual sync failures once (with short delay) before recording failure and engaging the circuit breaker | Should | Circuit breaker handles systemic failures; single-retry handles transient ones (momentary network glitch, temporary file lock). Without retry, a single timeout waits for the next reconciliation cycle. | Done (v0.5.0 — rclone exit 1/5 retried) |
 
 ### 3.4 Delete Handling (FR-DEL)
 
 | ID | Requirement | Priority | Rationale | Status |
 |----|------------|----------|-----------|--------|
-| FR-DEL-01 | System SHALL support three delete policies as cleanly separated configuration profiles: `ignore`, `delete`, `quarantine`. No mixing — each profile activates a complete, self-contained code path. | Must | Clean separation prevents complexity leaks. Default is `delete`. | Done (naming: `mirror`→`delete` rename pending) |
+| FR-DEL-01 | System SHALL support three delete policies as cleanly separated configuration profiles: `ignore`, `delete`, `quarantine`. No mixing — each profile activates a complete, self-contained code path. | Must | Clean separation prevents complexity leaks. Default is `delete`. | Done (`mirror` kept as deprecated alias as of v0.5.0) |
 | FR-DEL-02 | `ignore` policy SHALL preserve remote files when local files are deleted | Must | Remote acts as append-only backup | Done |
 | FR-DEL-03 | `delete` policy (default) SHALL immediately delete remote files when local files are deleted. Ghost cleanup also uses immediate delete. | Must | Code projects have git as safety net; clean exact mirror. | Done |
 | FR-DEL-04 | `quarantine` policy SHALL move remote files to `.quarantine/<timestamp>/` on local delete. Ghost cleanup (orphans/leaks) also quarantined, not deleted. Fully self-contained mode. | Must | Recovery use case: documents, research, non-VCS content. All destructive operations go through quarantine when enabled. | Done |
-| FR-DEL-05 | Quarantine retention SHALL be configurable (default 30 days) with auto-purge enforced during reconciliation | Must | Without enforcement, `quarantine_days` is a promise without delivery. Config field must be honored. | Partial (config: Done; auto-purge: Not Done) |
+| FR-DEL-05 | Quarantine retention SHALL be configurable (default 30 days) with auto-purge enforced during reconciliation | Must | Without enforcement, `quarantine_days` is a promise without delivery. Config field must be honored. | Done (v0.5.0) |
 | FR-DEL-06 | Delete events SHALL be prioritized over sync events in the queue | Must | Stale remote files are a consistency hazard; deletes must not queue behind syncs | Done |
-| FR-DEL-07 | Directory deletions with delete_policy=mirror SHALL use `rclone purge` for atomic recursive deletion. Quarantine mode SHALL move children individually (each needs a timestamped path). | Must | `rclone purge` is a single API call on most backends vs O(N) deletefile calls. Atomic operation prevents partial-delete states. | Partial (per-file iteration: Done; atomic purge: Not Done) |
+| FR-DEL-07 | Directory deletions with delete_policy=delete SHALL use `rclone purge` for atomic recursive deletion. Quarantine mode SHALL move children individually (each needs a timestamped path). | Must | `rclone purge` is a single API call on most backends vs O(N) deletefile calls. Atomic operation prevents partial-delete states. | Done (v0.5.0 with per-file fallback) |
 | FR-DEL-08 | Rename cleanup SHALL force-delete old remote path regardless of delete policy | Must | Renames leave orphan at old path; force-delete is the only correct action | Done |
-| FR-DEL-09 | System SHALL auto-purge quarantined files after retention period expires (checked during reconciliation cycle) | Should | Without auto-purge, quarantine grows unbounded on remote. Config field `quarantine_days` exists but is not enforced — a promise without delivery. | Not Done |
+| FR-DEL-09 | System SHALL auto-purge quarantined files after retention period expires (checked during reconciliation cycle) | Should | Without auto-purge, quarantine grows unbounded on remote. Config field `quarantine_days` exists but is not enforced — a promise without delivery. | Done (v0.5.0) |
 
 ### 3.5 Ghost Cleanup (FR-GHOST)
 
@@ -218,7 +218,7 @@ SelectiveMirror is the **missing link**: real-time + selective + backend-agnosti
 | FR-QUEUE-05 | System SHALL implement circuit breaker with exponential backoff on consecutive per-mirror failures | Must | Prevents rapid retry loops on persistent failures (network, quota) | Done |
 | FR-QUEUE-06 | Circuit breaker SHALL NOT block delete tasks | Must | Deletes are consistency-critical and must always execute | Done |
 | FR-QUEUE-07 | Circuit breaker SHALL reset on first success | Must | Fast recovery when transient failure resolves | Done |
-| FR-QUEUE-08 | System SHALL NOT impose an artificial queue size limit. Deduplication is the natural bound (max queue size = number of unique files across all mirrors). System SHALL log a warning when queue depth exceeds a configurable threshold (default 50K) and SHALL enforce a memory-based safety valve (default 200 MB). | Must | With dedup, 100K unique files = ~50 MB — acceptable. An artificial 10K limit causes event loss in legitimate burst scenarios (archive extraction, build output). The dedup *is* the bound. | Not Done (fixed 10K: Done) |
+| FR-QUEUE-08 | System SHALL NOT impose an artificial queue size limit. Deduplication is the natural bound (max queue size = number of unique files across all mirrors). System SHALL log a warning when queue depth exceeds a configurable threshold (default 50K) and SHALL enforce a memory-based safety valve (default 200 MB). | Must | With dedup, 100K unique files = ~50 MB — acceptable. An artificial 10K limit causes event loss in legitimate burst scenarios (archive extraction, build output). The dedup *is* the bound. | Done (v0.5.0 — unbounded with 50K warning) |
 | FR-QUEUE-09 | System SHOULD expose queue depth in metrics | Should | Capacity planning and bottleneck detection | Done |
 | FR-QUEUE-10 | When queue depth warning threshold is exceeded, system SHALL trigger immediate reconciliation to accelerate draining | Should | High queue depth indicates the system is falling behind; reconciliation batch-processes files more efficiently than per-file queue processing | Not Done |
 
@@ -270,7 +270,7 @@ SelectiveMirror is the **missing link**: real-time + selective + backend-agnosti
 | FR-CLI-04 | System SHALL provide `help` with usage information for all commands | Must | — | Done |
 | FR-CLI-05 | System SHALL exit with non-zero code on errors | Must | Script/CI integration requires reliable exit codes | Done |
 | FR-CLI-06 | System SHALL support optional mirror-name argument for targeted commands | Should | Operating on one mirror without affecting others | Done |
-| FR-CLI-07 | System SHALL use documented exit codes: 0=success, 1=general error, 2=config error, 3=rclone error, 4=lock conflict | Must | Script and CI integration requires predictable, documented exit codes | Not Done |
+| FR-CLI-07 | System SHALL use documented exit codes: 0=success, 1=general error, 2=config error, 3=rclone error, 4=lock conflict, 5=drift detected, 6=upgrade declined | Must | Script and CI integration requires predictable, documented exit codes | Done |
 
 ### 3.11 Anomaly Detection & Reporting (FR-ANOM)
 
@@ -278,17 +278,17 @@ SelectiveMirror SHALL be a self-diagnosing system. Every anomaly (ghost, error, 
 
 | ID | Requirement | Priority | Rationale | Status |
 |----|------------|----------|-----------|--------|
-| FR-ANOM-01 | System SHALL classify runtime events into normal, warning, and anomalous categories | Must | Foundation for anomaly detection; not all events are equal | Not Done |
-| FR-ANOM-02 | Anomalous events SHALL include: unexpected ghosts, repeated sync failures, circuit breaker activations, panic recovery, state DB integrity warnings, stale reconciliation, watcher errors, queue overflow | Must | These are signals of potential bugs or environmental failures | Not Done |
-| FR-ANOM-03 | Each anomaly SHALL be recorded with: timestamp, category, severity, affected mirror, affected file (if applicable), context snapshot (queue depth, recent errors, uptime) | Must | Root-cause analysis requires rich context at the moment of occurrence | Not Done |
-| FR-ANOM-04 | System SHALL generate anomaly reports as structured JSON files in the data directory | Must | Machine-parseable for future automated analysis pipelines | Not Done |
-| FR-ANOM-05 | Anomaly reports SHALL include a causal hypothesis chain (e.g., "orphan detected → was file renamed? recently excluded? never synced? externally deleted?") | Should | Guides semi-automatic failure analysis; turns raw events into investigable leads | Not Done |
+| FR-ANOM-01 | System SHALL classify runtime events into normal, warning, and anomalous categories | Must | Foundation for anomaly detection; not all events are equal | Done (v0.6.0) |
+| FR-ANOM-02 | Anomalous events SHALL include: unexpected ghosts, repeated sync failures, circuit breaker activations, panic recovery, state DB integrity warnings, stale reconciliation, watcher errors, queue overflow | Must | These are signals of potential bugs or environmental failures | Done (v0.6.0 — 11 categories) |
+| FR-ANOM-03 | Each anomaly SHALL be recorded with: timestamp, category, severity, affected mirror, affected file (if applicable), context snapshot (queue depth, recent errors, uptime) | Must | Root-cause analysis requires rich context at the moment of occurrence | Done (v0.6.0) |
+| FR-ANOM-04 | System SHALL generate anomaly reports as structured JSON files in the data directory | Must | Machine-parseable for future automated analysis pipelines | Done (v0.6.0 — JSON-lines) |
+| FR-ANOM-05 | Anomaly reports SHALL include a causal hypothesis chain (e.g., "orphan detected → was file renamed? recently excluded? never synced? externally deleted?") | Should | Guides semi-automatic failure analysis; turns raw events into investigable leads | Done (v0.6.0 — templates) |
 | FR-ANOM-06 | System SHALL detect anomaly *patterns* (e.g., same file failing repeatedly, same mirror triggering circuit breaker daily, ghost count trending upward) | Should | Pattern detection elevates point-in-time events to systemic insights | Not Done |
-| FR-ANOM-07 | System SHALL expose anomaly summary in `status` output and `status.json` | Must | Operators need visibility without reading raw report files | Not Done |
-| FR-ANOM-08 | Anomaly reports SHALL be sanitized (no credentials, configurable path redaction) for safe sharing | Must | Reports may be shared with maintainers or automated systems | Not Done |
-| FR-ANOM-09 | System SHALL support configurable anomaly notification (toast notification; webhook in future) | Should | Active alerting vs passive log reading | Not Done |
-| FR-ANOM-10 | System SHALL auto-rotate anomaly reports (retain last 30 days, max 100 MB) | Should | Prevent unbounded growth of diagnostic data | Not Done |
-| FR-ANOM-11 | Outbound anomaly reporting (to external endpoint) SHALL be a configurable feature: enabled by default when outbound internet is allowed, disabled otherwise. System SHALL emit zero outbound traffic when disabled. | Must | Not all deployments allow outbound traffic; user controls data flow | Not Done |
+| FR-ANOM-07 | System SHALL expose anomaly summary in `status` output and `status.json` | Must | Operators need visibility without reading raw report files | Done (v0.6.0) |
+| FR-ANOM-08 | Anomaly reports SHALL be sanitized (no credentials, configurable path redaction) for safe sharing | Must | Reports may be shared with maintainers or automated systems | Done (v0.6.0 — home-dir redaction) |
+| FR-ANOM-09 | System SHALL support configurable anomaly notification (toast notification; webhook in future) | Should | Active alerting vs passive log reading | Done (v0.6.0 toast + v0.8.x webhook) |
+| FR-ANOM-10 | System SHALL auto-rotate anomaly reports (retain last 30 days, max 100 MB) | Should | Prevent unbounded growth of diagnostic data | Done (v0.6.0 — 30-day/50MB) |
+| FR-ANOM-11 | Outbound anomaly reporting (to external endpoint) SHALL be a configurable feature: enabled by default when outbound internet is allowed, disabled otherwise. System SHALL emit zero outbound traffic when disabled. | Must | Not all deployments allow outbound traffic; user controls data flow | Done (v0.8.x — off by default; SSRF-safe webhook sender) |
 
 #### Anomaly Categories
 
@@ -319,7 +319,7 @@ This section is organized by ISO/IEC 25010:2023 product quality characteristics.
 
 | ID | Requirement | Rationale | Target | Status |
 |----|------------|-----------|--------|--------|
-| NFR-FS-01 | All functional requirements in Section 3 marked "Must" SHALL be implemented before v1.0 release | Core value proposition depends on complete feature set | 100% of Must requirements | 95% (FR-SYNC-14, FR-DEL-09 remain) |
+| NFR-FS-01 | All functional requirements in Section 3 marked "Must" SHALL be implemented before v1.0 release | Core value proposition depends on complete feature set | 100% of Must requirements | ~99% (all Must-tier FRs delivered through v0.8.x; FR-WATCH-10 USN journal remains, scheduled for Phase 3) |
 | NFR-FS-02 | `test-mirrors` SHALL detect all common misconfiguration scenarios before first sync | Users must trust setup validation | 13+ diagnostic checks | Met |
 
 #### 4.1.2 Functional Correctness
@@ -362,7 +362,7 @@ This section is organized by ISO/IEC 25010:2023 product quality characteristics.
 |----|------------|-----------|----------|-------------|--------|
 | NFR-CA-01 | Maximum concurrent mirrors without degradation | Power users and enterprise deployments | 32 mirrors | Load test (latency, CPU, memory under load) | Not Tested |
 | NFR-CA-02 | Maximum tracked files per mirror | Enterprise-scale monorepos | 100,000 files per mirror | State DB performance test | Not Tested |
-| NFR-CA-03 | Maximum queue depth | Natural bound via dedup (see FR-QUEUE-08) | Unbounded (dedup-limited); memory safety valve at 200 MB | Queue memory profiling | Not Done (fixed 10K: Done) |
+| NFR-CA-03 | Maximum queue depth | Natural bound via dedup (see FR-QUEUE-08) | Unbounded (dedup-limited); memory safety valve at 200 MB | Queue memory profiling | Done (v0.5.0 — unbounded with 50K warning) |
 
 ### 4.3 Compatibility
 
@@ -408,7 +408,7 @@ This section is organized by ISO/IEC 25010:2023 product quality characteristics.
 
 | ID | Requirement | Rationale | Target | Status |
 |----|------------|-----------|--------|--------|
-| NFR-UE-01 | Default delete policy SHALL be `ignore` (never delete remote files) | Accidental data loss is catastrophic for trust | Default = ignore | Met |
+| NFR-UE-01 | Default delete policy SHALL be `delete` (mirror local deletions to remote). Deletion safety is provided by the `delete_policy: quarantine` option for non-VCS content and by git as the safety net for code projects. | Code projects have git as safety net; an archive-preserving default was considered (`ignore`) but rejected because it creates silent remote-local divergence for the typical user. Users whose workflows require archive semantics set `delete_policy: ignore` or `quarantine` explicitly. | Default = delete | Met |
 | NFR-UE-02 | `test-mirrors` SHALL validate configuration before first sync can run | Catch misconfigs before they cause damage | 13+ checks including remote reachability | Met |
 | NFR-UE-03 | `dry-run` SHALL exist for every destructive operation (sync, ghost cleanup) | Users must be able to preview before committing | Full preview with no side effects | Met |
 | NFR-UE-04 | Single-instance lock SHALL prevent concurrent processes from corrupting state | Two instances = guaranteed corruption | File-based lock with stale detection | Met |
@@ -486,13 +486,13 @@ This section is organized by ISO/IEC 25010:2023 product quality characteristics.
 | ID | Requirement | Rationale | Target | Status |
 |----|------------|-----------|--------|--------|
 | NFR-MO-01 | Platform-specific code SHALL be isolated in `_windows.go` / `_unix.go` build-tagged files | Adding platforms must not require modifying core logic | All platform code behind build tags | Met |
-| NFR-MO-02 | Each internal package SHALL have a single responsibility | Packages must be independently testable and replaceable | config, filter, watcher, sync, state, lock, metrics, logging, notify, rclone, service | Met |
+| NFR-MO-02 | Each internal package SHALL have a single responsibility | Packages must be independently testable and replaceable | config, filter, watcher, sync, state, lock, metrics, logging, notify, rclone, service, anomaly, hooks, telemetry | Met (14 packages) |
 
 #### 4.7.2 Testability
 
 | ID | Requirement | Rationale | Target | Measurement | Status |
 |----|------------|-----------|--------|-------------|--------|
-| NFR-TE-01 | Unit test count SHALL exceed 280 across all packages | Regression safety net for rapid development | > 280 tests | `go test ./internal/... ./cmd/... -count=1` | Met (287) |
+| NFR-TE-01 | Unit test count SHALL exceed 280 across all packages | Regression safety net for rapid development | > 280 tests | `go test ./internal/... ./cmd/... -count=1` | Met (539+ across 14 packages, 65% coverage) |
 | NFR-TE-02 | All tests SHALL pass with `-race` detection | Concurrency bugs are the hardest class to reproduce | Zero data races | `go test -race` on concurrent packages | Met |
 | NFR-TE-03 | Critical subsystems SHALL have injectable dependencies for test isolation | Tests must not require rclone or network | ListRemoteFunc, syncer interface | Met |
 | NFR-TE-04 | Bug hunt markers (SM-xxx) SHALL link each regression test to the bug it covers | Traceability from test to requirement to fix | Every SM-xxx test documents the scenario | Met |
@@ -514,9 +514,9 @@ This section is organized by ISO/IEC 25010:2023 product quality characteristics.
 
 | ID | Requirement | Rationale | Target | Status |
 |----|------------|-----------|--------|--------|
-| NFR-AD-01 | Core sync engine SHALL compile on Linux and macOS | Future cross-platform support must be architecturally possible | Cross-compile clean (`GOOS=linux go build`) | Partial (build tags exist, untested at runtime) |
+| NFR-AD-01 | Core sync engine SHALL compile on Linux and macOS (native build) | Future cross-platform support must be architecturally possible | Native build on target platform with CGo (cross-compile from Windows is no longer supported since SM-148 moved to mattn/go-sqlite3) | Partial (build tags exist, untested at runtime) |
 | NFR-AD-02 | Filename handling SHALL not assume NTFS semantics | Source FS may be ext4, exFAT, ZFS in future; target FS varies by backend | FS-agnostic path construction | Partial |
-| NFR-AD-03 | Binary SHALL be statically linked with no runtime dependencies beyond rclone | Deployment must be copy-and-run | CGO_ENABLED=0, pure-Go SQLite | Met |
+| NFR-AD-03 | Binary SHALL be statically linked with no runtime dependencies beyond rclone | Deployment must be copy-and-run | CGo enabled with statically-linked mattn/go-sqlite3 (SQLite C is embedded); no DLL/shared-library dependencies at runtime | Met |
 
 #### 4.8.2 Installability
 
@@ -547,7 +547,7 @@ SelectiveMirror is CLI-only. No GUI exists or is planned for the core product.
 |-----------|----------|-------|
 | rclone | Subprocess (stdin/stdout/stderr, exit codes) | All remote I/O delegated |
 | Filesystem | ReadDirectoryChangesW (Windows), fsnotify (cross-platform) | Event-driven change detection |
-| SQLite | database/sql with modernc.org/sqlite driver | Local state persistence |
+| SQLite | database/sql with `github.com/mattn/go-sqlite3` driver (CGo; SQLite C statically linked into the binary) | Local state persistence |
 | Windows SCM | golang.org/x/sys/windows/svc | Service lifecycle |
 | Toast notifications | Windows notification API | Optional, rate-limited |
 
@@ -852,7 +852,7 @@ Already implemented:
 - FairQueue (dedup, move-to-back fairness, priority deletes)
 - Circuit breaker with per-mirror exponential backoff
 - Per-file cooldown (fixed 30s — to be replaced in v0.5.0)
-- 287 unit tests, 5 integration test scripts
+- 530+ unit tests + 2 fuzz tests, 6 integration test scripts
 
 Remaining for 0.4.0 release:
 | Work Item | Requirements | Effort | Risk |

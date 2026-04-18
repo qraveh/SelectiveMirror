@@ -3154,8 +3154,15 @@ func TestParseExpiredQuarantineEntries_Empty(t *testing.T) {
 func TestSetOnOverflow_FiresAtThreshold(t *testing.T) {
 	q := NewFairQueue(0, 5*time.Second)
 
-	fired := 0
-	q.SetOnOverflow(func() { fired++ })
+	var fired atomic.Int32
+	fireSignal := make(chan struct{}, 1)
+	q.SetOnOverflow(func() {
+		fired.Add(1)
+		select {
+		case fireSignal <- struct{}{}:
+		default:
+		}
+	})
 
 	// Enqueue 50001 items with unique keys
 	for i := 0; i < 50001; i++ {
@@ -3165,11 +3172,15 @@ func TestSetOnOverflow_FiresAtThreshold(t *testing.T) {
 		})
 	}
 
-	// Give the goroutine a moment to fire
-	time.Sleep(50 * time.Millisecond)
+	// Event-based wait for the goroutine to fire (fallback safety timeout).
+	select {
+	case <-fireSignal:
+	case <-time.After(2 * time.Second):
+		t.Fatal("overflow callback did not fire within timeout")
+	}
 
-	if fired != 1 {
-		t.Errorf("expected overflow callback to fire exactly once, got %d", fired)
+	if got := fired.Load(); got != 1 {
+		t.Errorf("expected overflow callback to fire exactly once, got %d", got)
 	}
 }
 

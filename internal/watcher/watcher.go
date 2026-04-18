@@ -148,8 +148,9 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		// Only add watch if the syncignore is outside the project root
 		// (files inside the root are already watched by the recursive watch).
-		if !strings.HasPrefix(strings.ToLower(syncDir)+string(os.PathSeparator), strings.ToLower(projDir)+string(os.PathSeparator)) &&
-			strings.ToLower(syncDir) != strings.ToLower(projDir) {
+		syncDirSep := strings.ToLower(syncDir) + string(os.PathSeparator)
+		projDirSep := strings.ToLower(projDir) + string(os.PathSeparator)
+		if !strings.HasPrefix(syncDirSep, projDirSep) && !strings.EqualFold(syncDir, projDir) {
 			if err := m.fsw.Add(syncDir); err != nil {
 				m.log.Warn("failed to watch external syncignore directory",
 					"project", pw.project.Name, "path", syncDir, "error", err)

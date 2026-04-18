@@ -576,22 +576,6 @@ Project: MyProject
   Last full sync: 2026-03-27T10:10:00Z (5m ago)
 ```
 
-## test-mirrors
-
-Check configuration validity and rclone connectivity. Exits with code 0 on success, 1 on failure.
-
-```
-smirror test-mirrors
-```
-
-Performs these checks:
-
-1. Parses the config file and validates all required fields.
-2. Verifies each project's `local_path` exists.
-3. Checks `.syncignore` file presence for each project.
-4. Detects the rclone binary and checks version compatibility.
-5. Tests connectivity to each project's remote via `rclone lsd`.
-
 ## list-filters
 
 Show the effective filter rules for one or all projects.
@@ -743,24 +727,12 @@ smirror 1.0.0
 
 # 6. Delete Policies
 
-The `delete_policy` configuration field controls what happens on the remote when a file is deleted locally. There are three policies:
+The `delete_policy` configuration field controls what happens on the remote when a file is deleted locally. There are three policies. The default is `delete`.
 
-## ignore (default)
-
-```yaml
-delete_policy: ignore
-```
-
-Local deletions are **not propagated** to the remote. The remote retains its copy of the file. This is the safest option -- the remote acts as an append-only archive.
-
-**rclone mapping**: Full-project syncs use `rclone copy` (upload-only, never deletes remote files). Single-file delete events are logged but no rclone command is executed.
-
-**Use case**: Backup scenarios where you want to keep deleted files recoverable on the remote.
-
-## mirror
+## delete (default)
 
 ```yaml
-delete_policy: mirror
+delete_policy: delete
 ```
 
 Local deletions **are propagated** to the remote. The remote is made to mirror the local state exactly.
@@ -769,9 +741,23 @@ Local deletions **are propagated** to the remote. The remote is made to mirror t
 
 - Full-project syncs use `rclone sync` (uploads new/changed files and deletes remote files not present locally).
 - Single-file deletes use `rclone deletefile <remote-path>`.
-- Directory deletes iterate over all synced files under the directory and delete each one individually.
+- Directory deletes use `rclone purge` for atomic recursive deletion (FR-DEL-07).
 
-**Use case**: Maintaining an exact mirror of your working directory. Suitable when the remote is a staging area or deployment target.
+**Use case**: Maintaining an exact mirror of your working directory. Suitable for code projects where git is the safety net, or when the remote is a staging area or deployment target.
+
+**Note**: `delete_policy: mirror` is an accepted alias that emits a deprecation warning; use `delete` instead.
+
+## ignore
+
+```yaml
+delete_policy: ignore
+```
+
+Local deletions are **not propagated** to the remote. The remote retains its copy of the file. The remote acts as an append-only archive.
+
+**rclone mapping**: Full-project syncs use `rclone copy` (upload-only, never deletes remote files). Single-file delete events are logged but no rclone command is executed.
+
+**Use case**: Backup scenarios where you want to keep deleted files recoverable on the remote.
 
 ## quarantine
 
@@ -1221,3 +1207,133 @@ If your project directory is on a WSL filesystem (e.g., `\\wsl.localhost\Ubuntu\
 - The periodic reconciliation (`reconcile_interval_sec`) is your safety net. It catches all changes regardless of how they were made.
 - Consider setting a shorter reconciliation interval (e.g., 60 seconds) for WSL-hosted projects.
 - Do not use symlinks that cross the WSL/Windows boundary in watched directories.
+
+
+# 12. Hooks
+
+SelectiveMirror can run shell commands before and after each file sync. Hooks are useful for validation (lint before upload), transformation (compress), and notification (Slack, CI trigger).
+
+## Configuring Hooks
+
+Hooks can be set globally (applied to all mirrors) or per-mirror (overrides the global):
+
+```yaml
+# Global hooks
+pre_sync_hook: 'echo "about to sync %SMIRROR_FILE%"'
+post_sync_hook: 'powershell -NoProfile -Command "Write-Host \"Synced: $env:SMIRROR_FILE\""'
+
+mirrors:
+  - name: MyProject
+    local_path: C:\Projects\MyProject
+    remote: "gdrive:backup/MyProject"
+    # Per-mirror hooks override the globals for this mirror only
+    pre_sync_hook: ""
+    post_sync_hook: 'curl -X POST https://example.com/webhook'
+```
+
+## Execution Model
+
+- **Windows**: `cmd.exe /C <hook_command>`
+- **Unix**: `sh -c <hook_command>`
+- **Timeout**: 30 seconds (hook is killed if it runs longer)
+- **Failure policy**: Hook errors are warnings, never block sync. The sync proceeds regardless of hook exit code.
+
+## Environment Variables
+
+Each hook receives:
+
+| Variable | Contents |
+|----------|----------|
+| `SMIRROR_PROJECT` | Mirror name (e.g., `MyProject`) |
+| `SMIRROR_FILE` | File path relative to the mirror root |
+| `SMIRROR_REMOTE` | rclone remote destination (e.g., `gdrive:backup/MyProject`) |
+| `SMIRROR_EVENT` | Either `pre_sync` or `post_sync` |
+
+## Security
+
+Hooks run with the privilege of the smirror process:
+
+- **Foreground mode**: current user
+- **Windows Service mode**: LocalSystem (full system access)
+
+Two enforced protections (see SECURITY.md for full details):
+
+1. **Admin-owned config gate (SEC-C5)**: if any mirror has a hook and smirror runs as a Windows Service, smirror refuses to start unless the config file is owned by Administrators or LocalSystem. Remedy: move config to an admin-writable-only location such as `%ProgramData%\SelectiveMirror\config.yaml`, or remove hooks.
+2. **Shell-metacharacter rejection (SEC-C5)**: if any `SMIRROR_*` value (typically `SMIRROR_FILE` from a filename) contains `& | < > " ^ $ \` ( ) ;` or control characters, the hook is skipped for that event and the rejection is logged.
+
+**Always quote variables** in hook scripts as defense-in-depth:
+
+```yaml
+# Safe (Windows)
+post_sync_hook: 'powershell -NoProfile -Command "Write-Host \"Synced: $env:SMIRROR_FILE\""'
+
+# Safe (Unix)
+post_sync_hook: 'echo "Synced: \"${SMIRROR_FILE}\""'
+```
+
+
+# 13. Anomaly Detection
+
+SelectiveMirror is a self-diagnosing system. Every unusual runtime event — ghost leaks, circuit-breaker trips, panics, stale reconciliation — is classified as an anomaly, recorded in a JSON-lines file, and summarized in the `status` command.
+
+## What Is Recorded
+
+Anomalies fall into 11 categories:
+
+| Category | Trigger |
+|----------|---------|
+| `Panic` | A goroutine panicked and was caught by `safeGo` |
+| `CircuitBreaker` | A mirror's circuit breaker tripped after consecutive failures |
+| `Watcher:Error` | fsnotify reported an error |
+| `Queue:DepthWarning` | Queue depth exceeded the warning threshold |
+| `Ghost:Leak` | Remote file exists with no local counterpart and is excluded by filters |
+| `Ghost:Orphan` | Remote file exists with no local counterpart (not excluded) |
+| `Ghost:Stale` | Local file is marked synced but absent on remote |
+| `Ghost:Retained` | Remote file is intentionally kept per delete policy |
+| `Reconciliation:Stale` | A reconciliation cycle ran over expected duration |
+| `Path:Gone` | Watched path disappeared |
+| `Sync:Timeout` / `Sync:Failure` | rclone timed out or returned non-zero |
+
+Each entry includes timestamp, category, severity, affected mirror, affected file (if applicable), a context snapshot, and a causal hypothesis chain.
+
+## Configuration
+
+```yaml
+anomaly_detection_enabled: true    # default: true
+```
+
+When enabled, anomalies are written to `~/.selectivemirror/anomalies/anomalies-YYYY-MM-DD.jsonl`. Files rotate daily and are automatically purged after 30 days or 50 MB, whichever comes first.
+
+## Viewing Recent Anomalies
+
+```
+smirror status              # summary counts
+cat ~/.selectivemirror/anomalies/anomalies-2026-04-18.jsonl | jq .
+```
+
+Paths are sanitized before persistence (home directory replaced with `~`).
+
+
+# 14. Webhook Alerts
+
+Anomalies can be pushed to any HTTPS endpoint as JSON for integration with Slack, Discord, PagerDuty, or custom incident routing.
+
+## Configuration
+
+```yaml
+alert_webhook_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+alert_min_severity: error    # info, warning, error (default), critical
+```
+
+Only anomalies meeting `alert_min_severity` are forwarded. With `alert_webhook_url` empty (the default) no alerts are sent.
+
+## Transport Protections
+
+The webhook sender is hardened against SSRF (SEC-C4):
+
+- **HTTPS-only**: `http://` URLs are rejected.
+- **IP blocklist**: private ranges (RFC 1918), loopback, link-local, and CGNAT ranges are rejected.
+- **No redirects**: HTTP redirects are not followed.
+- **DNS-rebind-resistant**: the resolved IP is checked again inside the connection dialer.
+
+Absolute paths in the payload are automatically redacted (`~/` replaces the user home) before transmission.

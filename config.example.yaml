@@ -19,6 +19,9 @@ mirrors:
   #   syncignore_path: ""           # Override .syncignore location (default: <local_path>/.syncignore)
   #   delete_policy: ""             # Per-mirror override: ignore, delete, or quarantine (empty = use global)
   #   quarantine_days: 0            # Per-mirror quarantine retention (0 = use global)
+  #   rclone_extra_flags: []        # Per-mirror rclone flags, appended after global (e.g. ["--drive-chunk-size", "64M"])
+  #   pre_sync_hook: ""             # Per-mirror pre-sync shell command (overrides global; see SECURITY.md for hook rules)
+  #   post_sync_hook: ""            # Per-mirror post-sync shell command (overrides global)
 
 # Patterns applied to ALL mirrors (in addition to per-mirror .syncignore)
 # Uses .gitignore syntax
@@ -57,7 +60,7 @@ global_excludes:
                                # Catches changes invisible to fsnotify (WSL, network drives, external tools)
 
 # Delete policy: what happens when a local file is deleted
-# delete_policy: ignore         # ignore (default), mirror, or quarantine
+# delete_policy: delete         # ignore, delete (default), or quarantine
 # quarantine_days: 30           # Days to keep quarantined files (only for quarantine mode)
 
 # Service settings
@@ -66,5 +69,15 @@ global_excludes:
 # notify_enabled: true          # Windows toast notifications on drift/failure
 
 # Alerting: incident-based webhook notifications for anomalies
-# alert_webhook_url: ""         # HTTP(S) endpoint for JSON alerts (Slack, Discord, PagerDuty, etc.)
+# alert_webhook_url: ""         # HTTPS endpoint for JSON alerts (https-only; Slack, Discord, PagerDuty, etc.)
 # alert_min_severity: error     # Minimum severity to alert: info, warning, error, critical
+
+# Anomaly detection (ghost leaks, circuit breaker trips, panics, stale reconciliation, etc.)
+# anomaly_detection_enabled: true   # Record anomalies to ~/.selectivemirror/anomalies/ (default: true)
+
+# Pre/post-sync hooks — shell commands run before/after each file sync (see SECURITY.md).
+# When any hook is configured AND smirror runs as a Windows Service, the config file
+# must be owned by Administrators or LocalSystem (SEC-C5). Shell metacharacters in
+# SMIRROR_* environment values are rejected before hook execution.
+# pre_sync_hook: ""             # Global default pre-sync hook (cmd.exe /C on Windows, sh -c on Unix)
+# post_sync_hook: ""            # Global default post-sync hook

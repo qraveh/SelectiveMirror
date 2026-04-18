@@ -22,6 +22,11 @@ import (
 	"github.com/qraveh/SelectiveMirror/internal/telemetry"
 )
 
+func init() {
+	// Wire telemetry update endpoint from centralized repo constants (main.go).
+	telemetry.UpdateEndpoint = "https://api.github.com/repos/" + repoOwner + "/" + repoName + "/releases/latest"
+}
+
 // selfUpdateResult captures the preflight analysis before asking the user.
 type selfUpdateResult struct {
 	current       string

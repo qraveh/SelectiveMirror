@@ -20,7 +20,7 @@ import (
 var SearchEndpoint = "https://api.github.com/search/issues"
 
 // SearchRepo is the GitHub repo to search. Override for testing.
-var SearchRepo = "qraveh/SelectiveMirror"
+var SearchRepo = repoOwner + "/" + repoName
 
 // issueSearchResult is the response from GitHub's search/issues API.
 type issueSearchResult struct {

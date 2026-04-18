@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -221,6 +223,20 @@ func (g Global) IsNotifyEnabled() bool {
 	return *g.NotifyEnabled
 }
 
+// HasHooks reports whether any hook (global or per-mirror, pre or post) is
+// configured. Used by SEC-C5 to decide whether to enforce admin-owned config.
+func (g *Global) HasHooks() bool {
+	if g.PreSyncHook != "" || g.PostSyncHook != "" {
+		return true
+	}
+	for _, p := range g.Projects {
+		if p.PreSyncHook != "" || p.PostSyncHook != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // DefaultDataDir returns the default data directory (~/.selectivemirror/).
 func DefaultDataDir() string {
 	home, err := os.UserHomeDir()
@@ -378,7 +394,53 @@ func (g *Global) Validate() error {
 		}
 	}
 
+	// SEC-C4: Validate alert_webhook_url. Reject plaintext HTTP, loopback, and
+	// RFC1918/link-local IPs to prevent SSRF and cleartext credential exfil.
+	if g.AlertWebhookURL != "" {
+		if err := validateWebhookURL(g.AlertWebhookURL); err != nil {
+			return fmt.Errorf("alert_webhook_url: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// validateWebhookURL rejects URLs with unsafe schemes or addresses that could
+// enable SSRF attacks. SEC-C4.
+func validateWebhookURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("scheme %q not allowed; only https:// is permitted (http:// is rejected to prevent cleartext exfil)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("host is empty")
+	}
+	// If the host is a literal IP, check it's not loopback/private/link-local.
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedIP(ip) {
+			return fmt.Errorf("host %s is a loopback, private, or link-local address (SSRF blocked)", ip)
+		}
+	}
+	// For hostnames, the webhook client's DialContext will re-check each
+	// resolved IP at connection time (SEC-C4 DNS-rebind defense in webhook.go).
+	return nil
+}
+
+// isBlockedIP reports whether an IP is in a range that webhooks should never
+// target: loopback, private (RFC1918), link-local, multicast, unspecified,
+// and IPv6 unique-local. SEC-C4.
+func isBlockedIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified() ||
+		ip.IsInterfaceLocalMulticast()
 }
 
 // FindProject returns the project config for the given name, or nil.
