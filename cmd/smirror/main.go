@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.8.49-dev"
+var version = "0.8.50-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -161,26 +161,9 @@ func cliMain() {
 	case "unmirror", "removemirror", "remove-mirror", "remove":
 		cmdUnmirror(configPath, cmdArgs)
 	case "clean":
-		if subcommandHelp(cmdArgs, `Usage: smirror clean [--yes]
-
-Stop the service, uninstall it, and remove all user data (config,
-state DB, logs). Equivalent to: smirror service stop uninstall --clean
-
-Flags:
-  --yes    Skip confirmation prompts`) {
-			break
-		}
-		// Validate flags before routing to service.
-		for _, a := range cmdArgs {
-			if strings.HasPrefix(a, "-") && a != "--yes" && a != "-y" {
-				fmt.Fprintf(os.Stderr, "unknown flag: %s\nRun 'smirror clean --help' for usage.\n", a)
-				os.Exit(ExitError)
-			}
-		}
-		// Shortcut: smirror clean = smirror service stop uninstall --clean [--yes]
-		cleanArgs := []string{"stop", "uninstall", "--clean"}
-		cleanArgs = append(cleanArgs, cmdArgs...) // pass through --yes if given
-		cmdService(configPath, cleanArgs)
+		cmdClean(configPath, cmdArgs)
+	case "task":
+		cmdTask(configPath, cmdArgs)
 	case "service":
 		cmdService(configPath, cmdArgs)
 	case "version":
@@ -215,11 +198,15 @@ Commands:
   addmirror <path...> [flags]  Add directories as mirrors (aliases: add-mirror, add)
                              Flags: -dest <remote>, --backup, --delete, --initial-sync
   unmirror <name|path>       Remove a mirror from config (aliases: removemirror, remove-mirror, remove)
-  clean [--yes]              Stop service, uninstall, and remove all user data
+  clean [--self|--all] [--yes]  Remove user data and background registration
+                             --self: remove current user's task + ~/.selectivemirror/ (no admin; default)
+                             --all:  --self + service if installed + %%ProgramData%%\SelectiveMirror (admin for service)
   selfupdate [flags]         Check for and install updates (--check, --whatsnew, --yes, --include-rclone)
+  task <action>              Per-user Scheduled Task (recommended background mode; no admin)
+                             Actions: install, uninstall, start, stop, status
   service <action...>        Windows Service: install [start], stop, uninstall [--clean] [--yes]
                              Compound: "service install start", "service stop uninstall [--clean]"
-                             ("run as administrator" elevated cmd/PowerShell required)
+                             ("run as administrator" elevated cmd/PowerShell required; advanced 24/7 mode)
   version                    Show version
 
 Options:
