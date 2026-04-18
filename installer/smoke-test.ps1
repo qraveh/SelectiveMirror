@@ -1,4 +1,4 @@
-# installer/smoke-test.ps1 — End-to-end MSI regression test.
+# installer/smoke-test.ps1 -- End-to-end MSI regression test.
 #
 # Builds the MSI, installs it, validates every SEC-C2 / perMachine invariant,
 # round-trips task install, and uninstalls cleanly. Run from an elevated
@@ -40,7 +40,7 @@ $targetDir    = Split-Path $target
 #-------------------------------------------------------------------------------
 Heading "0. Preflight"
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) { Fail "not elevated — re-run from admin PowerShell"; exit 1 }
+if (-not $isAdmin) { Fail "not elevated -- re-run from admin PowerShell"; exit 1 }
 Pass "running elevated"
 
 # Wait for any leftover msiexec processes from prior runs
@@ -121,7 +121,7 @@ $svcActions = $ca | Where-Object { (Field $_ 1) -match '^(Service|Smirror)' }
 if ($svcActions.Count -eq 0) { Pass "no Service* custom actions" }
 else                         { Fail "$($svcActions.Count) Service* custom actions found" }
 
-# Registry — all HKLM
+# Registry -- all HKLM
 $reg = Query 'SELECT * FROM Registry'
 $hklm = 0; $hkcu = 0
 foreach ($r in $reg) {
@@ -135,7 +135,7 @@ else                               { Fail "HKCU entries present: $hkcu (HKLM: $h
 Heading "3. Install (synchronous)"
 $p = Start-Process msiexec -ArgumentList "/i","`"$MsiPath`"","/quiet","/l*v","`"$installLog`"" -Wait -PassThru
 if ($p.ExitCode -eq 0) { Pass "msiexec /i exit=0" }
-else                   { Fail "msiexec /i exit=$($p.ExitCode) — see $installLog"; Get-Content $installLog -Tail 30 }
+else                   { Fail "msiexec /i exit=$($p.ExitCode) -- see $installLog"; Get-Content $installLog -Tail 30 }
 
 #-------------------------------------------------------------------------------
 Heading "4. Post-install state"
@@ -178,7 +178,7 @@ if (Test-Path $target) {
 Heading "6. MSI uninstall (synchronous)"
 $p2 = Start-Process msiexec -ArgumentList "/x","`"$MsiPath`"","/quiet","/l*v","`"$uninstallLog`"" -Wait -PassThru
 if ($p2.ExitCode -eq 0) { Pass "msiexec /x exit=0" }
-else                    { Fail "msiexec /x exit=$($p2.ExitCode) — see $uninstallLog" }
+else                    { Fail "msiexec /x exit=$($p2.ExitCode) -- see $uninstallLog" }
 
 #-------------------------------------------------------------------------------
 Heading "7. Clean uninstall verification"
