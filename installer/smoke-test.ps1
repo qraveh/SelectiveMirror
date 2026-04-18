@@ -16,10 +16,25 @@
 #   3 = invariant violation (service registered, wrong path, leftover artifacts, etc.)
 
 param(
-    [string]$Version = "0.8.52",
+    [string]$Version = "",
     [switch]$SkipBuild,
     [string]$MsiPath = ""
 )
+
+# Source of truth: cmd/smirror/main.go. Strip -dev suffix for MSI.
+function Get-SourceVersion {
+    param([string]$RepoRoot)
+    $main = Join-Path $RepoRoot "cmd/smirror/main.go"
+    if (-not (Test-Path $main)) { throw "Source file not found: $main" }
+    $content = Get-Content $main -Raw
+    if ($content -match 'var\s+version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)(?:-[a-zA-Z0-9]+)?"') {
+        return $Matches[1]
+    }
+    throw "Could not parse version from $main"
+}
+if (-not $Version) {
+    $Version = Get-SourceVersion (Split-Path $PSScriptRoot -Parent)
+}
 
 $ErrorActionPreference = "Continue"
 
@@ -102,6 +117,11 @@ function Field($rec,[int]$idx) {
 $props = Query 'SELECT Property,Value FROM Property'
 $allusers = $props | Where-Object { (Field $_ 1) -eq 'ALLUSERS' } | ForEach-Object { Field $_ 2 }
 if ($allusers -eq '1') { Pass "ALLUSERS=1 (perMachine)" } else { Fail "ALLUSERS='$allusers' (expected '1')" }
+
+# ProductVersion flowed through from source / -Version param
+$msiVersion = $props | Where-Object { (Field $_ 1) -eq 'ProductVersion' } | ForEach-Object { Field $_ 2 }
+if ($msiVersion -eq $Version) { Pass "ProductVersion=$msiVersion matches expected $Version" }
+else                          { Fail "ProductVersion=$msiVersion (expected $Version)" }
 
 # INSTALLFOLDER parent = ProgramFiles64Folder
 $dirs = Query 'SELECT * FROM Directory'

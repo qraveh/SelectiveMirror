@@ -2,6 +2,13 @@
   <PropertyGroup>
     <OutputType>Package</OutputType>
     <InstallerPlatform>x64</InstallerPlatform>
+
+    <!-- ProductVersion is threaded in from build-msi.ps1 / smoke-test.ps1
+         / release.yml via /p:Version=<x.y.z> on the dotnet build command
+         line. It lands as a WiX preprocessor variable, overriding the
+         fallback in Variables.wxi. The Condition ensures we don't emit an
+         empty ProductVersion= if Version wasn't supplied. -->
+    <DefineConstants Condition=" '$(Version)' != '' ">ProductVersion=$(Version)</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.UI.wixext" Version="6.0.2" />

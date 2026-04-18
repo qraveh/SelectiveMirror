@@ -1,9 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Include>
-  <!-- Product version — update for each release -->
-  <?define ProductVersion = "0.8.0" ?>
+  <!-- Product version.
+       If ProductVersion is defined externally (e.g., by the wixproj's
+       DefineConstants pulling in the version from build-msi.ps1 or CI),
+       that value takes precedence. The hard-coded fallback below is a
+       safety net for direct `wix build` invocations without a version
+       override. Source of truth is cmd/smirror/main.go.
 
-  <!-- Stable GUIDs — DO NOT change after first release -->
+       MSI requires a strict x.y.z[.w] numeric ProductVersion. Any
+       "-dev" suffix from source must be stripped before passing here. -->
+  <?ifndef ProductVersion ?>
+    <?define ProductVersion = "0.8.0" ?>
+  <?endif ?>
+
+  <!-- Stable GUIDs. DO NOT change after first release. -->
   <?define UpgradeCode = "7E3A9F12-4B5C-4D8E-A1F0-3C6B8D9E2F4A" ?>
   <?define ProductCode = "*" ?>
 
