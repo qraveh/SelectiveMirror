@@ -41,8 +41,11 @@ jobs:
         with:
           dotnet-version: '9.0.x'
 
-      - name: Install WiX
-        run: dotnet tool install --global wix
+      # WiX v7 (shipped 2025-09-25) introduced the Open Source Maintenance
+      # Fee scheme (error WIX7015 without an OSMF EULA acceptance). Pin to
+      # v6 to match the local dev toolchain and avoid the EULA gate.
+      - name: Install WiX (v6 — avoid v7 OSMF EULA requirement)
+        run: dotnet tool install --global wix --version 6.0.2
 
       - name: Add WiX UI extension
         run: wix extension add WixToolset.UI.wixext/6.0.2 -g

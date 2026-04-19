@@ -4,7 +4,6 @@ package task
 
 import (
 	"bytes"
-	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -292,16 +291,3 @@ func ExpectedXML(exePath, configPath string) ([]byte, error) {
 	return def.RenderXML()
 }
 
-// validateXMLAgainstInstalled is a debug helper: compare the task currently
-// installed against what we would install now. Returns any differences.
-// Unused at present — kept for future `smirror task verify`.
-func validateXMLAgainstInstalled() error {
-	installedOut, err := runner("schtasks.exe", "/Query", "/TN", TaskName, "/XML")
-	if err != nil {
-		return fmt.Errorf("query installed: %w", err)
-	}
-	var x struct {
-		XMLName xml.Name
-	}
-	return xml.Unmarshal(installedOut, &x)
-}
