@@ -184,20 +184,59 @@ else                                                  { Fail "$targetDir NOT on 
 #-------------------------------------------------------------------------------
 Heading "5. Per-user task round-trip"
 if (Test-Path $target) {
-    $taskOut = & $target task install 2>&1
-    Write-Host ($taskOut | Out-String).Trim()
-    if ($taskOut -match 'installed for the current user') { Pass "task install" }
-    else                                                   { Fail "task install output unexpected" }
+    # `smirror task install` preflights config.Load to reject broken
+    # configs. Clean CI runners have no config, so we seed a minimal
+    # valid one, run the round-trip, then remove it. The seeded config
+    # needs only to parse cleanly -- the task doesn't actually run during
+    # the smoke test, so the mirror targets never get exercised.
+    $cfgDir = Join-Path $env:USERPROFILE ".selectivemirror"
+    $cfgPath = Join-Path $cfgDir "config.yaml"
+    $cfgPreExisted = Test-Path $cfgPath
+    if (-not $cfgPreExisted) {
+        New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+        $testConfig = @"
+mirrors:
+  - name: smoke-test-placeholder
+    local_path: $env:TEMP
+    remote: "local:$env:TEMP"
+global_excludes:
+  - .git/
+"@
+        Set-Content -Path $cfgPath -Value $testConfig -Encoding UTF8
+        Write-Host "  (seeded minimal config at $cfgPath for task round-trip)"
+    }
 
-    $statusOut = & $target task status 2>&1
-    Write-Host ($statusOut | Out-String).Trim()
-    if ($statusOut -match 'installed') { Pass "task status reports installed" }
-    else                               { Fail "task status unexpected" }
+    try {
+        $taskOut = & $target task install 2>&1
+        Write-Host ($taskOut | Out-String).Trim()
+        if ($taskOut -match 'installed for the current user') { Pass "task install" }
+        else                                                   { Fail "task install output unexpected" }
 
-    $uninstallOut = & $target task uninstall 2>&1
-    Write-Host ($uninstallOut | Out-String).Trim()
-    if ($uninstallOut -match 'uninstalled') { Pass "task uninstall" }
-    else                                    { Fail "task uninstall output unexpected" }
+        $statusOut = & $target task status 2>&1
+        Write-Host ($statusOut | Out-String).Trim()
+        # Strict match: the colon-prefixed "installed" state, not the
+        # "is not installed" negation. Regex anchors on "Task \"...\": installed".
+        if ($statusOut -match ':\s*installed\b' -and $statusOut -notmatch 'not installed') {
+            Pass "task status reports installed"
+        } else {
+            Fail "task status unexpected"
+        }
+
+        $uninstallOut = & $target task uninstall 2>&1
+        Write-Host ($uninstallOut | Out-String).Trim()
+        # Accept either the success message ("Task ... uninstalled.") or
+        # the idempotent no-op ("Task is not installed -- nothing to do.").
+        if ($uninstallOut -match 'uninstalled|nothing to do') { Pass "task uninstall" }
+        else                                                   { Fail "task uninstall output unexpected" }
+    } finally {
+        if (-not $cfgPreExisted) {
+            Remove-Item $cfgPath -Force -ErrorAction SilentlyContinue
+            # Only remove dir if it's empty and we created it.
+            if ((Get-ChildItem $cfgDir -ErrorAction SilentlyContinue).Count -eq 0) {
+                Remove-Item $cfgDir -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 #-------------------------------------------------------------------------------
