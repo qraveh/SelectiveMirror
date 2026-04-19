@@ -194,11 +194,17 @@ if (Test-Path $target) {
     $cfgPreExisted = Test-Path $cfgPath
     if (-not $cfgPreExisted) {
         New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+        # Use forward slashes so the YAML string parser doesn't misinterpret
+        # backslash sequences (e.g. the \U in C:\Users\... would be parsed
+        # as a Unicode escape expecting 8 hex digits in a double-quoted
+        # YAML string). Forward slashes work as path separators on Windows
+        # and avoid the entire escape-sequence class of YAML errors.
+        $tempForward = $env:TEMP -replace '\\','/'
         $testConfig = @"
 mirrors:
   - name: smoke-test-placeholder
-    local_path: $env:TEMP
-    remote: "local:$env:TEMP"
+    local_path: $tempForward
+    remote: 'local:$tempForward'
 global_excludes:
   - .git/
 "@
