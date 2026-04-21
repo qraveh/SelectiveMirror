@@ -109,16 +109,19 @@ func cmdRemoteSet(configPath string, remotePath string) {
 			os.Exit(ExitConfigError)
 		}
 
-		rcloneInfo, err := rclone.Detect("")
+		// Load config up front so we can honor rclone_path and rclone_config.
+		// A missing/invalid config is tolerated — fall back to Detect("").
+		var rclonePath, rcloneConfig string
+		if cfg := loadConfigBestEffort(configPath); cfg != nil {
+			rclonePath = cfg.RclonePath
+			rcloneConfig = cfg.RcloneConfig
+		}
+
+		rcloneInfo, err := rclone.Detect(rclonePath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: rclone not found: %v\n", err)
 			fmt.Fprintln(os.Stderr, "Install rclone: https://rclone.org/install/")
 			os.Exit(ExitRcloneError)
-		}
-
-		var rcloneConfig string
-		if cfg, err := config.Load(configPath); err == nil {
-			rcloneConfig = cfg.RcloneConfig
 		}
 
 		remoteName := rclone.RemoteNameFromPath(remotePath)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,6 +56,37 @@ global_excludes:
 	_, err := Load(configPath)
 	if err == nil {
 		t.Fatal("expected error for config with no projects")
+	}
+}
+
+// TestLoadMirrorsAsMap covers the common mistake where all mirror list entries
+// are commented out, leaving a global field (e.g. delete_policy) indented under
+// "mirrors:" so YAML parses it as a map instead of a sequence. The error should
+// explain the shape mismatch, not just report the raw YAML type error.
+func TestLoadMirrorsAsMap(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(configPath, []byte(`
+mirrors:
+#   - name: proj
+#     local_path: C:\x
+#     remote: "r:x"
+    delete_policy: delete
+`), 0644)
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatal("expected error for mirrors-as-map config")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, `"mirrors:" must be a YAML list`) {
+		t.Errorf("expected friendly hint about mirrors list, got: %v", err)
+	}
+	if !strings.Contains(msg, "same indent as") {
+		t.Errorf("expected indent hint, got: %v", err)
+	}
+	if !strings.Contains(msg, `"mirrors: []"`) {
+		t.Errorf("expected empty-list fix hint, got: %v", err)
 	}
 }
 

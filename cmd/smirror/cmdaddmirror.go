@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -77,13 +76,16 @@ Aliases: add-mirror, add
 Flags:
   -dest <remote_path>    Override the default remote (e.g., "gdrive:backup/MyProject")
                          Also accepts local paths (e.g., "C:\MyDrive\AI-hub")
-  --backup, -b           If destination has content, rename it to .bak (non-interactive)
   --delete, -d           If destination has content, set delete_policy: delete (non-interactive)
   --initial-sync         Run initial sync immediately after adding the mirror
 
+If the destination already has content, addmirror aborts unless --delete is set
+(or you clean the destination manually, then retry). smirror does not manage
+backups of pre-existing destination content.
+
 Examples:
   smirror addmirror C:\Projects\MyApp
-  smirror addmirror C:\Work -dest C:\MyDrive\backups --backup --initial-sync
+  smirror addmirror C:\Work -dest C:\MyDrive\backups --initial-sync
   smirror addmirror C:\Docs -dest s3:my-bucket/mirrors --delete`) {
 		return
 	}
@@ -96,13 +98,12 @@ Add one or more directories as mirrors.
 Flags:
   -dest <remote_path>    Override the default remote (e.g., "gdrive:backup/MyProject")
                          Also accepts local paths (e.g., "C:\MyDrive\AI-hub")
-  --backup, -b           If destination has content, rename it to .bak (non-interactive)
   --delete, -d           If destination has content, set delete_policy: delete (non-interactive)
   --initial-sync         Run initial sync immediately after adding the mirror
 
 Examples:
   smirror addmirror C:\Projects\MyApp
-  smirror addmirror C:\Work -dest C:\MyDrive\backups --backup --initial-sync
+  smirror addmirror C:\Work -dest C:\MyDrive\backups --initial-sync
   smirror addmirror C:\Docs -dest s3:my-bucket/mirrors --delete`)
 		os.Exit(ExitConfigError)
 	}
@@ -110,10 +111,11 @@ Examples:
 	// Parse args: separate paths from flags
 	var localPaths []string
 	var destRemote string
-	var conflictMode string // "", "backup", or "delete"
+	var conflictMode string // "" or "delete"
 	var initialSync bool
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
+		a := args[i]
+		switch a {
 		case "-dest", "--dest":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "Error: -dest requires a remote path argument")
@@ -121,14 +123,16 @@ Examples:
 			}
 			destRemote = args[i+1]
 			i++
-		case "--backup", "-b":
-			conflictMode = "backup"
 		case "--delete", "-d":
 			conflictMode = "delete"
 		case "--initial-sync":
 			initialSync = true
 		default:
-			localPaths = append(localPaths, args[i])
+			if strings.HasPrefix(a, "-") {
+				fmt.Fprintf(os.Stderr, "unknown flag: %s\nRun 'smirror addmirror --help' for usage.\n", a)
+				os.Exit(ExitError)
+			}
+			localPaths = append(localPaths, a)
 		}
 	}
 
@@ -242,15 +246,16 @@ Examples:
 		os.Exit(ExitConfigError)
 	}
 
-	// Detect rclone
-	rcloneInfo, err := rclone.Detect("")
+	// Detect rclone — honor rclone_path from config if loaded.
+	var rclonePath, rcloneConfig string
+	if cfg != nil {
+		rclonePath = cfg.RclonePath
+		rcloneConfig = cfg.RcloneConfig
+	}
+	rcloneInfo, err := rclone.Detect(rclonePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: rclone not found: %v\n", err)
 		os.Exit(ExitRcloneError)
-	}
-	var rcloneConfig string
-	if cfg != nil {
-		rcloneConfig = cfg.RcloneConfig
 	}
 
 	// Verify rclone remote exists (skip for local paths — rclone handles them natively)
@@ -370,7 +375,7 @@ global_excludes:
 
 // addOneMirror adds a single directory as a mirror. Returns the mirror name on
 // success, or "" on failure.
-// conflictMode: "" = interactive prompt, "backup" = rename .bak, "delete" = delete policy.
+// conflictMode: "" = interactive prompt, "delete" = set delete_policy on new mirror.
 func addOneMirror(configPath, localPath, baseRemote string, conflictMode string, initialSync bool, rcloneInfo *rclone.Info, rcloneConfig string, existingNames *[]string) string {
 	// Resolve path
 	absPath, err := filepath.Abs(localPath)
@@ -445,23 +450,23 @@ func addOneMirror(configPath, localPath, baseRemote string, conflictMode string,
 	if count > 0 {
 		fmt.Printf("  Destination already has %d file(s).\n", count)
 
-		// Resolve conflict: flag overrides interactive prompt
+		// Resolve conflict: flag overrides interactive prompt.
 		choice := conflictMode
 		if choice == "" {
 			if !isInteractive() {
-				fmt.Fprintln(os.Stderr, "  Error: destination has existing content. Use --backup or --delete.")
+				fmt.Fprintln(os.Stderr, "  Error: destination has existing content.")
+				fmt.Fprintln(os.Stderr, "  Either pass --delete to set delete_policy, or clean the destination manually and retry.")
 				return ""
 			}
 			reader := bufio.NewReader(os.Stdin)
 			for {
 				fmt.Println("  Options:")
-				fmt.Println("    [b] Backup: rename existing destination to .bak before syncing")
 				fmt.Println("    [d] Delete: remove existing destination files before syncing")
-				fmt.Println("    [a] Abort")
-				fmt.Print("  Choice [b/d/a]: ")
+				fmt.Println("    [a] Abort  (you can clean the destination manually and retry)")
+				fmt.Print("  Choice [d/a]: ")
 				line, _ := reader.ReadString('\n')
 				choice = strings.TrimSpace(strings.ToLower(line))
-				if choice == "b" || choice == "d" || choice == "a" {
+				if choice == "d" || choice == "a" {
 					break
 				}
 				fmt.Printf("  Invalid choice: %q\n", choice)
@@ -469,10 +474,6 @@ func addOneMirror(configPath, localPath, baseRemote string, conflictMode string,
 		}
 
 		switch choice {
-		case "b", "backup":
-			if !backupDestination(remote, localDest, rcloneInfo, rcloneConfig) {
-				return ""
-			}
 		case "d", "delete":
 			deletePolicy = "delete"
 		case "a", "abort":
@@ -556,81 +557,6 @@ func runInitialSync(configPath string, mirrorNames []string) {
 	syncEngine.Queue.Close()
 	syncEngine.Run(ctx)
 	fmt.Println("Initial sync complete.")
-}
-
-// backupDestination renames the destination to <dest>.bak, rotating previous
-// backups: .bak -> .bak.2, .bak.2 dropped. Keeps at most 2 backup generations.
-// For local paths, uses os.Rename. For rclone remotes, uses rclone moveto.
-// Returns true on success, false on failure (error already printed).
-func backupDestination(remote string, localDest bool, rcloneInfo *rclone.Info, rcloneConfig string) bool {
-	bak1 := remote + ".bak"
-	bak2 := remote + ".bak.2"
-	fmt.Printf("  Backing up: %s -> %s\n", filepath.Base(remote), filepath.Base(bak1))
-
-	if localDest {
-		// Rotate: drop .bak.2, move .bak -> .bak.2
-		if _, err := os.Stat(bak2); err == nil {
-			fmt.Printf("  Removing oldest backup %s\n", filepath.Base(bak2))
-			if err := os.RemoveAll(bak2); err != nil {
-				fmt.Fprintf(os.Stderr, "  Error removing %s: %v\n", filepath.Base(bak2), err)
-				return false
-			}
-		}
-		if _, err := os.Stat(bak1); err == nil {
-			fmt.Printf("  Rotating: %s -> %s\n", filepath.Base(bak1), filepath.Base(bak2))
-			if err := os.Rename(bak1, bak2); err != nil {
-				fmt.Fprintf(os.Stderr, "  Error rotating backup: %v\n", err)
-				return false
-			}
-		}
-		if err := os.Rename(remote, bak1); err != nil {
-			fmt.Fprintf(os.Stderr, "  Error renaming: %v\n", err)
-			return false
-		}
-		// Recreate the destination directory
-		if err := os.MkdirAll(remote, 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "  Error recreating directory: %v\n", err)
-			return false
-		}
-	} else {
-		// Rclone remote: rotate via moveto (server-side where supported)
-		rcloneMove := func(src, dst string) error {
-			args := []string{}
-			if rcloneConfig != "" {
-				args = append(args, "--config", rcloneConfig)
-			}
-			args = append(args, "moveto", src, dst)
-			cmd := exec.Command(rcloneInfo.Path, args...)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-			}
-			return nil
-		}
-		rclonePurge := func(path string) error {
-			args := []string{}
-			if rcloneConfig != "" {
-				args = append(args, "--config", rcloneConfig)
-			}
-			args = append(args, "purge", path)
-			cmd := exec.Command(rcloneInfo.Path, args...)
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-			}
-			return nil
-		}
-		// Drop .bak.2 (best-effort)
-		_ = rclonePurge(bak2)
-		// Rotate .bak -> .bak.2 (best-effort — may not exist)
-		_ = rcloneMove(bak1, bak2)
-		// Move dest -> .bak
-		if err := rcloneMove(remote, bak1); err != nil {
-			fmt.Fprintf(os.Stderr, "  Error: rclone moveto failed: %v\n", err)
-			return false
-		}
-	}
-	fmt.Println("  Backup complete.")
-	return true
 }
 
 // isLocalPath returns true if the string looks like a local filesystem path

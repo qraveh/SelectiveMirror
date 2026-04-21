@@ -3,12 +3,17 @@ package rclone
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
+
+// ErrRemoteNotFound is returned by Purge when the remote path does not exist.
+// Callers treating missing paths as a no-op should compare with errors.Is.
+var ErrRemoteNotFound = errors.New("remote path not found")
 
 // ListRemotes runs `rclone listremotes` and returns the remote names
 // (e.g., ["gdrive:", "s3:"]). Each name includes the trailing colon.
@@ -113,6 +118,35 @@ func CountRemoteFiles(rclonePath, rcloneConfig, remote string, extraArgs []strin
 		return 0, nil // empty or unparseable = assume 0
 	}
 	return len(entries), nil
+}
+
+// Purge removes a remote directory and all its contents via `rclone purge`.
+// Returns ErrRemoteNotFound if the path does not exist (safe to ignore).
+// Uses a 10-minute timeout to accommodate large directories.
+func Purge(rclonePath, rcloneConfig, remote string, extraArgs []string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	args := []string{}
+	if rcloneConfig != "" {
+		args = append(args, "--config", rcloneConfig)
+	}
+	args = append(args, extraArgs...)
+	args = append(args, "purge", remote)
+
+	cmd := exec.CommandContext(ctx, rclonePath, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("rclone purge timed out after 10m")
+		}
+		low := strings.ToLower(string(out))
+		if strings.Contains(low, "directory not found") || strings.Contains(low, "object not found") {
+			return ErrRemoteNotFound
+		}
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // RemoteNameFromPath extracts the remote name from a remote path.

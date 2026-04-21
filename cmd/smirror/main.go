@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.8.61-dev"
+var version = "0.9.1-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -196,8 +196,9 @@ Commands:
   report-bug [flags]         Generate diagnostic report (--stdout, --open)
   remote [remote_path]       Show or set the default rclone remote for new mirrors
   addmirror <path...> [flags]  Add directories as mirrors (aliases: add-mirror, add)
-                             Flags: -dest <remote>, --backup, --delete, --initial-sync
-  unmirror <name|path>       Remove a mirror from config (aliases: removemirror, remove-mirror, remove)
+                             Flags: -dest <remote>, --delete, --initial-sync
+  unmirror <name|path> [flags]  Remove a mirror from config and clean state DB
+                             Flags: --purge-remote, --yes (aliases: removemirror, remove-mirror, remove)
   clean [--self|--all] [--yes]  Remove user data and background registration
                              --self: remove current user's task + ~/.selectivemirror/ (no admin; default)
                              --all:  --self + service if installed + %%ProgramData%%\SelectiveMirror (admin for service)
@@ -257,6 +258,20 @@ func loadConfig(path string) *config.Global {
 		os.Exit(ExitConfigError)
 	}
 	return cfg
+}
+
+// loadConfigBestEffort returns a parsed config even if validation fails, so
+// callers that only need a few top-level fields (rclone_path, rclone_config,
+// default_remote) work on configs with no mirrors yet or other validation
+// issues. Returns nil if the file cannot be parsed at all.
+func loadConfigBestEffort(path string) *config.Global {
+	if cfg, err := config.Load(path); err == nil {
+		return cfg
+	}
+	if cfg, err := config.LoadRaw(path); err == nil {
+		return cfg
+	}
+	return nil
 }
 
 func buildFilters(cfg *config.Global) map[string]*filter.Engine {
@@ -1940,8 +1955,17 @@ sanitized and remote paths are redacted.`)
 	b.WriteString(fmt.Sprintf("platform: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 	b.WriteString(fmt.Sprintf("go version: %s\n", runtime.Version()))
 
+	// Load config up front so we can pass rclone_path to Detect. A broken
+	// config is tolerated — fall back to Detect("") and report the config
+	// error in its own section below.
+	cfg, cfgErr := config.Load(configPath)
+	var configuredRclonePath string
+	if raw := loadConfigBestEffort(configPath); raw != nil {
+		configuredRclonePath = raw.RclonePath
+	}
+
 	// rclone info
-	rcloneInfo, err := rclone.Detect("")
+	rcloneInfo, err := rclone.Detect(configuredRclonePath)
 	if err != nil {
 		b.WriteString(fmt.Sprintf("rclone: NOT FOUND (%v)\n", err))
 	} else {
@@ -1955,7 +1979,6 @@ sanitized and remote paths are redacted.`)
 
 	// Config summary (sanitized)
 	b.WriteString("\n--- Config ---\n")
-	cfg, cfgErr := config.Load(configPath)
 	if cfgErr != nil {
 		b.WriteString(fmt.Sprintf("config error: %v\n", cfgErr))
 	} else {

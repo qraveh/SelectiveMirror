@@ -310,7 +310,7 @@ Flags:
 	// --- Phase 8: rclone update (optional) ---
 	if includeRclone {
 		fmt.Println()
-		updateRclone()
+		updateRclone(configPath)
 	}
 
 	// --- Done ---
@@ -555,10 +555,15 @@ func swapBinary(currentPath, stagedPath, backupPath string) error {
 }
 
 // updateRclone attempts to update rclone using rclone's own selfupdate,
-// with a direct download fallback.
-func updateRclone() {
+// with a direct download fallback. configPath is used to pick up the
+// configured rclone_path (best-effort — a broken config falls back to PATH).
+func updateRclone(configPath string) {
 	fmt.Println("Checking rclone update...")
-	info, err := rclone.Detect("")
+	var rclonePath string
+	if cfg := loadConfigBestEffort(configPath); cfg != nil {
+		rclonePath = cfg.RclonePath
+	}
+	info, err := rclone.Detect(rclonePath)
 	if err != nil {
 		fmt.Printf("  rclone not found: %v\n", err)
 		fmt.Println("  Skipping rclone update.")

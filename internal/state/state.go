@@ -174,6 +174,28 @@ func (s *Store) PruneOldLogs(retentionDays int) (int64, error) {
 	return result.RowsAffected()
 }
 
+// DeleteProject removes all sync_state and sync_log rows for the given
+// project. Returns the total number of rows deleted across both tables.
+// Used by `smirror unmirror` to clean the state DB when a mirror is removed.
+func (s *Store) DeleteProject(project string) (int64, error) {
+	var total int64
+	r1, err := s.db.Exec("DELETE FROM sync_state WHERE project = ?", project)
+	if err != nil {
+		return 0, fmt.Errorf("delete sync_state: %w", err)
+	}
+	if n, err := r1.RowsAffected(); err == nil {
+		total += n
+	}
+	r2, err := s.db.Exec("DELETE FROM sync_log WHERE project = ?", project)
+	if err != nil {
+		return total, fmt.Errorf("delete sync_log: %w", err)
+	}
+	if n, err := r2.RowsAffected(); err == nil {
+		total += n
+	}
+	return total, nil
+}
+
 // PruneOrphanedProjects removes state entries for projects not in the active config.
 // Returns the number of entries removed.
 func (s *Store) PruneOrphanedProjects(activeProjects []string) (int64, error) {

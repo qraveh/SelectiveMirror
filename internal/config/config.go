@@ -270,7 +270,7 @@ func LoadRaw(path string) (*Global, error) {
 	}
 	cfg := &Global{}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+		return nil, friendlyYAMLError(err)
 	}
 	return cfg, nil
 }
@@ -305,10 +305,10 @@ func Load(path string) (*Global, error) {
 			fmt.Fprintf(os.Stderr, "Warning: config %s: %v (check for typos)\n", path, err)
 			// Re-parse without strict mode so the config still loads
 			if err2 := yaml.Unmarshal(data, cfg); err2 != nil {
-				return nil, fmt.Errorf("parsing config %s: %w", path, err2)
+				return nil, friendlyYAMLError(err2)
 			}
 		} else {
-			return nil, fmt.Errorf("parsing config %s: %w", path, err)
+			return nil, friendlyYAMLError(err)
 		}
 	}
 
@@ -473,6 +473,30 @@ func (g *Global) MirrorFingerprint() string {
 	sort.Strings(parts)
 	h := sha256.Sum256([]byte(strings.Join(parts, "\n")))
 	return fmt.Sprintf("%x", h[:8])
+}
+
+// friendlyYAMLError wraps a yaml.v3 unmarshal error with a user-facing
+// explanation for the most common config-shape mistakes. The raw error is
+// always preserved via %w so callers can still inspect it.
+func friendlyYAMLError(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "cannot unmarshal !!map into []config.Project"):
+		return fmt.Errorf(`"mirrors:" must be a YAML list (each entry starts with "- "), not a map.
+YAML infers the type of "mirrors:" from its first non-comment child — a child starting with "- " makes it a list, a child of the form "key: value" makes it a map. Commented-out lines don't count as structure.
+Likely cause: every "- name: ..." entry is commented out, leaving a sibling field (e.g. "delete_policy:") indented under "mirrors:", which YAML then reads as a map value.
+Fix: put sibling fields at the same indent as "mirrors:" (not deeper), or write an explicit empty list ("mirrors: []"). Example:
+mirrors:
+  - name: MyProject
+    local_path: C:\path\to\project
+    remote: "remote:dest"
+delete_policy: delete
+(raw: %w)`, err)
+	case strings.Contains(msg, "cannot unmarshal !!seq into config.Global"):
+		return fmt.Errorf(`config root must be a YAML mapping (key: value), not a list.
+(raw: %w)`, err)
+	}
+	return fmt.Errorf("parsing config: %w", err)
 }
 
 func expandHome(path string) string {

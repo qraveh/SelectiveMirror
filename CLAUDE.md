@@ -75,8 +75,8 @@ smirror explain Orch CLAUDE.md
 | `smirror project-stats [mirror]` | File counts + line counts per mirror (alias: `stats`) |
 | `smirror report-bug [flags]` | Generate diagnostic report (`--stdout`, `--open`) |
 | `smirror remote [remote_path]` | Show or set the default rclone remote for new mirrors |
-| `smirror addmirror <path...> [flags]` | Add directories as mirrors (`-dest`, `--backup`, `--delete`, `--initial-sync`; aliases: `add-mirror`, `add`) |
-| `smirror unmirror <name\|path>` | Remove a mirror from config (aliases: `removemirror`, `remove-mirror`, `remove`) |
+| `smirror addmirror <path...> [flags]` | Add directories as mirrors (`-dest`, `--delete`, `--initial-sync`; aliases: `add-mirror`, `add`) |
+| `smirror unmirror <name\|path> [flags]` | Remove mirror from config, clean state DB (`--purge-remote`, `--yes`; aliases: `removemirror`, `remove-mirror`, `remove`) |
 | `smirror clean [--self\|--all] [--yes]` | Remove user data + background registration. `--self` (default): per-user, no admin. `--all`: includes service + `%ProgramData%\SelectiveMirror`. |
 | `smirror selfupdate [flags]` | Check for and install updates (`--check`, `--whatsnew`, `--yes`, `--include-rclone`) |
 | `smirror task <action>` | Per-user Scheduled Task (recommended background mode; no admin): install, uninstall, start, stop, status |

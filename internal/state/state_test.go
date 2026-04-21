@@ -93,6 +93,56 @@ func TestGetFileStateNotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteProject(t *testing.T) {
+	st := tempStore(t)
+
+	// Seed rows in both tables for two projects.
+	st.UpdateFileState("A", "a1.txt", "h1", 1, time.Now().UnixNano(), 0)
+	st.UpdateFileState("A", "a2.txt", "h2", 2, time.Now().UnixNano(), 0)
+	st.UpdateFileState("B", "b1.txt", "h3", 3, time.Now().UnixNano(), 0)
+	_ = st.LogAction("A", "a1.txt", "copy", "ok", 10)
+	_ = st.LogAction("A", "a2.txt", "copy", "ok", 20)
+	_ = st.LogAction("B", "b1.txt", "copy", "ok", 30)
+
+	rows, err := st.DeleteProject("A")
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	// 2 sync_state rows + 2 sync_log rows = 4
+	if rows != 4 {
+		t.Errorf("want 4 rows deleted, got %d", rows)
+	}
+
+	if n := st.CountFiles("A"); n != 0 {
+		t.Errorf("A sync_state: want 0 rows, got %d", n)
+	}
+	if n := st.CountFiles("B"); n != 1 {
+		t.Errorf("B sync_state: want 1 row preserved, got %d", n)
+	}
+
+	var logA, logB int
+	st.db.QueryRow("SELECT COUNT(*) FROM sync_log WHERE project = 'A'").Scan(&logA)
+	st.db.QueryRow("SELECT COUNT(*) FROM sync_log WHERE project = 'B'").Scan(&logB)
+	if logA != 0 {
+		t.Errorf("A sync_log: want 0 rows, got %d", logA)
+	}
+	if logB != 1 {
+		t.Errorf("B sync_log: want 1 row preserved, got %d", logB)
+	}
+}
+
+// DeleteProject on a project with no rows should return (0, nil).
+func TestDeleteProjectEmpty(t *testing.T) {
+	st := tempStore(t)
+	rows, err := st.DeleteProject("ghost")
+	if err != nil {
+		t.Fatalf("DeleteProject: %v", err)
+	}
+	if rows != 0 {
+		t.Errorf("want 0 rows, got %d", rows)
+	}
+}
+
 func TestLogAction(t *testing.T) {
 	st := tempStore(t)
 

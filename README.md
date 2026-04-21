@@ -63,8 +63,8 @@ smirror start
 | `smirror project-stats [mirror]` | Show file counts and line counts per mirror (alias: `stats`) |
 | `smirror report-bug [flags]` | Generate diagnostic report (`--stdout`, `--open`) |
 | `smirror remote [remote_path]` | Show or set the default rclone remote for new mirrors |
-| `smirror addmirror <path...> [flags]` | Add directories as mirrors (`-dest`, `--backup`, `--delete`, `--initial-sync`; aliases: `add-mirror`, `add`) |
-| `smirror unmirror <name\|path>` | Remove a mirror from config (aliases: `removemirror`, `remove-mirror`, `remove`) |
+| `smirror addmirror <path...> [flags]` | Add directories as mirrors (`-dest`, `--delete`, `--initial-sync`; aliases: `add-mirror`, `add`) |
+| `smirror unmirror <name\|path> [flags]` | Remove mirror from config, clean state DB (`--purge-remote`, `--yes`; aliases: `removemirror`, `remove-mirror`, `remove`) |
 | `smirror clean [--yes]` | Stop service, uninstall, and remove all user data |
 | `smirror selfupdate [flags]` | Check for and install updates (`--check`, `--whatsnew`, `--yes`, `--include-rclone`) |
 | `smirror service <action...>` | Windows Service: install [start], stop, uninstall [--clean] [--yes] |
