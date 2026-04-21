@@ -3,6 +3,22 @@
 All notable changes to SelectiveMirror are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follows [semver](https://semver.org/).
 
+## [Unreleased]
+
+### Breaking (CLI)
+
+- **`smirror addmirror --backup` removed.** The flag, the interactive `[b] Backup` menu option, and the `backupDestination` rotation logic (`<dest>` → `.bak` → `.bak.2`) are gone. smirror no longer manages backups of pre-existing destination content. If the destination already has files, addmirror aborts unless `--delete` is set; clean the destination manually and retry otherwise. Interactive conflict menu is now `[d] Delete / [a] Abort`. Unknown flags are rejected cleanly instead of being treated as positional paths.
+
+### Added
+
+- **`smirror unmirror --purge-remote` flag.** Deletes the remote directory for the mirror being removed. Only `<remote>` itself is purged; sibling `.bak` / `.bak.2` directories (if any) are left alone — smirror does not own them. Local paths purge via `os.RemoveAll`; rclone remotes via a new `rclone.Purge` helper (with `ErrRemoteNotFound` sentinel for missing paths).
+- **State DB auto-cleanup on unmirror.** `unmirror` now always removes the mirror's rows from `sync_state` and `sync_log` via a new `state.DeleteProject` helper — regardless of `--purge-remote`. Previously stale rows lingered until the daemon's next startup, and `sync_log` rows were never swept by `PruneOrphanedProjects`.
+- **Friendlier config error for the mirrors-as-map mistake.** When a user comments out all `- name: ...` entries and leaves an indented sibling field under `mirrors:`, the cryptic yaml.v3 `"cannot unmarshal !!map into []config.Project"` is now wrapped with an explanation: mirrors must be a list, why commented-out entries cause the misparse, and an example of the correct shape.
+
+### Fixed
+
+- **`cfg.RclonePath` now honored by every rclone-using command.** Previously, `addmirror`, `smirror remote`, `smirror report-bug`, and `smirror selfupdate --include-rclone` passed `""` to `rclone.Detect`, ignoring the configured `rclone_path` and failing with "rclone not found in PATH" even when a valid path was set in `config.yaml`. A new shared `loadConfigBestEffort` helper tries `Load` then `LoadRaw`, so the configured path is read even when the config fails full validation (e.g. no mirrors yet).
+
 ## [0.9.0] — 2026-04-18
 
 The deployment-model and security-hardening release. Not backward-compatible with the 0.2.x–0.8.x MSI flow: fresh install required (perMachine → different install path; no auto-service-install).
