@@ -1,6 +1,6 @@
 ---
 title: "SelectiveMirror Installation Manual"
-author: "Raveh (raveh@qodeh.com)"
+author: "Raveh (smirror@qodeh.com)"
 date: "2026-03-27"
 toc: true
 toc-depth: 3

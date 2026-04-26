@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TelemetryConsent.wxi — opt-in installation telemetry consent for SelectiveMirror.
+
+  Drafted overnight. NOT yet wired into Package.wxs. To activate:
+
+    1. Review the property and component below.
+    2. In Package.wxs, add `<?include TelemetryConsent.wxi ?>` near the
+       existing `<?include Variables.wxi ?>`.
+    3. In Package.wxs, add `<ComponentGroupRef Id="TelemetryConsentComponents" />`
+       inside the `<Feature Id="ProductFeature">` block.
+    4. (Future) Integrate the checkbox into the installer UI — see "UI
+       integration TODO" at the bottom of this file. Until then, the
+       property defaults to 0 (opt-out) and can be set via the command
+       line: `msiexec /i SelectiveMirror.msi INSTALL_TELEMETRY_OPT_IN=1`
+
+  Design notes:
+    * Property is a public Windows Installer Property (uppercase name) so
+      it can be set from the command line, an MST transform, or a UI
+      checkbox.
+    * Default value is "0" (opt-out / unchecked), per the consent-honest
+      OSS-standard default.
+    * The property value is written verbatim to HKLM\Software\SelectiveMirror\TelemetryOptIn
+      as a DWORD. smirror reads this on first run and copies the value
+      into the local state DB metadata; subsequent state changes (via
+      `smirror telemetry on/off`) live in the state DB and never write
+      back to HKLM (to avoid requiring admin for runtime opt-out/in).
+    * scope="perMachine" install means the consent value is shared across
+      all users on the machine — consistent with how the binary is
+      shared. Per-user runtime overrides via state DB are still possible
+      for users who want a different choice than the machine default.
+-->
+<Include xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!-- Public property. Default "0" = opt-out. Set to "1" via UI checkbox
+       or `msiexec INSTALL_TELEMETRY_OPT_IN=1` to opt in. -->
+  <Property Id="INSTALL_TELEMETRY_OPT_IN" Value="0" Secure="yes" />
+
+  <!-- Component group containing the registry write component.
+       Referenced from Package.wxs via <ComponentGroupRef />. -->
+  <ComponentGroup Id="TelemetryConsentComponents" Directory="INSTALLFOLDER">
+
+    <!-- Registry component:
+         Always writes the current value of INSTALL_TELEMETRY_OPT_IN to
+         HKLM\Software\SelectiveMirror\TelemetryOptIn as a DWORD. The
+         registry key always exists; its value tells smirror whether the
+         user opted in (1) or out (0).
+
+         RegistryValue is the KeyPath because there is no associated file. -->
+    <Component Id="TelemetryConsentRegistry" Bitness="always64" Guid="*">
+      <RegistryValue
+          Root="HKLM"
+          Key="Software\$(var.ProductName)"
+          Name="TelemetryOptIn"
+          Type="integer"
+          Value="[INSTALL_TELEMETRY_OPT_IN]"
+          KeyPath="yes" />
+    </Component>
+
+  </ComponentGroup>
+
+  <!--
+    UI integration TODO (not done overnight to avoid risking the MSI build):
+
+    The current installer uses WixUI_InstallDir, which is a stock dialog
+    set without a slot for a custom checkbox. Adding the checkbox requires
+    one of:
+
+    Option A: Define a custom dialog (`<Dialog Id="TelemetryConsentDlg">`)
+      with a CheckBox control bound to INSTALL_TELEMETRY_OPT_IN, and
+      insert it into the install sequence between LicenseAgreementDlg and
+      InstallDirDlg. Wording on the checkbox:
+
+        "Help improve SelectiveMirror by sharing anonymous install/version
+         telemetry. You can change this anytime with 'smirror telemetry
+         off'."
+
+      Plus a "Privacy" hyperlink to a docs/PRIVACY.md or a hosted page.
+
+    Option B: Replace WixUI_InstallDir with a custom UI extension built on
+      it that adds the consent dialog. More involved, but cleaner long
+      term.
+
+    Option C: Add the checkbox to the existing InstallDirDlg via a
+      `<Publish>` element that overrides controls. WiX 4 makes this
+      possible but verbose.
+
+    Until the UI is integrated, the property is set via MSI command line.
+    Default behavior (no command line override) is opt-out (0), which is
+    the consent-honest default.
+  -->
+
+</Include>

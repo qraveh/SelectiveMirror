@@ -12,7 +12,7 @@
 If you discover a security vulnerability in SelectiveMirror, please report it responsibly:
 
 1. **Do not** open a public GitHub issue.
-2. Email **raveh@qodeh.com** with:
+2. Email **smirror@qodeh.com** with:
    - Description of the vulnerability
    - Steps to reproduce
    - Potential impact

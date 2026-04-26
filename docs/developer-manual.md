@@ -1,6 +1,6 @@
 ---
 title: "SelectiveMirror Developer Manual"
-author: "Raveh (raveh@qodeh.com)"
+author: "Raveh (smirror@qodeh.com)"
 date: "2026-03-27"
 toc: true
 toc-depth: 3
@@ -301,7 +301,7 @@ Creates a filter engine with no global excludes and no `.syncignore`, useful whe
 | `anomaly` | `internal/anomaly/` | 11-category classification, JSON-lines recording, 30-day/50MB rotation, causal hypothesis templates, path sanitization |
 | `hooks` | `internal/hooks/` | Pre/post-sync shell command execution (cmd.exe /C on Windows, sh -c on Unix), 30s timeout, shell-metachar rejection in env |
 | `task` | `internal/task/` | Per-user Scheduled Task registration via `schtasks.exe` + XML task definitions. Schema 1.2 (Windows 7+). Runner indirection for test injection. |
-| `telemetry` | `internal/telemetry/` | Opt-in anonymous telemetry payload builder + GitHub Releases update check (code written, not wired) |
+| `telemetry` | `internal/telemetry/` | Opt-in anonymous telemetry payload builder + GitHub Releases update check (code written, not wired; see `docs/telemetry-microserver-architecture.md` and `docs/telemetry-microserver.sql` for the planned server-side design) |
 
 ## Dependency Graph
 

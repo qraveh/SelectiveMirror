@@ -19,7 +19,7 @@
 
   <!-- Product info -->
   <?define ProductName = "SelectiveMirror" ?>
-  <?define Manufacturer = "Raveh (qodeh.com)" ?>
+  <?define Manufacturer = "Raveh Neeman" ?>
   <?define Description = "Real-time selective file synchronization engine for Windows" ?>
 
   <!-- Install location -->

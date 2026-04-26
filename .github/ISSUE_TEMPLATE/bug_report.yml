@@ -55,6 +55,18 @@ body:
     validations:
       required: true
 
+  - type: input
+    id: install_id
+    attributes:
+      label: Install ID
+      description: |
+        Anonymous local-database identifier. Auto-filled when this issue
+        was opened via `smirror report-bug --browser`. Lets us correlate
+        this public issue with structured telemetry already received from
+        your client. Random UUID, no personal information; safe to keep,
+        safe to redact. Leave blank if you opened the issue manually.
+      placeholder: e.g. f47ac10b-58cc-4372-a567-0e02b2c3d479
+
   - type: textarea
     id: environment
     attributes:

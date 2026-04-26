@@ -8,7 +8,7 @@
 ---
 
 **Project root**: `C:\SelectiveMirror\`
-**Author**: Raveh (raveh@qodeh.com)
+**Author**: Raveh (smirror@qodeh.com)
 **Status**: v0.8.x-dev (Phase 1+1.5+2+2.5+4+6+7 complete; Phase 3 USN journal pending; Phase 5 telemetry code written, not enabled)
 **License**: MIT
 **Language**: Go 1.26+
