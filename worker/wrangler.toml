@@ -23,12 +23,11 @@ workers_dev = true
 [vars]
 SUPABASE_PROJECT_REF = "qkspigvkniiiwxggdvbr"
 
-# KV namespace for per-IP rate limiting. Create with:
-#   wrangler kv:namespace create RATE_LIMIT_KV
-# Then replace <kv-id-from-create-output> below.
-# [[kv_namespaces]]
-# binding = "RATE_LIMIT_KV"
-# id = "<kv-id-from-create-output>"
+# KV namespace for per-IP rate limiting. Created via:
+#   wrangler kv namespace create RATE_LIMIT_KV
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "65753913e2f1490b8be92f6ad66627f9"
 
 # Cron triggers (none yet — a future addition for cleanup or batch tasks)
 # [triggers]

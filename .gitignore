@@ -43,3 +43,7 @@ docs/*.pdf
 
 # Bug reports
 smirror-bug-report-*.txt
+
+# Cloudflare Worker (worker/ dir)
+worker/node_modules/
+worker/.wrangler/
