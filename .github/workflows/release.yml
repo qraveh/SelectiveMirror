@@ -19,6 +19,42 @@ jobs:
         with:
           go-version: '1.26.1'
 
+      # Compute the per-version telemetry HMAC derived key from the master
+      # key (stored as a GitHub Actions repository secret). The master key
+      # never enters the binary; only the version-derived key does. See
+      # docs/telemetry-microserver-architecture.md "HMAC signing scheme".
+      - name: Compute version-derived telemetry HMAC key
+        id: hmac
+        shell: pwsh
+        env:
+          MASTER_KEY: ${{ secrets.SMIRROR_TELEMETRY_MASTER_KEY }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:MASTER_KEY)) {
+              Write-Host "SMIRROR_TELEMETRY_MASTER_KEY secret is not set; building with empty derived key (binary will not be able to submit telemetry to the production endpoint)."
+              echo "SMIRROR_TELEMETRY_DERIVED_KEY=" >> $env:GITHUB_ENV
+              exit 0
+          }
+          $version = "${{ github.ref_name }}" -replace '^v',''
+          $masterBytes = New-Object byte[] ($env:MASTER_KEY.Length / 2)
+          for ($i = 0; $i -lt $masterBytes.Length; $i++) {
+              $masterBytes[$i] = [Convert]::ToByte($env:MASTER_KEY.Substring($i * 2, 2), 16)
+          }
+          $hmac = [System.Security.Cryptography.HMACSHA256]::new()
+          $hmac.Key = $masterBytes
+          $versionBytes = [System.Text.Encoding]::UTF8.GetBytes($version)
+          $hash = $hmac.ComputeHash($versionBytes)
+          $derived = -join ($hash | ForEach-Object { $_.ToString('x2') })
+          # Sanity check on length — derived key must be 64 hex chars.
+          if ($derived.Length -ne 64) {
+              Write-Error "Derived key has unexpected length: $($derived.Length)"
+              exit 1
+          }
+          # Add to GITHUB_ENV so subsequent steps (including GoReleaser)
+          # see it as an environment variable. We do NOT echo the value
+          # to logs (it would leak the per-version key).
+          echo "SMIRROR_TELEMETRY_DERIVED_KEY=$derived" >> $env:GITHUB_ENV
+          Write-Host "Derived key computed for version $version (64 hex chars, value redacted)."
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -26,6 +62,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Forward the derived key into GoReleaser so .goreleaser.yaml
+          # ldflags can reference {{.Env.SMIRROR_TELEMETRY_DERIVED_KEY}}.
+          SMIRROR_TELEMETRY_DERIVED_KEY: ${{ env.SMIRROR_TELEMETRY_DERIVED_KEY }}
 
   msi:
     runs-on: windows-latest

@@ -1,0 +1,38 @@
+# SelectiveMirror telemetry edge proxy — Cloudflare Worker config
+#
+# Deploy:
+#   cd worker
+#   wrangler deploy
+#
+# Setup before first deploy:
+#   wrangler secret put SUPABASE_ANON_KEY
+#     (paste the anon public key when prompted)
+#   wrangler kv:namespace create RATE_LIMIT_KV
+#     (copy the returned id into the [[kv_namespaces]] block below)
+
+name = "smirror-telemetry"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+
+# Account subdomain on workers.dev — set this once at first deploy.
+# After deploy: <name>.<account-subdomain>.workers.dev becomes your URL.
+# (account-subdomain is configured in the Cloudflare dashboard.)
+workers_dev = true
+
+# Non-secret config exposed to Worker
+[vars]
+SUPABASE_PROJECT_REF = "qkspigvkniiiwxggdvbr"
+
+# KV namespace for per-IP rate limiting. Create with:
+#   wrangler kv:namespace create RATE_LIMIT_KV
+# Then replace <kv-id-from-create-output> below.
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT_KV"
+# id = "<kv-id-from-create-output>"
+
+# Cron triggers (none yet — a future addition for cleanup or batch tasks)
+# [triggers]
+# crons = []
+
+# Routes (custom domain — only with paid Cloudflare DNS)
+# routes = [{ pattern = "telemetry.example.dev/*", zone_name = "example.dev" }]

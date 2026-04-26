@@ -11,12 +11,22 @@ builds:
   # runners, which we do not set up. Project is positioned Windows-first
   # (CLAUDE.md) — no Linux/Darwin integration or users exist. MSI (installer/
   # build-msi.ps1) is the primary distribution channel; this ZIP is secondary.
+  #
+  # ldflags include the per-version telemetry HMAC derived key, computed
+  # by the release workflow before GoReleaser runs. The master key never
+  # touches a binary; CI computes HMAC-SHA256(master, version) and exports
+  # the hex result as SMIRROR_TELEMETRY_DERIVED_KEY for embedding here.
+  # Empty default means -dev / local builds get no production key and
+  # cannot submit to the production endpoint.
   - main: ./cmd/smirror/
     binary: smirror
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X github.com/qraveh/SelectiveMirror/internal/telemetry.buildKey={{.Env.SMIRROR_TELEMETRY_DERIVED_KEY}}
     env:
       - CGO_ENABLED=1
+      - SMIRROR_TELEMETRY_DERIVED_KEY={{ if index .Env "SMIRROR_TELEMETRY_DERIVED_KEY" }}{{ .Env.SMIRROR_TELEMETRY_DERIVED_KEY }}{{ end }}
     goos:
       - windows
     goarch:

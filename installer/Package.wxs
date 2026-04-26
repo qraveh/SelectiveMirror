@@ -3,6 +3,7 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
 
   <?include Variables.wxi ?>
+  <?include TelemetryConsent.wxi ?>
 
   <Package Name="$(var.ProductName)"
            Version="$(var.ProductVersion)"
@@ -106,6 +107,12 @@
     <!-- Features -->
     <Feature Id="ProductFeature" Title="SelectiveMirror" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
+      <!-- Telemetry consent registry component. Always installed; the
+           value is the property INSTALL_TELEMETRY_OPT_IN (default 0 =
+           opt-out). Sets HKLM\Software\SelectiveMirror\TelemetryOptIn,
+           which smirror reads on first run to seed state DB metadata.
+           See installer/TelemetryConsent.wxi for property definition. -->
+      <ComponentGroupRef Id="TelemetryConsentComponents" />
     </Feature>
 
   </Package>
