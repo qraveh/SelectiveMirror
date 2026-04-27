@@ -2,11 +2,11 @@
 
 ## SelectiveMirror — Selective Near-Real-Time File Mirror
 
-**Document Version**: 1.0 (Baseline) — status refreshed 2026-04-18
-**Date**: 2026-04-06 (baseline); last status refresh 2026-04-18
+**Document Version**: 1.1 (ISO compliance revision) — 2026-04-27
+**Date**: 2026-04-06 (baseline 1.0); 2026-04-18 (status refresh); 2026-04-27 (1.1 ISO compliance revision)
 **Author**: Raveh / Claude (iterative collaboration)
-**Project Version**: 0.8.49-dev (source-current at last refresh)
-**Status**: BASELINED — approved for v1.0 release planning
+**Project Version**: 0.9.7-dev (source-current at this revision)
+**Status**: BASELINED — approved for v1.0 release planning. ISO compliance status: **Partial** (see `docs/iso-compliance.md`).
 
 ---
 
@@ -64,6 +64,9 @@ It is **not**: a bidirectional sync engine, a file sharing platform, a backup sy
 | **ISO/IEC/IEEE 29148:2018** | Requirements engineering — processes and products | Document structure, requirement attributes (ID, priority, status, rationale), traceability matrix |
 | **ISO/IEC 25010:2023** | Product quality model — quality characteristics | Non-functional requirements (Section 4) organized by 25010 characteristics |
 | **ISO/IEC 25023:2016** | Quality measurement — quality measures | Metrics and targets in Section 4 derived from 25023 measurement functions |
+| **ISO/IEC/IEEE 29119:2023** | Software testing — processes, documentation, techniques | Test plan, test design (per-feature tables), test techniques (EP/BVA/DT/ST) — see `docs/VV-Plan.md` |
+
+Compliance status against each standard — including gaps and remediation actions — is tracked in `docs/iso-compliance.md` (single source of truth for ISO compliance audits).
 
 ### 1.5 References
 
@@ -309,7 +312,30 @@ SelectiveMirror SHALL be a self-diagnosing system. Every anomaly (ghost, error, 
 
 ## 4. Non-Functional Requirements (ISO/IEC 25010:2023)
 
-This section is organized by ISO/IEC 25010:2023 product quality characteristics. Each sub-characteristic maps to measurable requirements per ISO/IEC 25023. Requirements use 29148 attributes: ID, statement, rationale, target, measurement method, and status.
+### 4.0 Schema deviation note
+
+SelectiveMirror's NFR organization in this section follows the **ISO/IEC 25010:2011 layout** (Usability as a top-level characteristic; Adaptability and Installability under Portability) rather than the **2023 layout** (Interaction Capability replaces Usability for non-interactive systems; Flexibility becomes top-level absorbing Adaptability/Installability/Scalability/Replaceability; Safety becomes a top-level characteristic).
+
+The substantive engineering content satisfies the 2023 model; only the section taxonomy differs. Mapping to 2023 sub-characteristics:
+
+| 2023 top-level / sub-characteristic | Where in this SRS | Status |
+|---|---|---|
+| Functional Suitability:Functional Appropriateness | implicit in `FR-DEL-01` three-policy design | ⚠️ not declared as NFR |
+| Interaction Capability | §4.4 Usability (re-labeled in 2023; non-interactive product) | ✅ identical content; deviation is label-only |
+| Reliability:Faultlessness | implicit in NFR-FT-* (renamed from Maturity in 2023) | ⚠️ no explicit faultlessness metric |
+| Security:Authenticity / Resistance / Privacy (new in 2023) | not yet declared | ❌ — committed for v1.1 |
+| Maintainability:Reusability / Analysability | hook surface (FR-ASP-17) implies Reusability; FR-DIAG/FR-ANOM imply Analysability | ⚠️ not declared as NFRs |
+| Flexibility:Adaptability | §4.8.1 (under Portability) | ✅ |
+| Flexibility:Installability | §4.8.2 (under Portability) | ✅ |
+| Flexibility:Replaceability | rclone-as-transport doctrine §2.5; not a separate NFR | ⚠️ not declared |
+| Flexibility:Scalability | §4.2.3 Capacity | ⚠️ not separately declared |
+| Safety | N/A — formal justification: SelectiveMirror is not a safety-critical system. Data-loss scenarios (`FR-DEL-03` default `delete`, `FR-DEL-08` rename force-delete) are mitigated by the `quarantine` policy option (`FR-DEL-04`) and by VCS integration in code-project use cases. No Safety NFRs declared. | ➖ |
+
+**Migration plan**: Full restructure to 2023 layout is committed for **v1.1** (action `A-25010-01b` in `docs/iso-compliance.md` §9.2). For v1.0, this deviation note is the authoritative pointer. Compliance status against 25010:2023 is tracked in `docs/iso-compliance.md` §5.
+
+---
+
+This section is organized by ISO/IEC 25010 quality characteristics (2011 layout — see §4.0 above for 2023 mapping). Each sub-characteristic maps to measurable requirements per ISO/IEC 25023. Requirements use 29148 attributes: ID, statement, rationale, target, measurement method, and status.
 
 ### 4.1 Functional Suitability
 
@@ -338,8 +364,8 @@ This section is organized by ISO/IEC 25010:2023 product quality characteristics.
 
 | ID | Requirement | Rationale | v1.0 SLA | Measurement | Status |
 |----|------------|-----------|----------|-------------|--------|
-| NFR-TB-01 | File change detection latency (filesystem event to queue entry) | Users expect near-real-time response | < 50ms (p99) | Instrumented event timestamps | Met (at 100ms target; 50ms: Not Measured) |
-| NFR-TB-02 | Single-file sync latency, small files (queue dequeue to rclone exit, < 1 MB) | Core UX metric — how fast changes appear on remote | < 3s (p95) on broadband | Sync log duration_ms column | Met (at 5s target; 3s: Not Measured) |
+| NFR-TB-01 | File change detection latency (filesystem event to queue entry) | Users expect near-real-time response. **Target revised v1.1 (SM-153 path 1)**: 50 ms p99 was aspirational; fsnotify on Windows is event-driven but p99 under load is dominated by goroutine scheduling. 100 ms p99 is realistic and competitive with Syncthing/OneDrive. | < 100ms (p99) | Instrumented event timestamps | Met |
+| NFR-TB-02 | Single-file sync latency, small files (queue dequeue to rclone exit, < 1 MB) | Core UX metric — how fast changes appear on remote. **Target revised v1.1 (SM-153 path 1)**: 3 s p95 assumed broadband; 5 s p95 covers slower connections and metered links. | < 5s (p95) on broadband | Sync log duration_ms column | Met |
 | NFR-TB-03 | Single-file sync latency, large files (< 100 MB) | Large files should complete within a minute | < 60s (p95) on broadband | Sync log duration_ms column | Not Measured |
 | NFR-TB-04 | Startup reconciliation (batch sync, no-change case) | Long startup blocks service availability | < 30s for 4 mirrors, < 10,000 total files | Manual timing; CI benchmark planned | Met |
 | NFR-TB-05 | Startup reconciliation with USN journal (when available) | USN journal eliminates full scan on restart | < 5s | USN query timing | Planned (Phase 3) |
@@ -350,9 +376,9 @@ This section is organized by ISO/IEC 25010:2023 product quality characteristics.
 
 | ID | Requirement | Rationale | v1.0 SLA | Measurement | Status |
 |----|------------|-----------|----------|-------------|--------|
-| NFR-RU-01 | Memory usage — idle (4 mirrors, no pending events) | Long-running service must not bloat | < 25 MB RSS | Task Manager / process stats. Competitive: Syncthing ~20 MB idle | Met (at 30 MB; 25 MB: Not Measured) |
+| NFR-RU-01 | Memory usage — idle (4 mirrors, no pending events) | Long-running service must not bloat | < 25 MB RSS | Task Manager / process stats. Competitive: Syncthing ~20 MB idle | **Not Met** (currently 30 MB; 25 MB target retained as v1.1 optimization goal — see SM-153 path 2) |
 | NFR-RU-02 | Memory usage — loaded (10K queued events) | Burst scenarios must not OOM | < 80 MB RSS | Stress test. 10K Tasks at ~500 bytes = 5 MB queue + overhead | Not Measured |
-| NFR-RU-03 | CPU usage — idle (watching, no sync activity) | Service must be invisible to user | < 0.5% sustained CPU | Performance monitor | Met (at 1%; 0.5%: Not Measured) |
+| NFR-RU-03 | CPU usage — idle (watching, no sync activity) | Service must be invisible to user. **Target revised v1.1 (SM-153 path 1)**: 0.5% required Go-runtime tuning not justified by user impact; 1% sustained is industry-acceptable for a watching-idle process. | < 1% sustained CPU | Performance monitor | Met |
 | NFR-RU-04 | Disk I/O — state DB writes per sync cycle | SQLite must not become I/O bottleneck | < 10 IOPS per file sync | SQLite stats | Not Measured |
 | NFR-RU-05 | Reconciliation API calls per cycle | Batch operations only; never per-file remote listing | O(mirrors), not O(files) | rclone invocation count per reconciliation | Met |
 
@@ -492,7 +518,7 @@ This section is organized by ISO/IEC 25010:2023 product quality characteristics.
 
 | ID | Requirement | Rationale | Target | Measurement | Status |
 |----|------------|-----------|--------|-------------|--------|
-| NFR-TE-01 | Unit test count SHALL exceed 280 across all packages | Regression safety net for rapid development | > 280 tests | `go test ./internal/... ./cmd/... -count=1` | Met (539+ across 14 packages, 65% coverage) |
+| NFR-TE-01 | Unit test count SHALL exceed 280 across all packages | Regression safety net for rapid development | > 280 tests | `go test ./internal/... ./cmd/... -count=1` | Met (539+ across 14 packages, 65% overall coverage). **Known gap**: `internal/watcher/` at 16.6% statement coverage (15 of 20 functions at 0%) — refactor for testability (X-04 in `docs/iso-compliance.md`) deferred to v1.0.1 (ETA 2026-05-06). |
 | NFR-TE-02 | All tests SHALL pass with `-race` detection | Concurrency bugs are the hardest class to reproduce | Zero data races | `go test -race` on concurrent packages | Met |
 | NFR-TE-03 | Critical subsystems SHALL have injectable dependencies for test isolation | Tests must not require rclone or network | ListRemoteFunc, syncer interface | Met |
 | NFR-TE-04 | Bug hunt markers (SM-xxx) SHALL link each regression test to the bug it covers | Traceability from test to requirement to fix | Every SM-xxx test documents the scenario | Met |

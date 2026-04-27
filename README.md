@@ -2,6 +2,8 @@
 
 Real-time selective file synchronization for Windows. Watches local directories for changes and mirrors them to any [rclone](https://rclone.org/)-supported backend (Google Drive, S3, Dropbox, OneDrive, SFTP, and 70+ others).
 
+> **ISO compliance status (v1.0)**: SelectiveMirror applies four ISO standards as engineering scaffolding — ISO/IEC/IEEE 29148:2018 (requirements), ISO/IEC 25010:2023 (quality model), ISO/IEC 25023:2016 (measurement), and ISO/IEC/IEEE 29119 family (testing). Compliance status is **Partial** with 63 tracked remediation actions. The audit is currently a **self-assessment**; independent external review is committed for v1.0.1. See [docs/iso-compliance.md](docs/iso-compliance.md) for the full audit, gap list, and per-standard status.
+
 ## Features
 
 - **On-write sync** -- detects file changes via Windows `ReadDirectoryChangesW` (no polling)

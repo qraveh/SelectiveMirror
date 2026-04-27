@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Documentation / ISO compliance
+
+- **`docs/iso-compliance.md` baseline added** (v0.3). Single source of truth for compliance status against ISO/IEC/IEEE 29148:2018, ISO/IEC 25010:2023, ISO/IEC 25023:2016, and ISO/IEC/IEEE 29119 family (Parts 1-4). 63 action items registered with priority and owner. v1.0 ships with **Partial ISO compliance** disclosed; SELF-ASSESSMENT label retained. External independent review committed for v1.0.1.
+- **`docs/SRS.md` revised to v1.1**. Added §4.0 schema-deviation note (NFR section uses 25010:2011 layout; 25010:2023 mapping documented). Added ISO/IEC/IEEE 29119:2023 to §1.4 Applicable Standards (was missing — see SM-154). Cross-link added to `docs/iso-compliance.md`.
+- **NFR target revisions (SM-153)**: NFR-TB-01 detection latency 50ms p99 → 100ms p99 (target loosened with rationale). NFR-TB-02 sync latency 3s p95 → 5s p95. NFR-RU-03 idle CPU 0.5% → 1%. NFR-RU-01 idle memory: target 25 MB retained but Status changed from "Met (at 30 MB)" to **Not Met** (target stays as v1.1 optimization goal). The "Met at [looser value]" standards-gaming framing is eliminated from the SRS.
+- **NFR-TE-01 status updated** to disclose `internal/watcher/` coverage gap (16.6% statement; 15 of 20 functions at 0%). Refactor for testability (X-04) deferred to v1.0.1, ETA 2026-05-06.
+- **`docs/VV-Plan.md` cross-link** to `docs/iso-compliance.md` added (§2). Pre-existing V&V conflation in §1.1 (integration tests mis-categorized under Validation) filed as SM-152 — fix pending.
+- BugTracker entries: SM-152 (V&V conflation, open), SM-153 (NFR Status standards-gaming, fixed in this commit), SM-154 (SRS §1.4 missing 29119 reference, fixed in this commit).
+
 ### Breaking (CLI)
 
 - **`smirror addmirror --backup` removed.** The flag, the interactive `[b] Backup` menu option, and the `backupDestination` rotation logic (`<dest>` → `.bak` → `.bak.2`) are gone. smirror no longer manages backups of pre-existing destination content. If the destination already has files, addmirror aborts unless `--delete` is set; clean the destination manually and retry otherwise. Interactive conflict menu is now `[d] Delete / [a] Abort`. Unknown flags are rejected cleanly instead of being treated as positional paths.

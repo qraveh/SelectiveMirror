@@ -63,6 +63,8 @@
 
 ## 2. ISO Methodology
 
+> **Compliance tracking**: gap analysis and remediation actions for ISO/IEC/IEEE 29119, ISO/IEC 25010, and ISO/IEC 25023 are maintained in `docs/iso-compliance.md`. This section defines how the standards are *applied*; the compliance doc records *how well*.
+
 ### 2.1 ISO/IEC/IEEE 29119 (Software Testing)
 
 29119 defines test processes, documentation, and techniques. We apply:
