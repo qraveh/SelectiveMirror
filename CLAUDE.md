@@ -9,7 +9,7 @@
 
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (smirror@qodeh.com)
-**Status**: v0.8.x-dev (Phase 1+1.5+2+2.5+4+6+7 complete; Phase 3 USN journal pending; Phase 5 telemetry code written, not enabled)
+**Status**: v0.9.x-dev (Phase 1+1.5+2+2.5+4+5+6+7 complete; Phase 3 USN journal pending). v0.9.0 released 2026-04-18 with the perMachine MSI / SEC-C2 / per-user task mode batch; v0.9.4-dev brought Phase 5 telemetry live (Supabase backend, Cloudflare Worker proxy, MSI consent UI).
 **License**: MIT
 **Language**: Go 1.26+
 
@@ -186,7 +186,7 @@ See `config.example.yaml` for full annotated example.
 ## Testing
 
 ```bash
-# Run all unit tests (530+ tests across 14 packages)
+# Run all unit tests (600+ tests across 14 packages)
 go test ./internal/... ./cmd/... -p 24 -count=1
 
 # Run integration tests (adversarial, uses local rclone backend)
@@ -243,7 +243,7 @@ Follows [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
 - [x] **Phase 2.5**: Distribution — CI/CD, GoReleaser, WiX MSI installer, rclone auto-provisioning
 - [ ] **Phase 3**: USN journal recovery — fast restart reconciliation
 - [x] **Phase 4**: OSS polish — CONTRIBUTING, SECURITY, PR template, winget manifest, CHANGELOG
-- [ ] **Phase 5**: Telemetry — opt-in analytics, update check (code written, set aside)
+- [x] **Phase 5**: Telemetry — opt-in analytics, update check (deployed 0.9.4-dev → 0.9.6-dev: Supabase schema, RLS, HMAC verify, MSI consent UI, Cloudflare Worker proxy, pg_cron rollups)
 - [x] **Phase 6**: Anomaly detection — classification, recording, rotation, webhook alerts
 - [x] **Phase 7**: Hooks — pre/post-sync hook execution with environment variables
 

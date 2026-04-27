@@ -2,17 +2,19 @@
 <!--
   TelemetryConsent.wxi — opt-in installation telemetry consent for SelectiveMirror.
 
-  Drafted overnight. NOT yet wired into Package.wxs. To activate:
+  Wired into Package.wxs as of v0.9.4-dev:
+    * `<?include TelemetryConsent.wxi ?>` is included near the top.
+    * `<ComponentGroupRef Id="TelemetryConsentComponents" />` is referenced
+      inside the ProductFeature feature.
 
-    1. Review the property and component below.
-    2. In Package.wxs, add `<?include TelemetryConsent.wxi ?>` near the
-       existing `<?include Variables.wxi ?>`.
-    3. In Package.wxs, add `<ComponentGroupRef Id="TelemetryConsentComponents" />`
-       inside the `<Feature Id="ProductFeature">` block.
-    4. (Future) Integrate the checkbox into the installer UI — see "UI
-       integration TODO" at the bottom of this file. Until then, the
-       property defaults to 0 (opt-out) and can be set via the command
-       line: `msiexec /i SelectiveMirror.msi INSTALL_TELEMETRY_OPT_IN=1`
+  The registry component (HKLM\Software\SelectiveMirror\TelemetryOptIn) is
+  shipped — opting in via command line works today:
+    msiexec /i SelectiveMirror.msi INSTALL_TELEMETRY_OPT_IN=1
+
+  Still pending: the UI checkbox (see "UI integration TODO" at the bottom).
+  Until that lands, the default is "0" (opt-out) and users who want to opt
+  in must either pass the property at install time or run `smirror
+  telemetry on` post-install.
 
   Design notes:
     * Property is a public Windows Installer Property (uppercase name) so

@@ -41,6 +41,10 @@ installer/bin/
 installer/obj/
 docs/*.pdf
 
+# Test coverage profiles (go test -coverprofile=*.out)
+*.out
+coverage*.txt
+
 # Bug reports
 smirror-bug-report-*.txt
 

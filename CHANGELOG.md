@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Documentation (P4 — from adversarial review)
+
+- **`CLAUDE.md` status line updated.** Reflects v0.9.x-dev, Phase 5 (telemetry) live, Phase 6/7 complete. Phases section ticked Phase 5 with deployment notes (Supabase, Cloudflare Worker proxy, MSI consent UI). The 530+ test count was updated to 600+ (608 actual today).
+- **`SECURITY.md` Supported Versions updated** to list 0.9.x as supported and 0.8.x as best-effort backports for security-critical fixes.
+- **`README.md` phase list aligned with CLAUDE.md.** Added Phases 2.5, 5, 6, 7 (previously absent) and updated their statuses.
+- **`docs/VV-Plan.md` test pyramid + summary table** refreshed to v0.9.x and 600+ unit tests.
+- **`installer/TelemetryConsent.wxi` self-comment fixed.** The file claimed "NOT yet wired into Package.wxs" but it has been included since v0.9.4-dev. Comment now reflects shipping state and lists the still-pending UI checkbox as the only remaining work.
+
+### Workspace hygiene (P6 — from adversarial review)
+
+- **`.gitignore` covers `*.out` and `coverage*.txt`.** Test coverage profiles (`go test -coverprofile=*.out`) used to accumulate in the worktree and could be `git add .`'d into a commit. Stray `coverage*.out` and `watcher_cov.out` files removed from the worktree.
+
 ### CI / release pipeline (P3 — from adversarial review)
 
 - **`release.yml` now runs `go vet` and `go test ./internal/... ./cmd/...` before GoReleaser.** CI runs on `push:branches:[master]` and `pull_request`, while release runs on `push:tags:['v*']`. GitHub Actions `needs:` does not cross-link between workflows, so prior to this commit a tag pushed onto a commit whose CI failed would still publish the release. Adding the test step into release.yml itself closes that gap (defense-in-depth — we don't skip on already-green CI status because re-running is cheap relative to a broken release).

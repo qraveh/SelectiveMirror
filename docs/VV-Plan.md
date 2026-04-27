@@ -54,7 +54,7 @@
        / T4-T6: Stress \        ← Targeted, nightly
       / T3: Integration  \      ← Per-release
      / T2: Race Detection  \    ← Every commit
-    / T1: Unit Tests (530+)  \  ← Every commit, fast
+    / T1: Unit Tests (600+)  \  ← Every commit, fast
    / T0: Static Analysis (vet) \ ← Every commit, instant
   ──────────────────────────────
 ```
@@ -239,12 +239,12 @@ For each package, identify:
 
 ### 5.1 Summary
 
-| Metric | Value (baseline v0.5.0 → current v0.8.x) |
+| Metric | Value (baseline v0.5.0 → current v0.9.x) |
 |--------|------------------------------------------|
 | Total statement coverage (internal/) | 35.8% → ~65% |
 | Total functions | 184 → grown with anomaly/hooks/telemetry packages |
 | Functions at 0% | 137 (74.5%) at baseline; reduced materially by anomaly/hooks/watcher refactors |
-| Unit test count | 530+ → 539+ |
+| Unit test count | 530+ → 600+ |
 | Integration tests | 66 + 11 stress → 123 integration cases |
 | Fuzz tests | 2 targets (filter, config); 30s × 2 targets, 18M+ execs clean |
 | Test code lines | 6,798 (Go) + 1,150 (PowerShell) at baseline; grown with anomaly/hooks test files |

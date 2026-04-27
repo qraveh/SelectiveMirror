@@ -109,9 +109,12 @@ Per-mirror `delete_policy` overrides the global setting. If neither is set, the 
 - [x] **Phase 1** -- Core mirror: config, filters, watcher, sync, state, CLI
 - [x] **Phase 1.5** -- Hardening: lock, quiescence, metrics, doctor/verify, delete policy
 - [x] **Phase 2** -- Windows service: native SCM integration via `golang.org/x/sys/windows/svc`
+- [x] **Phase 2.5** -- Distribution: GoReleaser, WiX MSI installer, rclone auto-provisioning, smoke-test gate
 - [ ] **Phase 3** -- USN journal recovery: fast restart reconciliation
 - [x] **Phase 4** -- OSS polish: CI, issue templates, documentation, winget manifest
-- [ ] **Phase 5** -- Telemetry: opt-in analytics, update check
+- [x] **Phase 5** -- Telemetry: opt-in analytics + update check (Supabase backend, Cloudflare Worker proxy, MSI consent UI; live since 0.9.4-dev)
+- [x] **Phase 6** -- Anomaly detection: classification, recording, rotation, webhook alerts
+- [x] **Phase 7** -- Hooks: pre/post-sync hook execution with environment variables
 
 ## License
 

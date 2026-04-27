@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.8.x   | Yes       |
+| 0.9.x   | Yes       |
+| 0.8.x   | Yes (best-effort backports for security-critical fixes only) |
 | < 0.8   | No        |
 
 ## Reporting a Vulnerability
