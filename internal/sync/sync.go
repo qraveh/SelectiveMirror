@@ -39,6 +39,48 @@ type Task struct {
 	Done        func()   // optional completion callback (e.g., WaitGroup.Done); called after task finishes
 }
 
+// isUnsafeRelPath reports whether relPath should be rejected before being
+// concatenated into a local or remote path. Empty is allowed (full-project
+// sync); any other rooted path or any path containing a `..` segment is
+// rejected — even paths that cancel out under filepath.Clean (e.g.
+// "good/../bad"), because some rclone backends may treat the raw segments
+// rather than the cleaned form.
+//
+// Defense-in-depth guard for destructive operations (deleteRemoteFile,
+// quarantine moveto). syncSingleFile already validates the resolved local
+// path against the project root; the delete path previously skipped the
+// check, letting a `..`-bearing relPath escape `proj.Remote` when
+// interpolated into rclone moveto / deletefile arguments.
+func isUnsafeRelPath(relPath string) bool {
+	if relPath == "" {
+		return false
+	}
+	if filepath.IsAbs(relPath) {
+		return true
+	}
+	// Cross-platform rooted-path check (filepath.IsAbs is OS-specific:
+	// "/etc/passwd" returns false on Windows). Reject anything starting
+	// with `/`, `\`, or `<drive>:`.
+	if relPath[0] == '/' || relPath[0] == '\\' {
+		return true
+	}
+	if len(relPath) >= 2 && relPath[1] == ':' {
+		return true
+	}
+	cleaned := filepath.ToSlash(filepath.Clean(relPath))
+	if cleaned == "." {
+		return true
+	}
+	// Check the original segments, not the cleaned form: even if `..` cancels
+	// out under Clean, the raw segment in the rclone argument is unsafe.
+	for _, seg := range strings.Split(filepath.ToSlash(relPath), "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
+}
+
 // RcloneRunner executes an rclone command and returns the exit code.
 // The default implementation spawns a subprocess; tests inject a fake.
 type RcloneRunner func(ctx context.Context, args []string) int
@@ -593,6 +635,12 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 // of the configured policy. This is used for rename cleanup: when a file is
 // renamed, the old remote path is an orphan that must be removed.
 func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relPath string, force bool) {
+	if isUnsafeRelPath(relPath) {
+		e.log.Error("delete blocked: unsafe relPath", "project", proj.Name, "path", relPath)
+		e.Anomaly.Record(anomaly.KindSyncFailure, proj.Name, relPath,
+			"delete blocked: relPath contains traversal or absolute segment", relPath)
+		return
+	}
 	policy := proj.DeletePolicy(e.cfg)
 	if force {
 		policy = config.DeleteDelete
@@ -696,6 +744,12 @@ func (e *Engine) deleteFlags(proj config.Project) []string {
 // each one individually. This avoids calling `rclone deletefile` on directory paths
 // (which fails and retries for 30s, blocking the sync engine).
 func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPath string, force bool) {
+	if isUnsafeRelPath(dirPath) {
+		e.log.Error("dir delete blocked: unsafe dirPath", "project", proj.Name, "path", dirPath)
+		e.Anomaly.Record(anomaly.KindSyncFailure, proj.Name, dirPath,
+			"dir delete blocked: dirPath contains traversal or absolute segment", dirPath)
+		return
+	}
 	start := time.Now()
 	policy := proj.DeletePolicy(e.cfg)
 	if force {

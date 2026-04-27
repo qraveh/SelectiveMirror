@@ -123,7 +123,10 @@ func saveCrashReport(panicVal interface{}, stack string) string {
 
 	ts := time.Now().Format("20060102-150405")
 	filename := filepath.Join(dataDir, fmt.Sprintf("crash-%s.txt", ts))
-	if err := os.WriteFile(filename, []byte(report), 0644); err != nil {
+	// 0600: crash reports include stack traces and process state; only the
+	// owner should read them. SECURITY.md documents 0600 for files under
+	// the user data dir.
+	if err := os.WriteFile(filename, []byte(report), 0600); err != nil {
 		fmt.Fprintln(os.Stderr, report)
 		return ""
 	}

@@ -48,6 +48,107 @@ func TestSetField_ExistingKey(t *testing.T) {
 	}
 }
 
+// SetField must only match top-level keys. A previous bug used TrimSpace+
+// HasPrefix, which matched indented sibling keys: setting a global
+// `delete_policy` would silently overwrite the first per-mirror
+// `delete_policy:` line found in a mirror entry.
+func TestSetField_DoesNotMatchIndentedSibling(t *testing.T) {
+	cfg := `mirrors:
+  - name: TestProject
+    local_path: LOCAL_PATH
+    remote: "gdrive:backup/TestProject"
+    delete_policy: ignore
+
+global_excludes:
+  - .git/
+`
+	configPath := testConfigDir(t, cfg)
+
+	if err := SetField(configPath, "delete_policy", "quarantine"); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(configPath)
+	got := string(data)
+
+	if !strings.Contains(got, "    delete_policy: ignore") {
+		t.Errorf("indented per-mirror delete_policy was overwritten:\n%s", got)
+	}
+	// Top-level delete_policy: quarantine should appear (no leading whitespace
+	// on its line).
+	lines := strings.Split(got, "\n")
+	foundTopLevel := false
+	for _, line := range lines {
+		if line == "delete_policy: quarantine" {
+			foundTopLevel = true
+			break
+		}
+	}
+	if !foundTopLevel {
+		t.Errorf("expected top-level `delete_policy: quarantine` line, got:\n%s", got)
+	}
+}
+
+// SetField must skip lines beginning with `#`. Otherwise a commented-out
+// example like `# default_remote: gdrive:foo` would be matched and rewritten.
+func TestSetField_SkipsCommentLines(t *testing.T) {
+	cfg := `# default_remote: gdrive:original-comment
+
+mirrors:
+  - name: TestProject
+    local_path: LOCAL_PATH
+    remote: "gdrive:backup/TestProject"
+`
+	configPath := testConfigDir(t, cfg)
+
+	if err := SetField(configPath, "default_remote", `"gdrive:new"`); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(configPath)
+	got := string(data)
+
+	if !strings.Contains(got, "# default_remote: gdrive:original-comment") {
+		t.Errorf("comment line was rewritten:\n%s", got)
+	}
+	if !strings.Contains(got, `default_remote: "gdrive:new"`) {
+		t.Errorf("expected default_remote: \"gdrive:new\", got:\n%s", got)
+	}
+}
+
+// SetField (and AddMirror, RemoveMirror) must not widen the file's mode on
+// edit. Previous code rewrote with 0644 unconditionally, downgrading the
+// initial 0600 from new-config creation.
+func TestSetField_PreservesMode(t *testing.T) {
+	if os.Getenv("CI") == "" && filepath.Separator == '\\' {
+		// On Windows, file modes are largely simulated; the meaningful bit
+		// is the read-only flag controlled by mode&0200. We still assert the
+		// stored mode value to catch regressions in the helper, but tolerate
+		// platform differences.
+	}
+	configPath := testConfigDir(t, baseConfig)
+	// testConfigDir creates with 0644; force 0600 for this test.
+	if err := os.Chmod(configPath, 0600); err != nil {
+		t.Fatalf("chmod 0600: %v", err)
+	}
+
+	if err := SetField(configPath, "log_level", "debug"); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Mode().Perm() & 0777; got != 0600 {
+		// On Windows, os.Chmod sets the read-only bit only — Stat returns 0666
+		// for writable files. Tolerate non-strict equality if not on Linux.
+		if filepath.Separator != '\\' {
+			t.Errorf("file mode = %#o after SetField, want 0600", got)
+		}
+	}
+}
+
 func TestSetField_NewKey(t *testing.T) {
 	configPath := testConfigDir(t, baseConfig)
 

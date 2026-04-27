@@ -18,6 +18,24 @@ func stripBOM(s string) string {
 	return s
 }
 
+// writePreservingMode writes data to path. If the file already exists, its
+// mode is preserved — never widened. SECURITY.md documents 0600 for newly
+// created configs (they may contain rclone remote names, webhook URLs, and
+// other sensitive data); previous code rewrote with 0644 on every edit,
+// silently downgrading the initial 0600.
+func writePreservingMode(path string, data []byte) error {
+	var mode os.FileMode = 0600
+	if st, err := os.Stat(path); err == nil {
+		mode = st.Mode().Perm()
+		// Defensive narrowing: if the file is somehow group/world-writable,
+		// don't carry that forward. Owner-only is the documented baseline.
+		if mode&0077 != 0 {
+			mode = 0600
+		}
+	}
+	return os.WriteFile(path, data, mode)
+}
+
 // SetField updates or adds a top-level scalar field in the config YAML file.
 // Preserves comments and formatting by operating on raw text lines.
 // If the key already exists, its value is replaced in-place.
@@ -38,20 +56,27 @@ func SetField(configPath, key, value string) error {
 	prefix := key + ":"
 	found := false
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, prefix) {
-			// Preserve inline comment if any
+		// Match top-level keys ONLY. The previous TrimSpace+HasPrefix matched
+		// indented siblings: setting a global `delete_policy` would overwrite
+		// the first per-mirror `delete_policy:` line found inside a mirror entry.
+		if len(line) > 0 && (line[0] == ' ' || line[0] == '\t') {
+			continue
+		}
+		bare := strings.TrimRight(line, "\r")
+		if strings.HasPrefix(bare, "#") {
+			continue
+		}
+		if strings.HasPrefix(bare, prefix) {
 			lines[i] = key + ": " + value
 			found = true
 			break
 		}
 	}
 	if !found {
-		// Insert after last non-empty top-level line, or append
 		lines = append(lines, key+": "+value)
 	}
 
-	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
+	return writePreservingMode(configPath, []byte(strings.Join(lines, "\n")))
 }
 
 // AddMirror appends a new mirror entry to the mirrors list in the config YAML.
@@ -130,7 +155,7 @@ func AddMirror(configPath string, p Project) error {
 	result = append(result, blockLines...)
 	result = append(result, lines[insertIdx:]...)
 
-	return os.WriteFile(configPath, []byte(strings.Join(result, "\n")), 0644)
+	return writePreservingMode(configPath, []byte(strings.Join(result, "\n")))
 }
 
 // RemoveMirror removes a mirror entry by name from the config YAML.
@@ -186,7 +211,7 @@ func RemoveMirror(configPath, name string) error {
 	result = append(result, lines[:startIdx]...)
 	result = append(result, lines[endIdx:]...)
 
-	return os.WriteFile(configPath, []byte(strings.Join(result, "\n")), 0644)
+	return writePreservingMode(configPath, []byte(strings.Join(result, "\n")))
 }
 
 // formatMirrorBlock formats a Project as a YAML list item with 2-space indent.

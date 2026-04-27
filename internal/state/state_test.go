@@ -38,6 +38,77 @@ func TestOpenAndClose(t *testing.T) {
 	}
 }
 
+// Open must NOT write last_startup. Only the daemon (foreground / service)
+// should bump that field via MarkDaemonStartup. Read-only CLI commands like
+// `smirror status` open the store too — they used to overwrite the field
+// every invocation, so the value drifted from "daemon's last start" to
+// "last time anyone ran a CLI command."
+func TestOpen_DoesNotSetLastStartup(t *testing.T) {
+	st := tempStore(t)
+
+	v, err := st.GetMeta("last_startup")
+	if err != nil {
+		t.Fatalf("GetMeta(last_startup): %v", err)
+	}
+	if v != "" {
+		t.Errorf("Open() set last_startup = %q; expected empty (only MarkDaemonStartup may set it)", v)
+	}
+}
+
+func TestMarkDaemonStartup_Sets(t *testing.T) {
+	st := tempStore(t)
+
+	st.MarkDaemonStartup()
+	v, err := st.GetMeta("last_startup")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v == "" {
+		t.Error("MarkDaemonStartup did not write last_startup")
+	}
+	// Sanity: should parse as RFC3339.
+	if _, err := time.Parse(time.RFC3339, v); err != nil {
+		t.Errorf("last_startup = %q; not RFC3339: %v", v, err)
+	}
+}
+
+// Open must not downgrade schema_version. An older binary running a
+// read-only command used to overwrite the meta entry with its own (lower)
+// migration count, which then triggered migration re-runs on the next
+// daemon startup.
+func TestOpen_DoesNotDowngradeSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// First open: schema_version is set to len(migrations).
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a future binary having bumped the version higher.
+	highVersion := fmt.Sprintf("%d", len(migrations)+5)
+	if err := st.SetMeta("schema_version", highVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-open with current binary. Should NOT downgrade the meta value.
+	st2, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	v, err := st2.GetMeta("schema_version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != highVersion {
+		t.Errorf("Open downgraded schema_version: got %q, want %q", v, highVersion)
+	}
+}
+
 func TestUpdateAndGetFileState(t *testing.T) {
 	st := tempStore(t)
 

@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.8-dev"
+var version = "0.9.9-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -65,13 +65,27 @@ const (
 )
 
 func main() {
-	// Emergency: write to a fixed path so we can diagnose service crashes.
-	// Must happen before anything else — services have no console.
-	earlyLog, _ := os.OpenFile(`C:\smirror-early.log`, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if earlyLog != nil {
-		fmt.Fprintf(earlyLog, "%s main() entered pid=%d isSvc=%v args=%v\n",
-			time.Now().Format(time.RFC3339), os.Getpid(), service.IsWindowsService(), os.Args)
-		earlyLog.Close()
+	// Emergency: write a single-line breadcrumb to a path the running
+	// principal can write. Must happen before anything else — services
+	// have no console and the normal log isn't open yet.
+	//
+	// Service mode (LocalSystem): %ProgramData%\SelectiveMirror\early.log.
+	// CLI mode (per-user): %TEMP%\smirror-early.log.
+	//
+	// The previous fixed `C:\smirror-early.log` failed in two ways:
+	//  - Non-admin CLI invocations on locked-down boxes had no write access
+	//    to C:\, so the breadcrumb was silently lost.
+	//  - PID + os.Args were readable by anyone with C:\ list access (which
+	//    is everyone by default).
+	earlyLogPath := earlyLogTarget(service.IsWindowsService())
+	if earlyLogPath != "" {
+		_ = os.MkdirAll(filepath.Dir(earlyLogPath), 0700)
+		earlyLog, _ := os.OpenFile(earlyLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if earlyLog != nil {
+			fmt.Fprintf(earlyLog, "%s main() entered pid=%d isSvc=%v args=%v\n",
+				time.Now().Format(time.RFC3339), os.Getpid(), service.IsWindowsService(), os.Args)
+			earlyLog.Close()
+		}
 	}
 
 	// If running as a Windows Service, the SCM invokes us with no args.
@@ -84,6 +98,33 @@ func main() {
 	// CLI mode: wrap in crash recovery so panics produce a saved report
 	// instead of a raw stack trace.
 	runWithCrashReport(cliMain)
+}
+
+// earlyLogTarget returns the path for the very-early diagnostic log written
+// before any normal logging is set up.
+func earlyLogTarget(isService bool) string {
+	if isService {
+		if pd := os.Getenv("ProgramData"); pd != "" {
+			return filepath.Join(pd, "SelectiveMirror", "early.log")
+		}
+		if sr := os.Getenv("SystemRoot"); sr != "" {
+			return filepath.Join(sr, "Logs", "smirror-early.log")
+		}
+		return ""
+	}
+	return filepath.Join(os.TempDir(), "smirror-early.log")
+}
+
+// serviceCrashLogTarget returns the path for the service-mode crash log
+// captured between SCM startup and normal logging being available.
+func serviceCrashLogTarget() string {
+	if pd := os.Getenv("ProgramData"); pd != "" {
+		return filepath.Join(pd, "SelectiveMirror", "service-crash.log")
+	}
+	if sr := os.Getenv("SystemRoot"); sr != "" {
+		return filepath.Join(sr, "Logs", "smirror-service-crash.log")
+	}
+	return ""
 }
 
 // cliMain is the CLI entry point, called from main() wrapped in runWithCrashReport.
@@ -472,6 +513,7 @@ Press Ctrl+C to stop.`) {
 
 	// Record instance info so `smirror status` can report it.
 	// Clear stale health errors from previous run (SM-074).
+	st.MarkDaemonStartup()
 	exePath, _ := os.Executable()
 	st.SetMeta("instance_pid", fmt.Sprintf("%d", os.Getpid()))
 	st.SetMeta("instance_exe", exePath)
@@ -2156,15 +2198,44 @@ sanitized and remote paths are redacted.`)
 		return
 	}
 
-	// Write to file
+	// Write to file. Output goes under the user data dir (the directory
+	// containing config.yaml) — never the current working directory. If the
+	// caller invokes report-bug from inside a watched mirror, writing the
+	// report into the CWD would round-trip the (sanitized) report up to the
+	// configured remote, which is surprising for the user. The user data
+	// dir is generally not itself watched.
 	ts := time.Now().Format("20060102-150405")
 	filename := fmt.Sprintf("smirror-bug-report-%s.txt", ts)
-	if err := os.WriteFile(filename, []byte(report), 0644); err != nil {
+	reportDir := bugReportDir(configPath)
+	if err := os.MkdirAll(reportDir, 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to prepare report directory %s: %v\n", reportDir, err)
+		os.Exit(1)
+	}
+	fullPath := filepath.Join(reportDir, filename)
+	if err := os.WriteFile(fullPath, []byte(report), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to write report: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Bug report written to: %s\n", filename)
+	fmt.Printf("Bug report written to: %s\n", fullPath)
 	fmt.Printf("Paste into a GitHub issue at: %s\n", issueNewURL)
+}
+
+// bugReportDir returns the directory in which `smirror report-bug` writes
+// its output file. Preference order:
+//  1. <configdir>/reports — the user data dir, alongside state.db etc.
+//  2. ~/.selectivemirror/reports — falls through if configdir is unusable.
+//  3. os.TempDir()/smirror-reports — last-ditch.
+//
+// Mode-0700 directory; mode-0600 files. Reports contain sanitized but still
+// potentially sensitive details (mirror names, log lines, rclone version).
+func bugReportDir(configPath string) string {
+	if dir := filepath.Dir(configPath); dir != "" && dir != "." {
+		return filepath.Join(dir, "reports")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".selectivemirror", "reports")
+	}
+	return filepath.Join(os.TempDir(), "smirror-reports")
 }
 
 func cmdStats(configPath string, args []string) {
@@ -2757,8 +2828,15 @@ func serviceMain() {
 	// Emergency diagnostic log — writes to a guaranteed location before any
 	// other initialization. Services running as SYSTEM have no console/stderr;
 	// if we crash before the normal log opens, this is the only evidence.
-	crashLog, _ := os.OpenFile(`C:\smirror-service-crash.log`,
-		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	// Lives under %ProgramData%\SelectiveMirror (admin-owned, the canonical
+	// service data dir). Previous version targeted C:\ root which leaked
+	// PID + os.Args to anyone with read access.
+	crashLogPath := serviceCrashLogTarget()
+	if crashLogPath != "" {
+		_ = os.MkdirAll(filepath.Dir(crashLogPath), 0700)
+	}
+	crashLog, _ := os.OpenFile(crashLogPath,
+		os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if crashLog != nil {
 		fmt.Fprintf(crashLog, "%s serviceMain entered pid=%d args=%v\n",
 			time.Now().Format(time.RFC3339), os.Getpid(), os.Args)
@@ -2883,6 +2961,7 @@ func serviceMain() {
 
 		// Record instance info so `smirror status` can report it.
 		// Clear stale health errors from previous run (SM-074).
+		st.MarkDaemonStartup()
 		exePath, _ := os.Executable()
 		st.SetMeta("instance_pid", fmt.Sprintf("%d", os.Getpid()))
 		st.SetMeta("instance_exe", exePath)
@@ -3078,29 +3157,9 @@ func currentUser() string {
 	return u.Username
 }
 
-// updateConfigKey sets a top-level YAML key in the config file.
-// If the key exists, its value is replaced. If not, a new line is appended.
-func updateConfigKey(configPath, key, value string) error {
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return err
-	}
-	lines := strings.Split(string(data), "\n")
-	prefix := key + ":"
-	found := false
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, prefix) {
-			lines[i] = key + ": " + value
-			found = true
-			break
-		}
-	}
-	if !found {
-		lines = append(lines, key+": "+value)
-	}
-	return os.WriteFile(configPath, []byte(strings.Join(lines, "\n")), 0644)
-}
+// (removed) updateConfigKey: replaced by config.SetField, which handles
+// top-level-only matching, comment skipping, and mode-preserving writes.
+// See internal/config/edit.go.
 
 func cmdService(configPath string, args []string) {
 	if subcommandHelp(args, `Usage: smirror service <action...> [flags]
@@ -3286,7 +3345,7 @@ func serviceDoInstall(configPath string, compound bool) {
 		// Resolve rclone binary to absolute path
 		if !filepath.IsAbs(cfg.RclonePath) {
 			if info, err := rclone.Detect(cfg.RclonePath); err == nil {
-				if err := updateConfigKey(configPath, "rclone_path", info.Path); err != nil {
+				if err := config.SetField(configPath, "rclone_path", info.Path); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: could not update rclone_path in config: %v\n", err)
 					fmt.Fprintf(os.Stderr, "Manually set rclone_path to: %s\n\n", info.Path)
 				} else {
@@ -3298,7 +3357,7 @@ func serviceDoInstall(configPath string, compound bool) {
 		if cfg.RcloneConfig == "" {
 			rcloneConf := filepath.Join(os.Getenv("APPDATA"), "rclone", "rclone.conf")
 			if _, err := os.Stat(rcloneConf); err == nil {
-				if err := updateConfigKey(configPath, "rclone_config", rcloneConf); err != nil {
+				if err := config.SetField(configPath, "rclone_config", rcloneConf); err != nil {
 					fmt.Fprintf(os.Stderr, "Warning: could not update rclone_config in config: %v\n", err)
 					fmt.Fprintf(os.Stderr, "Manually set rclone_config to: %s\n\n", rcloneConf)
 				} else {

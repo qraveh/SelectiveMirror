@@ -135,10 +135,37 @@ func Open(dbPath string) (*Store, error) {
 	}
 
 	s := &Store{db: db}
-	s.SetMeta("schema_version", fmt.Sprintf("%d", len(migrations)))
-	s.SetMeta("last_startup", time.Now().UTC().Format(time.RFC3339))
+
+	// schema_version: never downgrade. An older binary running a read-only
+	// command (smirror status / dry-run / explain) used to overwrite the
+	// meta entry with its own (lower) migration count, which then triggered
+	// migration re-runs on the next daemon startup. Only write if we are at
+	// or above the recorded version.
+	if existing, _ := s.GetMeta("schema_version"); existing == "" || atoiOrZero(existing) < len(migrations) {
+		s.SetMeta("schema_version", fmt.Sprintf("%d", len(migrations)))
+	}
+
+	// last_startup is NOT written here. Read-only commands open the state
+	// store too; the user expects last_startup to be the daemon's last
+	// start time, not "the last time anyone touched the DB". The daemon
+	// calls MarkDaemonStartup() explicitly during startup.
 
 	return s, nil
+}
+
+// atoiOrZero converts a string to int, returning 0 on error. Used by Open
+// to compare schema_version values without inflating the package surface.
+func atoiOrZero(s string) int {
+	n := 0
+	fmt.Sscanf(s, "%d", &n)
+	return n
+}
+
+// MarkDaemonStartup records "last_startup" in the meta table. Called only
+// by the long-running daemon (foreground / Windows service / scheduled
+// task). Read-only commands intentionally do not update this field.
+func (s *Store) MarkDaemonStartup() {
+	s.SetMeta("last_startup", time.Now().UTC().Format(time.RFC3339))
 }
 
 // runMigrations applies pending schema migrations. Reads the current version

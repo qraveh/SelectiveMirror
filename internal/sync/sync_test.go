@@ -3428,3 +3428,58 @@ func TestDeduplicateRemoteFiles(t *testing.T) {
 		}
 	})
 }
+
+// isUnsafeRelPath is the defense-in-depth guard for destructive remote
+// operations (deleteRemoteFile, deleteRemoteDir). Empty is allowed
+// (full-project sync); anything that could escape proj.Remote when
+// concatenated must be rejected.
+func TestIsUnsafeRelPath(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty (full-project sync)", "", false},
+		{"plain file", "foo.txt", false},
+		{"plain subdir", "subdir/foo.txt", false},
+		{"deeply nested", "a/b/c/d/e.txt", false},
+		{"dot-only", ".", true},
+		{"single dotdot", "..", true},
+		{"prefix dotdot", "../etc/passwd", true},
+		{"middle dotdot", "good/../bad", true},
+		{"suffix dotdot", "foo/..", true},
+		{"absolute unix", "/etc/passwd", true},
+		{"absolute windows drive", "C:/Windows/System32", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isUnsafeRelPath(tc.in); got != tc.want {
+				t.Errorf("isUnsafeRelPath(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// deleteRemoteFile must refuse to invoke rclone when relPath contains a
+// traversal segment. Defense-in-depth: even though watcher events should
+// never produce such paths, the destructive path must validate its input.
+func TestDeleteRemoteFile_BlocksPathEscape(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+	cfg.DeletePolicyStr = "delete"
+
+	var rcloneCalled bool
+	e := testEngine(t, cfg, func(ctx context.Context, args []string) int {
+		rcloneCalled = true
+		return 0
+	})
+
+	// Pre-populate state so a normal call would proceed.
+	e.state.UpdateFileState(proj.Name, "../escape.txt", "abc123", 100, 0, 0)
+
+	e.deleteRemoteFile(context.Background(), proj, "../escape.txt", false)
+
+	if rcloneCalled {
+		t.Error("rclone was invoked despite traversal segment in relPath")
+	}
+}

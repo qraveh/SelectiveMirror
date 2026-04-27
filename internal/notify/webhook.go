@@ -68,11 +68,11 @@ type WebhookSender struct {
 	SanitizePath func(string) string
 }
 
-// AllowLoopbackWebhooks controls whether webhooks may target loopback/private
-// addresses. Set to true only in tests that use httptest.NewServer. In
-// production, leave false (the default) to enforce the SSRF defense.
-// SEC-C4.
-var AllowLoopbackWebhooks = false
+// allowLoopbackWebhooks controls whether webhooks may target loopback/private
+// addresses. Set to true only by same-package test code (testmain_test.go);
+// unexported so an unrelated package cannot disable the SSRF defense by
+// flipping it in an init(). SEC-C4 / SEC-H7.
+var allowLoopbackWebhooks = false
 
 // NewWebhookSender creates a webhook notifier for the given URL.
 // SEC-C4: client is hardened against SSRF:
@@ -120,9 +120,11 @@ func NewWebhookSender(url string) *WebhookSender {
 
 // isBlockedWebhookIP rejects loopback, private, link-local, and multicast
 // addresses to prevent SSRF against internal metadata/services. SEC-C4.
-// Tests that use httptest.NewServer must set AllowLoopbackWebhooks = true.
+// Tests that use httptest.NewServer flip allowLoopbackWebhooks via the
+// same-package init() in testmain_test.go (a *_test.go file is only
+// compiled into the test binary, never production).
 func isBlockedWebhookIP(ip net.IP) bool {
-	if AllowLoopbackWebhooks && (ip.IsLoopback() || ip.IsPrivate()) {
+	if allowLoopbackWebhooks && (ip.IsLoopback() || ip.IsPrivate()) {
 		return false
 	}
 	return ip.IsLoopback() ||
