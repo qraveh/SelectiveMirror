@@ -19,6 +19,26 @@ jobs:
         with:
           go-version: '1.26.1'
 
+      # Defense in depth: re-run the unit suite at release time. CI runs on
+      # `push: branches: [master]` / `pull_request: branches: [master]`, but
+      # release runs on `push: tags: ['v*']` — a separate trigger. GitHub
+      # Actions `needs:` does not cross-link between workflows, so without
+      # this step a tag pushed onto a commit whose CI failed would still
+      # produce a published release. We do NOT skip on CI-already-green
+      # status because the cost of re-running the suite is far less than
+      # the cost of a broken release.
+      - name: Verify C toolchain present (CGo required for SQLite driver)
+        shell: pwsh
+        run: gcc --version
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test ./internal/... ./cmd/... -count=1
+        env:
+          CGO_ENABLED: 1
+
       # Compute the per-version telemetry HMAC derived key from the master
       # key (stored as a GitHub Actions repository secret). The master key
       # never enters the binary; only the version-derived key does. See

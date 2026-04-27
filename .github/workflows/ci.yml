@@ -64,9 +64,14 @@ jobs:
             exit 1
           }
 
-      - name: Race detection (CGO-free packages)
+      # Race detector. The previous comment said "CGO-free packages" but
+      # CGO_ENABLED=1 is set on this very step (required by mattn/go-sqlite3).
+      # internal/sync (FairQueue, per-file mutex map, gosync.Map) and
+      # internal/state (concurrent goroutine writers + cross-process opens)
+      # are exactly where races would live, so they must be in this list.
+      - name: Race detection
         run: |
-          go test -race -v ./internal/config/ ./internal/filter/ ./internal/logging/ ./internal/lock/ ./internal/metrics/ ./internal/watcher/
+          go test -race ./internal/config/ ./internal/filter/ ./internal/lock/ ./internal/logging/ ./internal/metrics/ ./internal/state/ ./internal/sync/ ./internal/watcher/
         env:
           CGO_ENABLED: 1
 

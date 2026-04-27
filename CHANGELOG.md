@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### CI / release pipeline (P3 — from adversarial review)
+
+- **`release.yml` now runs `go vet` and `go test ./internal/... ./cmd/...` before GoReleaser.** CI runs on `push:branches:[master]` and `pull_request`, while release runs on `push:tags:['v*']`. GitHub Actions `needs:` does not cross-link between workflows, so prior to this commit a tag pushed onto a commit whose CI failed would still publish the release. Adding the test step into release.yml itself closes that gap (defense-in-depth — we don't skip on already-green CI status because re-running is cheap relative to a broken release).
+- **Race detector now covers `internal/sync` and `internal/state`.** The previous step list was justified with a "CGO-free packages" comment, but `CGO_ENABLED=1` was set on that very step (mattn/go-sqlite3 requires it). The two excluded packages are exactly where races live (FairQueue, per-file mutex map, `gosync.Map`, concurrent SQLite goroutine writers); both pass `go test -race` cleanly today.
+
 ### Fixed (P1 — security & correctness, from adversarial review)
 
 - **`config.SetField` no longer overwrites indented sibling keys.** The previous `TrimSpace` + `HasPrefix` match treated `    delete_policy: ignore` (per-mirror) and top-level `delete_policy: ignore` as the same line — so `smirror remote` (or anything that touched a global key) could silently rewrite a per-mirror policy. Now matches only at column 0; comment lines are skipped.
