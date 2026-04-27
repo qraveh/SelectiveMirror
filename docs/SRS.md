@@ -447,7 +447,7 @@ This section is organized by ISO/IEC 25010 quality characteristics (2011 layout 
 
 | ID | Requirement | Rationale | Target | Measurement | Status |
 |----|------------|-----------|--------|-------------|--------|
-| NFR-FT-01 | System SHALL recover from rclone process failures without crashing | rclone errors are transient (network, quota, permission) | Zero service crashes from rclone failures | Circuit breaker + error logging | Met |
+| NFR-FT-01 | System SHALL recover from rclone process failures without crashing | rclone errors are transient (network, quota, permission) | Zero service crashes from rclone failures | Circuit breaker + error logging. **v0.9.12-dev**: rclone-stall detection (`internal/sync/liveness.go`) adds Layer-2 multi-signal stall backstop — `Sync:Stalled` anomaly (warning) when ALL of {output / cpu_time / io_bytes} signals are flat for K consecutive ticks; thresholds: transfer ops 10s × K=6 = 60s flat-grace, metadata ops 30s × K=8 = 240s. Replaces brittle 5-min wall-clock timeout. See `docs/rclone-stall-design-for-review.md`. | Met |
 | NFR-FT-02 | System SHALL isolate panics in any goroutine without crashing the service | Go panics in workers must not take down the service | safeGo wrapper on all goroutines | Health error tracking (max 100) | Met |
 | NFR-FT-03 | Circuit breaker SHALL back off exponentially after consecutive mirror failures | Prevent rapid retry loops on persistent failures | 3-failure threshold, 10s base, 5min cap | Per-mirror state tracking | Met |
 | NFR-FT-04 | System SHALL detect and recover from dropped filesystem events | OS event buffer overflow causes silent data loss | Reconciliation within configurable interval (default 5 min) | Periodic batch sync | Met |
@@ -518,7 +518,7 @@ This section is organized by ISO/IEC 25010 quality characteristics (2011 layout 
 
 | ID | Requirement | Rationale | Target | Measurement | Status |
 |----|------------|-----------|--------|-------------|--------|
-| NFR-TE-01 | Unit test count SHALL exceed 280 across all packages | Regression safety net for rapid development | > 280 tests | `go test ./internal/... ./cmd/... -count=1` | Met (539+ across 14 packages, 65% overall coverage). **Known gap**: `internal/watcher/` at 16.6% statement coverage (15 of 20 functions at 0%) — refactor for testability (X-04 in `docs/iso-compliance.md`) deferred to v1.0.1 (ETA 2026-05-06). |
+| NFR-TE-01 | Unit test count SHALL exceed 280 across all packages | Regression safety net for rapid development | > 280 tests | `go test ./internal/... ./cmd/... -count=1` | Met (608 tests across 15 packages; total internal/ statement coverage **66.6%** — measured 2026-04-27, above v1.0 60% target). Watcher at 59.3% (was reported as 16.6% in `VV-Plan.md` §5.2 — that baseline was 9 days stale; see SM-155). Full watcher refactor for testability (X-04 in `docs/iso-compliance.md`) deferred to v1.0.1; v1.0 ships at current 59.3% with no further blockers. |
 | NFR-TE-02 | All tests SHALL pass with `-race` detection | Concurrency bugs are the hardest class to reproduce | Zero data races | `go test -race` on concurrent packages | Met |
 | NFR-TE-03 | Critical subsystems SHALL have injectable dependencies for test isolation | Tests must not require rclone or network | ListRemoteFunc, syncer interface | Met |
 | NFR-TE-04 | Bug hunt markers (SM-xxx) SHALL link each regression test to the bug it covers | Traceability from test to requirement to fix | Every SM-xxx test documents the scenario | Met |

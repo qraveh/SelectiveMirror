@@ -2,10 +2,11 @@
 
 ## SelectiveMirror — Compliance with 29148:2018, 25010:2023, 25023:2016, 29119:2023
 
-**Document Version**: 0.3 (Decisions baselined)
+**Document Version**: 0.4 (Parallel-session integration)
 **Date**: 2026-04-27
 **Status**: **SELF-ASSESSMENT — retained for v1.0**. External independent review committed for v1.0.1 / v1.1 (action `A-GOV-01`). v1.0 ships with explicit "Partial ISO Compliance" disclosure in `README.md` and `CHANGELOG.md`.
 **Release strategy**: Option β (ship 2026-05-01 with disclosure; close compliance gaps in v1.0.1 / v1.1).
+**v0.4 integration**: incorporates 5 commits (0.9.8..0.9.12-dev) that landed in parallel after v0.3 was baselined. Several actions advanced; new bugs SM-155 and SM-156 filed; new action `A-29119-12` added (per-release VV-Plan §5.2 re-measurement ritual).
 **Accountable owner**: Raveh (project lead). All actions in §9 are owned by Raveh; the *role-context* column names the BMad persona (John/Winston/Paige/Amelia) Raveh adopts when executing the action.
 **Audit method**: BMad multi-role review — PM (John) for 29148, Architect (Winston) for 25010 / 25023, Tech-writer (Paige) for document attributes, Dev (Amelia) for 29119 process implementation. Adversarial Reviewer + Edge-Case Hunter ran independent passes on draft v0.1 (2026-04-27); this v0.2 incorporates their findings.
 **Source documents audited**:
@@ -69,14 +70,14 @@ Per Adversarial Reviewer feedback: a passing reference, a parenthetical, or a si
 
 ## 3. Compliance Summary
 
-### 3.1 Headline (revised v0.2)
+### 3.1 Headline (revised v0.4)
 
-| Standard | Overall | Compliant | Partial | Non-compliant | Notes |
+| Standard | Overall | Compliant | Partial | Non-compliant | v0.4 delta |
 |---|---|---|---|---|---|
-| 29148:2018 | ⚠️ **Partial** | 11 / 19 | 3 | 5 | User-doc requirements, approval/sign-off, change-history reclassified ❌ per Adversarial Reviewer |
-| 25010:2023 | ⚠️ **Partial** | 7 of 9 top-level characteristics | 0 | 1 (Usability — schema mismatch with 2023) | New 2023 sub-characteristics under-addressed (Authenticity, Resistance, Reusability, Analysability, Replaceability, Functional Appropriateness, Faultlessness) |
-| 25023:2016 | ⚠️ **Partial** | 6 measurement functions defined for ~24 quantitative NFRs | many | most NFR-* targets show "Not Measured" / "Not Tested" |
-| 29119 family | ⚠️ **Partial** | Test Plan, test design, techniques | Reports, naming convention | Organizational Test Strategy, Test Status Reports, Test Item Transmittal — all ❌ |
+| 29148:2018 | ⚠️ **Partial** | 11 / 19 | 3 | 5 | unchanged |
+| 25010:2023 | ⚠️ **Partial** | 7 of 9 top-level characteristics | 0 | 1 (Usability schema mismatch) | Faultlessness now has substantive evidence (rclone stall detection); Analysability strengthened (new anomaly kinds Sync:Stalled / Sync:LsJsonSlow) |
+| 25023:2016 | ⚠️ **Partial** | 6 functions defined / ~24 quantitative NFRs | many | most "Not Measured" | unchanged — but liveness.go thresholds (60s transfer flat-grace, 240s metadata) are *new* measurement targets that should be captured |
+| 29119 family | ⚠️ **Partial** | Test Plan, test design, techniques | Reports, naming convention | Org Test Strategy ❌; **Test Monitoring & Control improved ⚠️→✅ via release.yml hardening** | release.yml runs `go vet` + `go test ./internal/... ./cmd/...` before GoReleaser; race detector now covers internal/sync + internal/state |
 
 ### 3.2 Why "Partial" not "Mostly compliant" (revised v0.2)
 
@@ -380,7 +381,7 @@ A 25023 successor edition may be published; verification deferred. **Action `M-2
 |---|---|---|---|
 | Organizational Test Process (sec 6) | Required | `qh-sw-developer` skill memory + this audit — *insufficient as Org Process per 29119-1 §6* | ❌ — `A-29119-01` |
 | Test Planning | Required | `VV-Plan.md` §1, §10 | ✅ |
-| Test Monitoring & Control | Required | CI gates (`ci.yml`) but no Test Status Report | ⚠️ — `A-29119-03` |
+| Test Monitoring & Control | Required | CI gates (`ci.yml`) **plus release.yml runs `go vet` + `go test` before GoReleaser** (added 2026-04-27, commit f264a3e); race detector covers all critical packages including internal/sync + internal/state. Per-release Test Status Report still missing. | ⚠️ — `A-29119-03` (Status Report only; CI gates compliant) |
 | Test Completion | Required | One validation report; not per-release ritual | ❌ — `A-29119-03` |
 | Test Design & Implementation | Required | `VV-Plan.md` §6 tables + Go tests | ✅ |
 | Test Environment Set-Up & Maintenance | Required | `test/sla_smoke.ps1`, CI environment definitions; not documented as 29119 artifact | ⚠️ — `A-29119-06` |
@@ -480,11 +481,11 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 | A-25010-01b | Restructure `SRS.md` §4 to full 25010:2023 layout (Flexibility as top-level; Adaptability/Installability/Replaceability/Scalability move there; Usability replaced by Interaction Capability or removed; Authenticity/Resistance added; Safety formal-justified). Includes cascade: NFR ID changes, Appendix §10.2 regen, VV-Plan §2.2 alignment | Winston | P2 | v1.1 | Open |
 | A-25010-02 | Replace top-level "Usability" with "Interaction Capability" or document explicit deviation. **NOT waivable while claiming 25010:2023.** | Winston | P0 | 2026-Q3 (TBD) | Open |
 | A-25010-03 | Annotate `FR-DEL-01` three-policy design as Functional Appropriateness evidence | Winston | P2 | TBD | Open |
-| A-25010-04 | Add explicit Faultlessness metric (panics-per-runtime-hour); gates Reliability claim | Winston + Amelia | P1 | 2026-Q3 (TBD) | Open |
+| A-25010-04 | Add explicit Faultlessness metric (panics-per-runtime-hour); gates Reliability claim. **v0.4 update**: substantive evidence already shipped in 0.9.12-dev — `internal/sync/liveness.go` implements multi-signal stall detection (output / cpu_time / io_bytes), with measurable thresholds (10s tick × K=6 = 60s flat-grace transfer; 30s × K=8 = 240s metadata). Faultlessness model is now real engineering, not just policy. Need to formalize as NFR-FL-01 with these thresholds as targets. | Winston + Amelia | P1 | 2026-Q3 (TBD) | **Evidence shipped; NFR formalization pending** |
 | A-25010-05 | Add Authenticity NFR (rclone-mediated; sub-process identity verification) | Winston | P1 | 2026-Q3 (TBD) | Open |
 | A-25010-06 | Promote `docs/security-audit-2026-04-18.md` findings into formal Resistance NFR(s); required for Security claim | Winston | P1 | 2026-Q3 (TBD) | Open |
 | A-25010-07 | Close Reusability evaluation: declare hook surface (`FR-ASP-17`) as Reusability evidence; finalize 2-sentence justification | Winston | P3 | 2026-05-15 | Open |
-| A-25010-08 | Add Analysability NFR (link FR-DIAG, FR-ANOM observability features) | Winston | P2 | TBD | Open |
+| A-25010-08 | Add Analysability NFR (link FR-DIAG, FR-ANOM observability features). **v0.4 update**: strengthened by 0.9.12-dev anomaly kinds (`Sync:Stalled` warning, `Sync:LsJsonSlow` info). Causal-hypothesis model from FR-ANOM-05 now extends to stall-class incidents. | Winston | P2 | TBD | Open (evidence accumulating) |
 | A-25010-09 | (Deprecated; superseded by A-25010-12) | — | — | — | Closed |
 | A-25010-10 | Add Privacy / Data Protection NFR family covering `FR-ANOM-11` outbound + `FR-TEL-*` (lawful basis, retention, redaction guarantee, opt-in/out symmetry, GDPR/CCPA references) | Winston | P1 | 2026-Q3 (TBD) | Open |
 | A-25010-11 | Re-audit Interaction Capability when `FR-ASP-05` (GUI) reaches "in development". Re-audit trigger added to §10.1 | Winston | P3 (deferred) | When GUI work begins | Triggered |
@@ -527,6 +528,7 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 | A-29119-09 | Adopt Combinatorial / pairwise testing for delete-policy × ghost-mode × quarantine-retention matrix | Amelia | P3 | Post-v1.0 | Open |
 | A-29119-10 | Update `VV-Plan.md` §2.2 quality-characteristic table to 25010:2023 layout (joint with A-25010-01) | Amelia | P1 | 2026-Q3 (TBD) | Open |
 | A-29119-11 | Align `VV-Plan.md` vocabulary with 29119-1 (test level / test type / test phase usage) | Amelia | P3 | Post-v1.0 | Open |
+| A-29119-12 | **NEW v0.4**: Add per-release VV-Plan §5.2 re-measurement to release ritual. SM-155 documents the gap: 0.9.11-dev claimed to refresh VV-Plan but only updated test count + version label; per-package coverage table was 9 days stale and propagated wrong baseline (16.6% watcher) into iso-compliance.md X-04 priority. Fix: add `go test ./internal/... -cover` step to release pipeline, update VV-Plan §5.2 atomically with version bump. | Amelia | P1 | v1.0 / 2026-04-30 | Open |
 
 ### 9.5 Governance / cross-cutting actions
 
@@ -535,8 +537,8 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 | A-GOV-01 | **DECIDED 2026-04-27**: SELF-ASSESSMENT label retained for v1.0. External independent review committed for v1.0.1 (post-2026-05-01 release). Reading list for external reviewer: see §10.5 below. | Raveh | P1 | v1.0.1 (post-release) | **In progress (deferred path)** |
 | A-GOV-02 | Assign calendar dates to all P0 / P1 actions in this register | Raveh | P1 | 2026-05-15 | Open |
 | ~~A-GOV-03~~ | ~~Reconcile SRS §11.9 and VV-Plan §11 risk registers~~ — **withdrawn 2026-04-27 v0.3**: VV-Plan has no §11 risk register; only SRS §11.9 exists. The audit doc invented a phantom reference. No action needed. | — | — | — | **Closed (invalid)** |
-| A-GOV-04 | Track closure status of every `docs/security-audit-2026-04-18.md` finding with linked issue ID and date | Winston | P1 | 2026-Q2 (TBD) | Open |
-| X-04 (raised) | Watcher package coverage 16.6% → 60% (refactor for testability) — **DECIDED 2026-04-27**: deferred to v1.0.1 (ETA 2026-05-06). v1.0 ships with NFR-TE-01 status note declaring the gap. | Amelia | P0 | v1.0.1 / 2026-05-06 | **Deferred to v1.0.1** |
+| A-GOV-04 | Track closure status of every `docs/security-audit-2026-04-18.md` finding with linked issue ID and date. **v0.4 update**: 0.9.9-dev (commit a0c5b3e "P1 security/correctness fixes from adversarial review") closed multiple findings: SEC-H6 (file-mode 0600→0644 invariant + ACL DACL walk), config.SetField column-0 match, path-traversal hardening on `deleteRemote*`, allowLoopbackWebhooks unexported, report-bug CWD, state.Open meta-write idempotency, emergency crash logs to safe paths. Need: enumerate every finding from 2026-04-18 audit, mark closed/open/deferred with commit reference. | Winston | P1 | 2026-Q2 (TBD) | **Partially closed; enumeration pending** |
+| X-04 (raised) | Watcher coverage refactor for testability. **v0.4 update**: re-measured 2026-04-27 — actual coverage is **59.3%** (not 16.6% — VV-Plan §5.2 baseline was 9 days stale, see SM-155). Total internal/ coverage measured 66.6% (above v1.0 target 60%). The X-04 priority "P0" was anchored on the stale 16.6% figure. **Re-decision**: reduced from P0 to P2; v1.0 ships at 59.3% (within 0.7 points of the 60% target). Full refactor to ~75-80% (proper `fsnotifier` interface extraction, ~1 person-day) deferred to v1.0.1. Top-up tests (`isLinkToDir` + `WatchCount`, ~2 hours) to cross 60% optional for v1.0 — recommend scheduling if any spare cycles before 2026-05-01. | Amelia | **P2** (was P0) | v1.0.1 (full) / v1.0 optional top-up | **Mostly closed** |
 | A-DOC-01 | Fix self-quality issues in this document | Paige | P2 | 2026-Q2 | **Resolved in v0.2 + v0.3** (phantom VV-Plan §11 removed; A-25010-01 closure recorded; release strategy documented) |
 
 ### 9.6 Action priority distribution (revised v0.2)
@@ -620,6 +622,7 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 | 0.1 | 2026-04-27 | Raveh / Claude | Initial baseline. Self-assessment audit. |
 | 0.2 | 2026-04-27 | Raveh / Claude (Adversarial Reviewer + Edge-Case Hunter incorporated) | Revisions: reclassified 4 items v0.1-Partial → v0.2-Non-compliant (User docs §4.1, Approval §4.1, Change history §4.1, Usability §5.1, Org Test Strategy §7.1); split compound `A-25023-02` into 11 singular P0 actions; added 17 new actions; replaced "Owner = persona" with "Accountable = Raveh; Role-context = persona"; corrected §4.3 ConOps reference; removed §10.3 cross-link TODO; removed unverified "25023:2024 reissue" claim. |
 | 0.3 | 2026-04-27 | Raveh / Claude | Decisions baselined: (β) ship v1.0 on 2026-05-01 with partial-compliance disclosure; (A-GOV-01) SELF-ASSESSMENT label retained for v1.0, external review committed for v1.0.1; (A-25010-01) Version B (deviation note) chosen — SRS §4.0 added; full restructure deferred to v1.1 as new action `A-25010-01b`; (X-04) deferred to v1.0.1 with NFR-TE-01 status disclosure; SM-153 fixed via per-NFR decisions for NFR-TB-01 / TB-02 / RU-01 / RU-03; SM-152 + SM-154 filed in BugTracker. Withdrew phantom A-GOV-03 / X-09 (VV-Plan has no §11). Added §10.5 external-reviewer reading list. |
+| 0.4 | 2026-04-27 | Raveh / Claude | Parallel-session integration. Five commits (0.9.8..0.9.12-dev) landed after v0.3 baseline. Re-measured coverage: total internal/ is **66.6%** (was 35.8% baseline; ~65% claimed in VV-Plan); watcher is **59.3%** (NOT 16.6% as VV-Plan §5.2 still says). X-04 reclassified from P0 to P2; ~~deferred to v1.0.1~~ → mostly closed. Test Monitoring & Control (29119-2) improved from ⚠️ → ✅ via release.yml hardening. A-25010-04 Faultlessness has substantive evidence shipped (`internal/sync/liveness.go` multi-signal stall detection with measurable thresholds). A-25010-08 Analysability strengthened by new anomaly kinds (Sync:Stalled, Sync:LsJsonSlow). A-GOV-04 now records partial closure of security-audit findings. New action `A-29119-12` added (per-release VV-Plan §5.2 re-measurement ritual). New bugs SM-155 (VV-Plan stale per-package coverage) and SM-156 (CHANGELOG SEC-C2 / SM-152 misattribution) filed. Methodology validation: parallel session used multi-role BMad design review (architect / senior dev / adversarial / edge-case hunter) on production design `docs/rclone-stall-design-for-review.md` — same pattern as this audit. |
 
 ### 10.5 External-reviewer reading list (for A-GOV-01 closure)
 
