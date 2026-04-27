@@ -48,9 +48,14 @@ npx wrangler deploy
 After deploy, the URL is:
 
 ```
-https://smirror-telemetry.<your-account-subdomain>.workers.dev/v1/bug-reports
-https://smirror-telemetry.<your-account-subdomain>.workers.dev/v1/installations/report
+https://smirror-telemetry.selectivemirror.workers.dev/v1/bug-reports
+https://smirror-telemetry.selectivemirror.workers.dev/v1/installations/report
 ```
+
+(Account subdomain = `selectivemirror`, fixed via Cloudflare API after a
+one-time misconfiguration. Subdomain is changeable: DELETE then PUT on
+`/accounts/{id}/workers/subdomain` with an API token having Workers
+Scripts:Edit permission.)
 
 Update the smirror Go client's endpoint constant to use this URL once
 ready.

@@ -1,22 +1,31 @@
 # SelectiveMirror telemetry edge proxy — Cloudflare Worker config
 #
+# Deployed URL (live as of v0.9.6-dev):
+#   https://smirror-telemetry.selectivemirror.workers.dev/v1/bug-reports
+#   https://smirror-telemetry.selectivemirror.workers.dev/v1/installations/report
+#
 # Deploy:
 #   cd worker
-#   wrangler deploy
+#   npm install                  # one-time, installs wrangler
+#   npx wrangler deploy
 #
 # Setup before first deploy:
-#   wrangler secret put SUPABASE_ANON_KEY
+#   npx wrangler secret put SUPABASE_ANON_KEY
 #     (paste the anon public key when prompted)
-#   wrangler kv:namespace create RATE_LIMIT_KV
+#   npx wrangler kv namespace create RATE_LIMIT_KV
 #     (copy the returned id into the [[kv_namespaces]] block below)
+#
+# Note: deleting and redeploying the Worker (e.g., `wrangler delete`) wipes
+# its secrets. Re-set SUPABASE_ANON_KEY after any redeploy that lost state.
 
 name = "smirror-telemetry"
 main = "src/index.ts"
 compatibility_date = "2026-04-01"
 
-# Account subdomain on workers.dev — set this once at first deploy.
-# After deploy: <name>.<account-subdomain>.workers.dev becomes your URL.
-# (account-subdomain is configured in the Cloudflare dashboard.)
+# Workers subdomain (account-level) is "selectivemirror". This was set
+# via the Cloudflare API after an initial misconfiguration; the dashboard
+# pencil-icon edit is gated to "DELETE then PUT" via the Workers Scripts
+# API endpoint. See worker/README.md for the recovery procedure.
 workers_dev = true
 
 # Non-secret config exposed to Worker

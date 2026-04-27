@@ -549,11 +549,12 @@ The repository contains earlier telemetry scaffolding (`internal/telemetry/`) th
 ### Ingest service
 
 - HTTP handlers for `POST /v1/bug-reports` and `POST /v1/installations/report` (Cloudflare Worker forwarding to Supabase, or PostgREST direct)
-- HMAC verification using master key + version derivation (shared between both endpoints)
+- **Live deployed URL** (as of 0.9.6-dev): `https://smirror-telemetry.selectivemirror.workers.dev/`
+- HMAC verification using master key + version derivation (shared between both endpoints) — delegated to Postgres `telemetry.verify_versioned_hmac`
 - schema validation
 - payload-size limits (RLS WITH CHECK plus CHECK constraints)
 - idempotent insert logic
-- rate limiting at the Cloudflare Workers layer when added
+- rate limiting at the Cloudflare Workers layer (per-IP via KV; 30 req/min/edge-PoP)
 
 ### Classification worker
 
