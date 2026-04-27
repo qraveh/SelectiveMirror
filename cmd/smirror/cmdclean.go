@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/qraveh/SelectiveMirror/internal/config"
+	"github.com/qraveh/SelectiveMirror/internal/lock"
 	"github.com/qraveh/SelectiveMirror/internal/service"
 	"github.com/qraveh/SelectiveMirror/internal/task"
 )
@@ -176,22 +177,36 @@ func buildCleanPlan(configPath string, mode cleanMode) (*cleanPlan, error) {
 		p.warnings = append(p.warnings, fmt.Sprintf("could not query scheduled task: %v", err))
 	}
 
-	// Per-user data dir — try to derive from config. If config can't be
-	// loaded (e.g. already deleted), fall back to ~/.selectivemirror/.
-	if cfg, err := config.Load(configPath); err == nil {
-		if dir := filepath.Dir(configPath); dir != "" && dir != "." {
-			if st, err := os.Stat(dir); err == nil && st.IsDir() {
-				p.userDataDir = dir
-			}
+	// Per-user data dir — derived from configPath. The user data dir is the
+	// directory containing the config file (project convention).
+	//
+	// We do NOT load+parse the config here: a malformed config must not cause
+	// us to silently fall back to ~/.selectivemirror/ and wipe it (the user
+	// would then have lost data unrelated to the path they specified).
+	//
+	// Home-dir fallback only applies when the user did not pass --config:
+	// if they accepted the default and that dir is gone, falling back to the
+	// canonical home location is safe.
+	if dir := filepath.Dir(configPath); dir != "" && dir != "." {
+		if st, err := os.Stat(dir); err == nil && st.IsDir() {
+			p.userDataDir = dir
 		}
-		_ = cfg
 	}
-	if p.userDataDir == "" {
+	if p.userDataDir == "" && configPath == config.DefaultConfigPath() {
 		if home, err := os.UserHomeDir(); err == nil {
 			candidate := filepath.Join(home, ".selectivemirror")
 			if st, err := os.Stat(candidate); err == nil && st.IsDir() {
 				p.userDataDir = candidate
 			}
+		}
+	}
+
+	// SM-: Refuse if a daemon (foreground / task / service) holds the
+	// single-instance lock — racing os.RemoveAll against an active daemon
+	// produces partial deletions and silent state corruption.
+	if p.userDataDir != "" {
+		if locked, _ := lock.IsLocked(p.userDataDir); locked {
+			return nil, fmt.Errorf("smirror appears to be running (lock held in %s); stop it first via `smirror task stop` or `smirror service stop`", p.userDataDir)
 		}
 	}
 
@@ -207,6 +222,11 @@ func buildCleanPlan(configPath string, mode cleanMode) (*cleanPlan, error) {
 			candidate := filepath.Join(pd, "SelectiveMirror")
 			if st, err := os.Stat(candidate); err == nil && st.IsDir() {
 				p.serviceDataDir = candidate
+			}
+		}
+		if p.serviceDataDir != "" {
+			if locked, _ := lock.IsLocked(p.serviceDataDir); locked {
+				return nil, fmt.Errorf("smirror service appears to be running (lock held in %s); stop it first via `smirror service stop`", p.serviceDataDir)
 			}
 		}
 	}

@@ -194,3 +194,26 @@ func TestOnRecord_NilCallbackSafe(t *testing.T) {
 		t.Error("expected 1 anomaly written even without OnRecord callback")
 	}
 }
+
+// SetOnRecord must be safe to call on a nil *Recorder. Regression for the
+// startup-panic bug where main.go assigned anomalyRecorder.OnRecord = ...
+// without checking that the recorder was non-nil first (the
+// anomaly_detection: false + alert_webhook_url: ... combo).
+func TestSetOnRecord_NilReceiverDoesNotPanic(t *testing.T) {
+	var r *Recorder // nil
+	r.SetOnRecord(func(*Anomaly) { t.Fatal("callback unexpectedly fired") })
+	if got := r.Record(KindPanic, "", "", "", ""); got != nil {
+		t.Errorf("nil receiver Record returned %v, want nil", got)
+	}
+}
+
+func TestSetOnRecord_InstallsCallback(t *testing.T) {
+	w := &memWriter{}
+	r := NewRecorder(w)
+	var fired int
+	r.SetOnRecord(func(*Anomaly) { fired++ })
+	r.Record(KindPanic, "", "", "msg", "")
+	if fired != 1 {
+		t.Errorf("callback fired %d times, want 1", fired)
+	}
+}

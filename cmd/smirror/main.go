@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.7-dev"
+var version = "0.9.8-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -539,16 +539,20 @@ Press Ctrl+C to stop.`) {
 	// Wire webhook alerting (incident-based)
 	var webhookSender *notify.WebhookSender
 	if cfg.AlertWebhookURL != "" {
-		webhookSender = notify.NewWebhookSender(cfg.AlertWebhookURL)
-		webhookSender.SanitizePath = anomaly.SanitizePath
-		minSev := cfg.AlertMinSeverity
-		if minSev == "" {
-			minSev = "error"
-		}
-		anomalyRecorder.OnRecord = func(a *anomaly.Anomaly) {
-			if severityAtLeast(string(a.Severity), minSev) {
-				webhookSender.Record(string(a.Kind), string(a.Severity), a.Project, a.Path, a.Message, a.Detail)
+		if anomalyRecorder == nil {
+			slog.Warn("alert_webhook_url is set but anomaly_detection is disabled; webhook will receive no events")
+		} else {
+			webhookSender = notify.NewWebhookSender(cfg.AlertWebhookURL)
+			webhookSender.SanitizePath = anomaly.SanitizePath
+			minSev := cfg.AlertMinSeverity
+			if minSev == "" {
+				minSev = "error"
 			}
+			anomalyRecorder.SetOnRecord(func(a *anomaly.Anomaly) {
+				if severityAtLeast(string(a.Severity), minSev) {
+					webhookSender.Record(string(a.Kind), string(a.Severity), a.Project, a.Path, a.Message, a.Detail)
+				}
+			})
 		}
 	}
 
@@ -2938,16 +2942,20 @@ func serviceMain() {
 		// Wire webhook alerting (service mode)
 		var webhookSender *notify.WebhookSender
 		if cfg.AlertWebhookURL != "" {
-			webhookSender = notify.NewWebhookSender(cfg.AlertWebhookURL)
-			webhookSender.SanitizePath = anomaly.SanitizePath // SEC-C3
-			minSev := cfg.AlertMinSeverity
-			if minSev == "" {
-				minSev = "error"
-			}
-			anomalyRecorder.OnRecord = func(a *anomaly.Anomaly) {
-				if severityAtLeast(string(a.Severity), minSev) {
-					webhookSender.Record(string(a.Kind), string(a.Severity), a.Project, a.Path, a.Message, a.Detail)
+			if anomalyRecorder == nil {
+				slog.Warn("alert_webhook_url is set but anomaly_detection is disabled; webhook will receive no events")
+			} else {
+				webhookSender = notify.NewWebhookSender(cfg.AlertWebhookURL)
+				webhookSender.SanitizePath = anomaly.SanitizePath // SEC-C3
+				minSev := cfg.AlertMinSeverity
+				if minSev == "" {
+					minSev = "error"
 				}
+				anomalyRecorder.SetOnRecord(func(a *anomaly.Anomaly) {
+					if severityAtLeast(string(a.Severity), minSev) {
+						webhookSender.Record(string(a.Kind), string(a.Severity), a.Project, a.Path, a.Message, a.Detail)
+					}
+				})
 			}
 		}
 
@@ -3003,7 +3011,9 @@ func serviceMain() {
 					// Wait 1 second at a time, check context between waits
 					if service.WaitForSyncNowSignal(syncEvent, 1000) {
 						slog.Info("sync-now signal received via named event")
-						elog.Info(service.EventID, "Immediate sync requested via sync-now signal")
+						if elog != nil {
+							elog.Info(service.EventID, "Immediate sync requested via sync-now signal")
+						}
 						for _, proj := range cfg.Projects {
 							syncEngine.Queue.Enqueue(msync.Task{Project: proj, RelPath: ""})
 						}

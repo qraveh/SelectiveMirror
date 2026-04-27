@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed (P0 — latent crashes & data-loss bugs)
+
+- **`alert_webhook_url` + `anomaly_detection: false` no longer panics at startup.** Both foreground and service-mode wired the webhook by assigning `anomalyRecorder.OnRecord = ...`, but `anomalyRecorder` is nil whenever anomaly detection is disabled — so this combo crashed the daemon on boot. Replaced with a new nil-safe `Recorder.SetOnRecord` method, and emit a `slog.Warn` instead of silently no-opping so the user sees that their webhook will receive nothing.
+- **Service mode no longer panics on the first `sync-now` signal when the Windows Event Log is unavailable.** The deferred close of `elog` was guarded with `if elog != nil`; the goroutine handler that emits "Immediate sync requested" was not. Added the same nil guard there.
+- **`smirror clean --self` now refuses to run while a daemon holds the single-instance lock.** The doc comment promised this check; the code did not implement it. `os.RemoveAll(userDataDir)` racing the live daemon's open `state.db`, `smirror.lock`, and `anomalies/` could produce partial deletions and silent state corruption.
+- **`smirror clean --self` no longer falls back to wiping `~/.selectivemirror/` when a custom `--config` path fails to load or its directory does not exist.** Previously the load was a side-effecting probe whose failure handed the deletion target back to the home-dir default — running `smirror --config /custom/path/config.yaml clean --self --yes` against a typo'd custom config would wipe the user's actual home data dir. The home fallback now applies only when `--config` was not explicitly passed.
+
 ### Documentation / ISO compliance
 
 - **`docs/iso-compliance.md` baseline added** (v0.3). Single source of truth for compliance status against ISO/IEC/IEEE 29148:2018, ISO/IEC 25010:2023, ISO/IEC 25023:2016, and ISO/IEC/IEEE 29119 family (Parts 1-4). 63 action items registered with priority and owner. v1.0 ships with **Partial ISO compliance** disclosed; SELF-ASSESSMENT label retained. External independent review committed for v1.0.1.

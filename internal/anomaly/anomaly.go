@@ -90,6 +90,17 @@ func NewRecorder(w Writer) *Recorder {
 	}
 }
 
+// SetOnRecord installs a callback fired after each Record. No-op on nil receiver.
+// Use this instead of writing to the OnRecord field directly: when anomaly
+// detection is disabled, the recorder is nil and a direct field assignment
+// would panic at startup.
+func (r *Recorder) SetOnRecord(fn func(a *Anomaly)) {
+	if r == nil {
+		return
+	}
+	r.OnRecord = fn
+}
+
 // Record creates and persists an anomaly. Thread-safe. No-op if receiver is nil.
 func (r *Recorder) Record(kind Kind, project, path, message, detail string) *Anomaly {
 	if r == nil {
