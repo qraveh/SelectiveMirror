@@ -5,6 +5,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed (P2 — rclone stall detection: replaces 5-minute wall-clock timeout)
+
+The single hard `context.WithTimeout(ctx, 5*time.Minute)` wrapping every rclone subprocess is gone. It was wrong in both directions: too short for legitimate large-file transfers (a 4 GB file at 5 MB/s = 13 min, killed at 5 min) and too long for hung metadata operations. Replaced with a layered defense:
+
+**Layer 1 — let rclone fail itself (primary).** `commonFlags` and `deleteFlags` now inject `--contimeout 30s --timeout 60s --low-level-retries 3` (and tighten existing `--retries 3 --retries-sleep 10s` semantics). rclone exits non-zero on persistent failure inside its own retry layer. New `injectFlagsAvoidingCollision` helper detects user-supplied overrides in `RcloneExtraFlags` (separate-form `--flag value` and `=`-form `--flag=value`) and skips injection for any name already present, with a debug log. `--low-level-retries` was dialed down from rclone's default 10 to 3 so worst-case in-rclone time stays bounded (~12 min) and doesn't compete with Layer 2's grace.
+
+**Layer 2 — multi-signal stall backstop (rare cases).** `internal/sync/liveness.go` runs every rclone subprocess under a supervisor that observes three signals at each tick: `output` (timestamp on every byte from stdout/stderr via `io.MultiWriter` + atomic.Int64), `cpu_time` (Windows `GetProcessTimes(handle)`, kernel + user combined), and `io_bytes` (Windows `GetProcessIoCounters` via `kernel32.dll.NewProc` — not exposed in `golang.org/x/sys/windows@v0.42`, loaded via LazyDLL). Decision rule: ANY one signal moving since last tick resets the stall counter; ALL three flat for K consecutive ticks triggers a kill (`Sync:Stalled` anomaly).
+
+**Two buckets, derived from rclone verb:**
+- Transfer ops (`copyto`, `copy`, `sync`, `moveto`, `touch`): interval 10s, K=6, ~60s flat-grace.
+- Metadata ops (`lsjson`, `deletefile`, `purge`, default for unknown verbs): interval 30s, K=8, ~240s flat-grace.
+
+For transfer verbs, `--stats=15s --stats-one-line` is auto-injected so rclone produces a regular heartbeat — keeping Layer 2 calm during legitimate Layer 1 retry-sleep windows.
+
+**lsjson on huge trees.** Past ~60s with signals still moving, the supervisor records a `Sync:LsJsonSlow` (info severity) anomaly for operator awareness. It does NOT kill; it lets the operation run as long as it's making progress. Honors the project's "no use a different strategy" constraint — the system either succeeds or fails-gracefully on its own.
+
+**Process lifecycle.** `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` after `cmd.Start()`; handle held for sampling lifetime; `defer windows.CloseHandle`. `sync.Once` guards `cmd.Process.Kill()`. Wait goroutine + `done` channel ensure pipe-reader goroutines drain before return; no fd leaks. PID-reuse race avoided by holding the OS handle, not re-OpenProcess'ing each tick.
+
+**Anomaly kinds.** `Sync:Stalled` (warning) and `Sync:LsJsonSlow` (info) added to `internal/anomaly/anomaly.go`. `Sync:Timeout` retained for the legacy escape-hatch path; no new emissions in the supervised path.
+
+**Escape hatch.** `SMIRROR_DISABLE_LIVENESS=1` env var reverts to the legacy 5-minute `context.WithTimeout` path for one release. After that, the legacy path is deleted.
+
+**Test design.** `internal/sync/liveness_test.go` drives the supervisor against real short / long subprocesses with an injected tick channel + scripted probe — no `time.Sleep`, no wall-clock asserts. 13 new tests (bucket selector × 10 verbs, OR-combinator, kill-on-flat, ctx-cancel, natural-exit, lsjson-with-movement, activity writer, flag-injection collision detection in three forms).
+
+**Design rigor.** Design v2 (`docs/rclone-stall-design-for-review.md`) was revised from v1 after a multirole BMad review (architect, senior dev, adversarial, edge-case hunter). Key revisions: collapsed five buckets to two (Winston: "no principled stopping rule" for the larger table), dropped `dst_size` signal (Winston / Adversarial / Edge-case all flagged it), switched the four-signal AND combinator to a three-signal OR (panel cross-agreement), `--low-level-retries 10 → 3` to prevent Layer 1 / Layer 2 collision (Adversarial's killer finding), introduced `Sync:Stalled` instead of silently shifting `Sync:Timeout`'s meaning, threaded `RcloneInvocation` struct from callers, used `kernel32.dll.NewProc` for `GetProcessIoCounters` (Amelia's verified x/sys/windows gap), confirmed `unsafe` scope is needed for the IO_COUNTERS struct cast.
+
 ### Documentation (P4 — from adversarial review)
 
 - **`CLAUDE.md` status line updated.** Reflects v0.9.x-dev, Phase 5 (telemetry) live, Phase 6/7 complete. Phases section ticked Phase 5 with deployment notes (Supabase, Cloudflare Worker proxy, MSI consent UI). The 530+ test count was updated to 600+ (608 actual today).

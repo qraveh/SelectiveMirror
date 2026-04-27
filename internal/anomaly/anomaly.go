@@ -23,7 +23,9 @@ const (
 	KindGhostStale        Kind = "Ghost:Stale"
 	KindReconcileStale    Kind = "Reconciliation:Stale"
 	KindPathGone          Kind = "Path:Gone"
-	KindSyncTimeout       Kind = "Sync:Timeout"
+	KindSyncTimeout       Kind = "Sync:Timeout"  // legacy: 5-min wall-clock; emitted only via SMIRROR_DISABLE_LIVENESS=1
+	KindSyncStalled       Kind = "Sync:Stalled"  // multi-signal flatline: rclone wedged below its own retry layer
+	KindSyncLsJsonSlow    Kind = "Sync:LsJsonSlow" // info: lsjson elapsed past warn threshold, but still alive
 	KindSyncFailure       Kind = "Sync:Failure"
 )
 
@@ -57,8 +59,10 @@ func SeverityFor(k Kind) Severity {
 		return SeverityCritical
 	case KindCircuitBreaker, KindReconcileStale, KindSyncFailure:
 		return SeverityError
-	case KindWatcherError, KindQueueDepthWarning, KindGhostLeak, KindGhostOrphan, KindGhostStale, KindPathGone, KindSyncTimeout:
+	case KindWatcherError, KindQueueDepthWarning, KindGhostLeak, KindGhostOrphan, KindGhostStale, KindPathGone, KindSyncTimeout, KindSyncStalled:
 		return SeverityWarning
+	case KindSyncLsJsonSlow:
+		return SeverityInfo
 	default:
 		return SeverityInfo
 	}

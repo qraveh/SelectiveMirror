@@ -125,7 +125,9 @@ func NewEngine(cfg *config.Global, st *state.Store, filters map[string]*filter.E
 		Queue:   NewFairQueue(0, 30*time.Second),
 		log:     slog.Default().With("component", "sync"),
 	}
-	e.RunRcloneFunc = e.defaultRunRclone
+	// RunRcloneFunc deliberately left nil. runRcloneInv uses it for test
+	// fakes only; production goes directly to defaultRunRclone (which has
+	// the inv-aware signature the supervisor needs).
 	return e
 }
 
@@ -725,12 +727,20 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 // engine for 30+ seconds on transient failures. Deletes are best-effort;
 // orphaned files will be caught by the next 'verify' or reconciliation.
 func (e *Engine) deleteFlags(proj config.Project) []string {
-	flags := []string{
-		"--retries", "1",
-		"--stats", "0",
-		"--log-level", "NOTICE",
-		"--skip-links",
+	// Deletes are best-effort; orphaned files are caught by the next
+	// reconciliation. Tighten retries to 1 (existing behavior) but apply
+	// the same Layer-1 idle/connect timeouts as commonFlags so a stuck
+	// delete still self-exits cleanly. --low-level-retries is omitted
+	// here — at retries=1 there's nothing to amplify.
+	candidates := []flagInjection{
+		{"--retries", "1"},
+		{"--timeout", "60s"},
+		{"--contimeout", "30s"},
+		{"--stats", "0"},
+		{"--log-level", "NOTICE"},
+		{"--skip-links", ""},
 	}
+	flags := injectFlagsAvoidingCollision(nil, candidates, e.log, e.cfg.RcloneExtraFlags, proj.RcloneExtraFlags)
 	if e.cfg.BandwidthLimit != "" {
 		flags = append(flags, "--bwlimit", e.cfg.BandwidthLimit)
 	}
@@ -811,13 +821,23 @@ func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPa
 }
 
 func (e *Engine) commonFlags(proj config.Project) []string {
-	flags := []string{
-		"--retries", "3",
-		"--retries-sleep", "10s",
-		"--stats", "0",
-		"--log-level", "NOTICE",
-		"--skip-links", // Never follow symlinks — they could point outside the project
+	// Layer 1 (rclone-self-fail): aggressive retry / timeout flags so rclone
+	// exits non-zero on persistent failures inside its own retry layer.
+	// Combined worst-case in-rclone time: ~12 minutes (3 op retries × (3
+	// low-level × 60s read + 30s connect + 10s sleep)). The supervisor
+	// (Layer 2) tolerates this because --stats=15s is also injected for
+	// transfer verbs, keeping the output signal active during retries.
+	candidates := []flagInjection{
+		{"--retries", "3"},
+		{"--retries-sleep", "10s"},
+		{"--low-level-retries", "3"}, // dialed down from rclone default 10
+		{"--timeout", "60s"},
+		{"--contimeout", "30s"},
+		{"--stats", "0"},
+		{"--log-level", "NOTICE"},
+		{"--skip-links", ""}, // boolean flag — never follow symlinks
 	}
+	flags := injectFlagsAvoidingCollision(nil, candidates, e.log, e.cfg.RcloneExtraFlags, proj.RcloneExtraFlags)
 	if e.cfg.BandwidthLimit != "" {
 		flags = append(flags, "--bwlimit", e.cfg.BandwidthLimit)
 	}
@@ -826,13 +846,76 @@ func (e *Engine) commonFlags(proj config.Project) []string {
 	return flags
 }
 
-// runRclone delegates to RunRcloneFunc (injectable for testing).
-func (e *Engine) runRclone(ctx context.Context, args []string) int {
-	return e.RunRcloneFunc(ctx, args)
+// flagInjection is a (flag, value) pair for the collision-avoiding injector.
+// An empty value means a boolean flag (no value follows).
+type flagInjection struct {
+	flag  string
+	value string
 }
 
-// defaultRunRclone is the production rclone runner that spawns a subprocess.
-func (e *Engine) defaultRunRclone(ctx context.Context, args []string) int {
+// injectFlagsAvoidingCollision returns base + each candidate flag whose name
+// does NOT already appear in any of the userExtra lists. Skipping prevents
+// duplicate-flag errors and respects user overrides without depending on
+// rclone's last-wins parsing (unreliable across versions for some flags).
+// Skipped flags are warn-logged for operator awareness.
+func injectFlagsAvoidingCollision(base []string, candidates []flagInjection, log *slog.Logger, userExtras ...[]string) []string {
+	present := make(map[string]bool)
+	for _, extras := range userExtras {
+		for i := 0; i < len(extras); i++ {
+			arg := extras[i]
+			if strings.HasPrefix(arg, "--") {
+				name := arg
+				if eq := strings.Index(arg, "="); eq > 0 {
+					name = arg[:eq]
+				}
+				present[name] = true
+			}
+		}
+	}
+	result := append([]string{}, base...)
+	for _, c := range candidates {
+		if present[c.flag] {
+			if log != nil {
+				log.Debug("rclone flag injection skipped (user override present)", "flag", c.flag)
+			}
+			continue
+		}
+		if c.value == "" {
+			result = append(result, c.flag)
+		} else {
+			result = append(result, c.flag, c.value)
+		}
+	}
+	return result
+}
+
+// runRclone is the entrypoint for production code; tests override
+// RunRcloneFunc to bypass the subprocess + supervisor entirely. Production
+// callers can pass richer context via runRcloneInv.
+func (e *Engine) runRclone(ctx context.Context, args []string) int {
+	inv := RcloneInvocation{}
+	if len(args) > 0 {
+		inv.Verb = args[0]
+	}
+	return e.runRcloneInv(ctx, args, inv)
+}
+
+// runRcloneInv is the inv-aware entry point. Test injection (RunRcloneFunc)
+// bypasses the supervisor entirely (fakes don't model OS-level signals).
+// Production goes through the supervised path unless SMIRROR_DISABLE_LIVENESS
+// is set.
+func (e *Engine) runRcloneInv(ctx context.Context, args []string, inv RcloneInvocation) int {
+	if e.RunRcloneFunc != nil {
+		return e.RunRcloneFunc(ctx, args)
+	}
+	return e.defaultRunRclone(ctx, args, inv)
+}
+
+// defaultRunRclone is the production rclone runner. Routes to either the
+// supervised path (Layer 2 multi-signal stall detection) or the legacy
+// 5-minute wall-clock path if SMIRROR_DISABLE_LIVENESS=1 is set as an
+// escape hatch for one release.
+func (e *Engine) defaultRunRclone(ctx context.Context, args []string, inv RcloneInvocation) int {
 	rclonePath := e.cfg.RclonePath
 	if rclonePath == "" {
 		rclonePath = "rclone"
@@ -843,17 +926,53 @@ func (e *Engine) defaultRunRclone(ctx context.Context, args []string) int {
 
 	e.log.Debug("rclone", "cmd", rclonePath, "args", strings.Join(args, " "))
 
-	// Apply a 5-minute timeout to prevent a single rclone operation from
-	// blocking a worker indefinitely. Full-project syncs with --checksum
-	// on large directories can be slow; 5 minutes is generous.
+	if os.Getenv("SMIRROR_DISABLE_LIVENESS") == "1" {
+		return e.runWithLegacyTimeout(ctx, rclonePath, args)
+	}
+
+	// Auto-inject --stats=15s for transfer verbs so the supervisor's output
+	// signal stays active during legitimate rclone retries (Layer 1's
+	// --retries-sleep windows would otherwise look like dead silence).
+	if isTransferVerb(inv.Verb) && !flagPresent(args, "--stats") {
+		args = append(args, "--stats", "15s", "--stats-one-line")
+	}
+
+	cmd := exec.Command(rclonePath, args...)
+	exitCode, stderr := runWithSupervisor(ctx, cmd, inv, realLivenessProbe, nil, e.Anomaly, e.supervisorLogFn(args))
+	if exitCode != 0 && stderr != "" {
+		e.log.Warn("rclone failed", "exit", exitCode, "stderr", strings.TrimSpace(stderr), "verb", inv.Verb)
+	}
+	return exitCode
+}
+
+// supervisorLogFn adapts the engine's slog logger to the runWithSupervisor
+// signature. Captured in a closure so the supervisor stays slog-agnostic.
+func (e *Engine) supervisorLogFn(args []string) func(level, msg string, fields ...any) {
+	return func(level, msg string, fields ...any) {
+		// Augment with the rclone verb for cross-correlation.
+		if len(args) > 0 {
+			fields = append(fields, "verb", args[0])
+		}
+		switch level {
+		case "warn":
+			e.log.Warn(msg, fields...)
+		case "debug":
+			e.log.Debug(msg, fields...)
+		default:
+			e.log.Info(msg, fields...)
+		}
+	}
+}
+
+// runWithLegacyTimeout is the pre-supervisor 5-minute-wall-clock path,
+// preserved as a kill-switch for one release. Same semantics as the
+// pre-0.9.12-dev defaultRunRclone.
+func (e *Engine) runWithLegacyTimeout(ctx context.Context, rclonePath string, args []string) int {
 	rcloneCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	cmd := exec.CommandContext(rcloneCtx, rclonePath, args...)
 
-	// Capture stderr for diagnostics. Without this, rclone error messages
-	// are lost when running as a Windows service (SYSTEM has no console).
-	// 311 failures went undiagnosed because stderr went to os.Stderr = nowhere.
 	var stderrBuf strings.Builder
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = &stderrBuf
@@ -862,12 +981,9 @@ func (e *Engine) defaultRunRclone(ctx context.Context, args []string) int {
 	if err != nil {
 		stderrMsg := strings.TrimSpace(stderrBuf.String())
 		if rcloneCtx.Err() == context.DeadlineExceeded {
-			e.log.Error("rclone timed out after 5 minutes", "args", strings.Join(args, " "), "stderr", stderrMsg)
+			e.log.Error("rclone timed out after 5 minutes (legacy path; SMIRROR_DISABLE_LIVENESS=1)", "args", strings.Join(args, " "), "stderr", stderrMsg)
 			return -2
 		}
-		// SM-100: Check context cancellation (graceful shutdown).
-		// rclone exits with 143 (SIGTERM) or similar when the parent is shutting down.
-		// This is not a failure — it's a cancellation.
 		if ctx.Err() == context.Canceled {
 			e.log.Debug("rclone cancelled (shutdown)", "args", strings.Join(args[:min(3, len(args))], " "))
 			return -3
@@ -883,6 +999,26 @@ func (e *Engine) defaultRunRclone(ctx context.Context, args []string) int {
 		return -1
 	}
 	return 0
+}
+
+// isTransferVerb reports whether a verb is one of the data-moving rclone
+// operations that benefit from --stats injection.
+func isTransferVerb(verb string) bool {
+	switch verb {
+	case "copyto", "copy", "sync", "moveto":
+		return true
+	}
+	return false
+}
+
+// flagPresent reports whether name (or name=value form) appears in args.
+func flagPresent(args []string, name string) bool {
+	for _, a := range args {
+		if a == name || strings.HasPrefix(a, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 // DryRun lists what would be synced for a project without actually syncing.
