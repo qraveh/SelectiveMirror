@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [master]
 
+# Node.js 20 is deprecated in GitHub Actions effective 2026-06-02; new
+# default is Node.js 24. Opt in now to silence the deprecation warning
+# and exercise the upcoming default before it lands. Safe — no action
+# we use has a Node-24-specific incompatibility, and we can remove this
+# env once the default flips.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   build-and-test:
     runs-on: windows-latest

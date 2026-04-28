@@ -297,12 +297,20 @@ func Load(path string) (*Global, error) {
 	// SM-081: Use decoder with KnownFields to detect typos in config keys.
 	// Unknown fields (e.g., "delet_policy") cause a warning, not a hard error,
 	// so existing configs with forward-compatible fields still load.
+	//
+	// SEC-L1: route the warning through both slog.Warn and os.Stderr.
+	// Previously it only hit stderr — service-mode invocations have no
+	// stderr the user sees, so a typo'd key was silently ignored. slog
+	// emits to the smirror.log too, where the user finds it via
+	// `smirror status` / report-bug.
 	dec := yaml.NewDecoder(strings.NewReader(string(data)))
 	dec.KnownFields(true)
 	if err := dec.Decode(cfg); err != nil {
 		// Check if it's an unknown field error — warn but don't fail
 		if strings.Contains(err.Error(), "not found") {
 			fmt.Fprintf(os.Stderr, "Warning: config %s: %v (check for typos)\n", path, err)
+			slog.Warn("config has unknown fields (check for typos); strict mode declined, parsing non-strict",
+				"path", path, "yaml_error", err.Error())
 			// Re-parse without strict mode so the config still loads
 			if err2 := yaml.Unmarshal(data, cfg); err2 != nil {
 				return nil, friendlyYAMLError(err2)

@@ -22,6 +22,11 @@ permissions:
   contents: write
   pull-requests: write
 
+# Opt into Node.js 24 default for JavaScript actions (silences the
+# 2026-06-02 deprecation warning).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   digest:
     runs-on: ubuntu-latest

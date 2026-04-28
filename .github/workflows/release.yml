@@ -7,6 +7,13 @@ on:
 permissions:
   contents: write
 
+# Opt into the upcoming Node.js 24 default for JavaScript actions so we
+# exercise the new runtime before GitHub flips the default on
+# 2026-06-02. Silences the deprecation warning. Safe to remove once
+# Node 24 is the default.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   release:
     runs-on: windows-latest
