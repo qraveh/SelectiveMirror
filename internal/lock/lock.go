@@ -51,21 +51,35 @@ type Lock struct {
 	file *os.File
 }
 
-// Acquire creates or opens the lock file with exclusive access.
-// Returns ErrAlreadyRunning if another instance holds the lock.
+// Acquire creates or opens the smirror.lock file under dataDir with
+// exclusive access. Returns ErrAlreadyRunning if another instance holds
+// the lock. Single-instance protection for the daemon.
 //
-// GAP-9: if Acquire fails because another process appears to hold the
-// file lock, the recorded PID is checked against the OS process list.
-// If the PID is no longer alive (the previous instance crashed without
-// cleaning up), we surface ErrStaleLockHeld with the dead PID — the
-// caller can decide whether to force-clean. The most common case
-// (normal another-instance) still returns ErrAlreadyRunning.
+// Equivalent to AcquirePath(filepath.Join(dataDir, "smirror.lock")).
 func Acquire(dataDir string) (*Lock, error) {
-	lockPath := filepath.Join(dataDir, "smirror.lock")
+	return AcquirePath(filepath.Join(dataDir, "smirror.lock"))
+}
 
-	// Ensure directory exists
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return nil, fmt.Errorf("creating lock dir: %w", err)
+// AcquirePath creates or opens the lock file at the given path with
+// exclusive access. Returns ErrAlreadyRunning if another process holds
+// the lock. The parent directory is created if missing.
+//
+// GAP-9: if AcquirePath fails because another process appears to hold
+// the file lock, the recorded PID is checked against the OS process
+// list. If the PID is no longer alive (the previous instance crashed
+// without cleaning up), we surface ErrStaleLockHeld with the dead PID —
+// the caller can decide whether to force-clean. The most common case
+// (normal another-instance) still returns ErrAlreadyRunning.
+//
+// SM-153 / BUG-R4-1: this function is also used to serialize
+// concurrent edits to config.yaml across smirror CLI invocations
+// (`smirror addmirror`, `smirror unmirror`, `smirror remote`). See
+// internal/config/edit.go::withConfigLock.
+func AcquirePath(lockPath string) (*Lock, error) {
+	if dir := filepath.Dir(lockPath); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, fmt.Errorf("creating lock dir: %w", err)
+		}
 	}
 
 	// Try to open the file with exclusive access.

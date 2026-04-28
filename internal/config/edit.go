@@ -1,12 +1,76 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
+
+	"github.com/qraveh/SelectiveMirror/internal/lock"
 )
+
+// configLockTimeout caps how long withConfigLock waits for a contended
+// config lock before failing. CLI mutations (addmirror, unmirror, remote
+// set) are short — read + parse + append + atomic-rename, typically
+// well under 100ms. Five seconds is well above the legitimate ceiling
+// while still bounding pathological waits (e.g., a crashed editor
+// holding the lock would surface as ErrStaleLockHeld instead).
+const configLockTimeout = 5 * time.Second
+
+// configLockPollInterval is the retry cadence while another process
+// holds the config lock.
+const configLockPollInterval = 50 * time.Millisecond
+
+// withConfigLock serializes concurrent edits to configPath across
+// smirror CLI invocations. Takes an exclusive file lock at
+// configPath + ".lock" for the duration of fn.
+//
+// SM-153 / BUG-R4-1: prior to this, two terminals running `smirror
+// addmirror` simultaneously could erase a pre-existing mirror because
+// each invocation read the same config.yaml then appended-and-wrote
+// different versions back, last-writer-wins. SEC-M6 atomic-rename
+// alone was not enough — the read-modify-write window is what races.
+// This lock brackets the entire sequence (read, modify, atomic-rename)
+// so concurrent invocations serialize.
+//
+// On lock contention, retries every configLockPollInterval up to
+// configLockTimeout. Distinguishes stale locks (lock.ErrStaleLockHeld
+// — recorded PID is dead) and surfaces the actionable diagnostic
+// returned by lock.AcquirePath unchanged.
+func withConfigLock(configPath string, fn func() error) (retErr error) {
+	lockPath := configPath + ".lock"
+	deadline := time.Now().Add(configLockTimeout)
+
+	var l *lock.Lock
+	for {
+		var err error
+		l, err = lock.AcquirePath(lockPath)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, lock.ErrStaleLockHeld) {
+			return err
+		}
+		if !errors.Is(err, lock.ErrAlreadyRunning) {
+			return fmt.Errorf("acquiring config lock %s: %w", lockPath, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("acquiring config lock %s: another smirror process is editing config.yaml (timeout %s)", lockPath, configLockTimeout)
+		}
+		time.Sleep(configLockPollInterval)
+	}
+
+	defer func() {
+		if relErr := l.Release(); relErr != nil && retErr == nil {
+			retErr = fmt.Errorf("releasing config lock: %w", relErr)
+		}
+	}()
+
+	return fn()
+}
 
 // stripBOM removes a UTF-8 BOM prefix if present.
 // PowerShell's Set-Content -Encoding UTF8 writes a BOM that breaks
@@ -78,7 +142,17 @@ func validateConfigToken(label, value string) error {
 // Preserves comments and formatting by operating on raw text lines.
 // If the key already exists, its value is replaced in-place.
 // If not, the field is appended before the first blank line or at EOF.
+//
+// SM-153: takes withConfigLock around the read-modify-write sequence
+// so a concurrent AddMirror / RemoveMirror / SetField from another
+// smirror process serializes instead of racing.
 func SetField(configPath, key, value string) error {
+	return withConfigLock(configPath, func() error {
+		return setFieldLocked(configPath, key, value)
+	})
+}
+
+func setFieldLocked(configPath, key, value string) error {
 	if err := validateConfigToken("key", key); err != nil {
 		return err
 	}
@@ -131,7 +205,21 @@ func SetField(configPath, key, value string) error {
 // other control characters. A name like "Foo\npre_sync_hook: calc.exe"
 // would otherwise inject a hook line under what looks like a single
 // mirror entry. Validate every Project field that ends up emitted.
+//
+// SM-153: takes withConfigLock around the read-modify-write sequence so
+// concurrent addmirror invocations from multiple terminals serialize.
+// Without the lock, two `smirror addmirror` calls could each read the
+// same config.yaml, append distinct mirrors, and the second writer
+// would overwrite the first — losing one mirror entry (and risking the
+// pre-existing seed mirror in pathological cases). See
+// system-validation/TestPanelR4_CLI_ConcurrentAddMirror.
 func AddMirror(configPath string, p Project) error {
+	return withConfigLock(configPath, func() error {
+		return addMirrorLocked(configPath, p)
+	})
+}
+
+func addMirrorLocked(configPath string, p Project) error {
 	for label, val := range map[string]string{
 		"mirror name":        p.Name,
 		"local_path":         p.LocalPath,
@@ -227,7 +315,16 @@ func AddMirror(configPath string, p Project) error {
 // using it as a regex literal — the regex is anchored, but a name
 // containing \n could match across line boundaries with multiline mode
 // (we don't enable that; defensive check anyway).
+//
+// SM-153: takes withConfigLock around the read-modify-write sequence
+// so concurrent CLI mutations on config.yaml serialize.
 func RemoveMirror(configPath, name string) error {
+	return withConfigLock(configPath, func() error {
+		return removeMirrorLocked(configPath, name)
+	})
+}
+
+func removeMirrorLocked(configPath, name string) error {
 	if err := validateConfigToken("mirror name", name); err != nil {
 		return err
 	}

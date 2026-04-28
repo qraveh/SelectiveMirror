@@ -489,9 +489,19 @@ func TestPanelR4_CLI_ConcurrentAddMirror(t *testing.T) {
 
 	cfgBytes, _ := os.ReadFile(cfg)
 	cfgText := string(cfgBytes)
-	hasA := strings.Contains(cfgText, srcA)
-	hasB := strings.Contains(cfgText, srcB)
-	hasSeed := strings.Contains(cfgText, srcSeed)
+	// `createConfig` (test helper) writes seed paths using `%q` — Go-style
+	// quoted form, so backslashes appear escaped (`\\`). `addmirror` writes
+	// new mirrors via `formatMirrorBlock` with `%s` — single backslashes.
+	// Without the asymmetric check below the test was a false positive
+	// against the seed every run, regardless of whether the race actually
+	// fired (SM-153 / BUG-R4-1 verification gap).
+	containsPath := func(text, path string) bool {
+		return strings.Contains(text, path) ||
+			strings.Contains(text, fmt.Sprintf("%q", path))
+	}
+	hasA := containsPath(cfgText, srcA)
+	hasB := containsPath(cfgText, srcB)
+	hasSeed := containsPath(cfgText, srcSeed)
 	if !hasSeed {
 		t.Errorf("seed mirror lost from config — destructive race")
 	}
