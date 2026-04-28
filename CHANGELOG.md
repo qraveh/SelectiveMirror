@@ -16,9 +16,10 @@ The following findings are open against this version. Each is exercised by a tes
 
 A maintainer-readable view (severity, owner, planned remediation, target version) is in [docs/release-maturity.md](docs/release-maturity.md). Tests in this section are also tagged in CHANGELOG fix commits when closed.
 
-### v1.0 readiness — SM-153 / BUG-R4-1 closed
+### v1.0 readiness — open panel-finding fixes
 
 - **SM-153 / BUG-R4-1 (High)** Concurrent `smirror addmirror` from two terminals no longer destroys a pre-existing mirror via the config.yaml read-modify-write race. New `internal/lock.AcquirePath(lockPath)` is the file-path-based generalization of the existing `Acquire(dataDir)` (which now delegates). `internal/config/edit.go::withConfigLock` wraps `AddMirror`, `RemoveMirror`, and `SetField` so any combination of CLI mutations on `config.yaml` serialize across processes. 5-second timeout on contention; `lock.ErrStaleLockHeld` propagated unchanged so the GAP-9 dead-PID diagnostic still fires. Test: `system-validation/TestPanelR4_CLI_ConcurrentAddMirror` (also corrected — its prior path-based substring check produced a false-positive "seed lost" report against any successful run, because `createConfig` writes seed paths with `%q` while `addmirror`'s formatter writes new paths with `%s`; the helper now accepts either escaping form). Closes the v1.0 blocker called out in the 2026-04-29 session handoff.
+- **SM-157 / BUG-R5-1 (Medium)** `internal/anomaly.Rotate` is now invoked from `heartbeatLoop`'s reconcile tick in `cmd/smirror/main.go` (covers both foreground `smirror start` and Windows-service mode, since both call `heartbeatLoop`). Defaults of 30 days / 50 MB total match the retention window of the sibling `state.PruneOldLogs`. The `anomalies/` directory was previously growing unbounded — `Rotate` was defined and unit-tested but had zero production callers. Tests: `system-validation/TestPanelR5_Endurance_AnomalyRotationNeverCalled` (static-analysis grep — now finds the call site), `system-validation/TestPanelR9_Endurance_AnomalyFileAccumulation` (endurance — observation only).
 
 ### Pre-release process — panel review pre-release 2026-04-28
 

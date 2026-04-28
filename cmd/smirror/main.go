@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.44-dev"
+var version = "0.9.45-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -2869,6 +2869,15 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 				// Prune old sync logs (30-day retention)
 				if pruned, err := st.PruneOldLogs(30); err == nil && pruned > 0 {
 					slog.Info("sync log pruned", "deleted", pruned)
+				}
+
+				// SM-157 / BUG-R5-1: rotate anomaly archive files. Defaults
+				// keep the last 30 days, capped at 50 MB total — matches the
+				// retention window of PruneOldLogs above. Rotate is no-op
+				// when the anomaly dir is missing (anomaly detection
+				// disabled), so unconditional invocation is safe.
+				if removed, err := anomaly.Rotate(filepath.Join(dd, "anomalies"), anomaly.DefaultRotation()); err == nil && removed > 0 {
+					slog.Info("anomaly archives rotated", "removed", removed)
 				}
 			}
 
