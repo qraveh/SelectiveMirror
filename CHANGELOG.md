@@ -5,6 +5,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Security / robustness (audit + panel autonomous fixes — 0.9.25-dev cycle)
+
+**Audit SEC-H batch (high-severity findings closed)**:
+- **SEC-H3 — copyto TOCTOU defense.** `internal/sync/sync.go::syncSingleFile` now re-`Lstat`s the local path immediately before invoking rclone. Aborts with `toctou_aborted` log + state action if the path was swapped to a symlink or non-regular file between quiescence and rclone copyto. Closes the window where an attacker could swap the file for a symlink to `/etc/shadow` (foreground) or `C:\Windows\System32\config\SAM` (service mode).
+- **SEC-H4 — Windows reparse-point detection (NTFS junctions).** New `internal/watcher/reparse_windows.go::IsReparsePoint` uses `windows.GetFileAttributes` + `FILE_ATTRIBUTE_REPARSE_POINT` to detect junctions and other reparse-point types that Go's `os.ModeSymlink` doesn't catch. Watcher event handler rejects them. POSIX stub returns false (concept doesn't apply).
+- **SEC-H7 — state DB symlink rejection.** `internal/state/state.go::Open` now `Lstat`s the DB path before opening; refuses with a clear error if it's a symlink. In service mode (LocalSystem) a user-writable `state.db` symlink to a system file would otherwise let a non-admin overwrite it via the SQLite WAL/journal writes.
+
+**Audit SEC-M batch**:
+- **SEC-M1 — crashreport.go uses `openBrowserURL`** instead of `cmd /c start`. Routes through the safer rundll32 path that validates HTTPS scheme.
+- **SEC-M8 — quarantine timestamp now nanosecond-precision** (`20060102T150405Z.NNNNNNNNN`). Two quarantines for the same path within the same second no longer overwrite each other.
+- **SEC-M9 — `recordUpdateTime` errors warn-logged**. Previous silent error-swallowing let a state-DB write failure bypass the 24-hour selfupdate rate limit on the next startup. Errors visible in logs; selfupdate's success path still doesn't fail-loud on this best-effort write.
+
+**Panel-review qualitative findings closed**:
+- **PF-A7 — coalesce concurrent `OnFilterChange` goroutines per project**. Rapid `.syncignore` edits used to spawn an unbounded number of LEAK-cleanup goroutines. Now serialized: at most one running per project at a time; further changes coalesce via `pw.filterChangePending` into a single re-run after the current finishes.
+- **PF-D2 — failed `.syncignore` reload now triggers reconcile**. `Reload` returning an error used to be silent. Now we enqueue a full-project sync after a failed reload, so any tasks queued under what may have been a torn state get reconsidered.
+- **PF-E4 — circuit-breaker rename concern closed as not-applicable**. No `addmirror --rename` flag exists; manual config.yaml edits are delete + add from the engine's perspective. Design-note comment added to `FairQueue.RecordFailure` for any future contributor adding `--rename`.
+
+### Deferred to dedicated security session
+
+- **SEC-M7** (state DB foreign-write trust bypass): threat model needs deliberate decision before HMAC scheme / key storage / schema migration can be designed. Audit doc updated with DEFERRED status.
+- **SEC-M16** (`gh auth token` PATH hijack): three fix candidates with UX/security trade-offs (drop gh entirely / require absolute path / verify Authenticode). Audit doc updated.
+
+### Documentation
+
+- **`docs/user-manual.md`** — exit codes 5 and 6 now documented (DOC-11 closed).
+- **`docs/story.md`** — test count refreshed 530+ → 640+ (actual: 647 across 16 packages).
+- **`SECURITY.md`** — Code Signing section: SignPath Foundation plan (free EV for OSS), Microsoft Trusted Signing fallback ($120/y), explicit rejection of self-signing.
+- **`docs/iso-compliance.md`** — A-GOV-01 closed by decision: third-party / external review NOT planned. SELF-ASSESSMENT label retained permanently. §10.5 (external-reviewer reading list) removed.
+- **`docs/SRS.md`** §11.7 — "external review recommended" replaced with the project's actual standing process (self-audit + adversarial multi-role panel reviews).
+- **`CLAUDE.md`** — test count 600+ → 640+.
+
+### Hygiene
+
+- `AGENTS.md`, `assets/`, `scripts/__pycache__/` removed.
+- `.gitignore` extended: `Codex/`, `__pycache__/`, `*.pyc`, `docs/story10.md`.
+
+### v0.9.22 mid-cycle release tag
+
+- Tag `v0.9.22` created at commit `460b03e` and pushed. 22 commits past `v0.9.0` are now on the public/private origin. Annotated tag summarizes every closed finding from the panel-review batches.
+
 ### Robustness / polish (panel review 2026-04-28 — last batch)
 
 - **GAP-6 — `--config` last-wins.** `cmd/smirror/main.go::extractConfigPath`. Previous parsing broke out of the loop on the FIRST `--config` it saw and left subsequent `--config` args in the stripped slice — so `smirror --config bogus.yaml --config good.yaml version` used the bogus path and confused downstream parsers. Now extracted to a helper used by both cliMain and serviceMain: scans all args, last `--config` wins, ALL occurrences removed from the result. Mixed separate-form (`--config X`) and `=`-form (`--config=X`) handled. 8 sub-cases in `cmd/smirror/config_args_test.go`.

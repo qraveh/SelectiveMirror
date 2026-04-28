@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -616,18 +617,32 @@ func updateRclone(configPath string) {
 
 // recordUpdateTime writes the update timestamp to the state DB for
 // rate-limiting startup update checks.
+//
+// SEC-M9: previously every error was silently ignored, which let a
+// state-DB-write failure bypass the 24-hour rate limit on the next
+// startup update check (the meta entry never landed → next check sees
+// "never checked" → re-runs immediately). Errors are now warn-logged so
+// the rate-limit drift is at least visible in logs. We still don't
+// fail-loud — recording an update timestamp is best-effort and must
+// not block selfupdate's success path.
 func recordUpdateTime(configPath, newVersion string) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
+		slog.Warn("recordUpdateTime: cannot load config; rate-limit may drift", "error", err)
 		return
 	}
 	st, err := state.Open(cfg.StateDB)
 	if err != nil {
+		slog.Warn("recordUpdateTime: cannot open state DB; rate-limit may drift", "error", err)
 		return
 	}
 	defer st.Close()
-	_ = st.SetMeta("last_update_check", time.Now().UTC().Format(time.RFC3339))
-	_ = st.SetMeta("last_selfupdate", newVersion)
+	if err := st.SetMeta("last_update_check", time.Now().UTC().Format(time.RFC3339)); err != nil {
+		slog.Warn("recordUpdateTime: SetMeta last_update_check failed; rate-limit may drift", "error", err)
+	}
+	if err := st.SetMeta("last_selfupdate", newVersion); err != nil {
+		slog.Warn("recordUpdateTime: SetMeta last_selfupdate failed", "error", err)
+	}
 }
 
 // checkForUpdateOnStartup performs a non-blocking update check and prints

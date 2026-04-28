@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -236,7 +235,13 @@ func offerCrashSubmission(reportPath string) {
 	}
 
 	fmt.Fprintln(os.Stderr, "Opening browser...")
-	_ = exec.Command("cmd", "/c", "start", fullURL).Start()
+	// SEC-M1: route via openBrowserURL (main.go) instead of `cmd /c start`.
+	// The helper validates the URL is HTTPS, refuses arbitrary command-line
+	// shapes, and uses rundll32 url.dll,FileProtocolHandler — which the
+	// audit identified as the safer Windows browser-open path. The previous
+	// `cmd /c start` form is parsed by cmd.exe and would mishandle URLs
+	// containing & or other shell-meaningful characters.
+	_ = openBrowserURL(fullURL)
 
 	// Rename to .sent to avoid re-prompting
 	_ = os.Rename(reportPath, reportPath+".sent")

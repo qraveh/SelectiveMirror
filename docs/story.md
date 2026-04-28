@@ -66,7 +66,7 @@ For a **top-10% developer** — someone who ships production code daily, knows G
 | Trust model (remote verification) | 1 week | 30 minutes |
 | CI/CD + GoReleaser + MSI | 3-5 days | 1 day |
 | Documentation (SRS, user manual, etc.) | 2-3 weeks | Concurrent |
-| 530+ tests + conformance suite | 2-3 weeks | Concurrent |
+| 640+ tests + conformance suite | 2-3 weeks | Concurrent |
 | Bug finding + analysis + fixing | Ongoing | 83 bugs in 7 days |
 | **Total** | **3-5 months** | **7 days** |
 
@@ -84,7 +84,7 @@ The production hardening phase is where the gap becomes a chasm. Every edge case
 |---|---|---|---|
 | Calendar time | **7 days** | 3-5 months | **8-14 months** |
 | Feature completeness | Full | Full | ~60% (no anomaly system, hooks, trust model, content-addressed sync) |
-| Test coverage | 530+ tests | ~200 tests | ~50 tests |
+| Test coverage | 640+ tests | ~200 tests | ~50 tests |
 | Bugs found pre-production | 83 | ~20 | ~5 |
 | Documentation | 4,242 lines | ~1,000 lines | README only |
 | **Velocity ratio** | **1x** | **15-20x slower** | **40-60x slower** |

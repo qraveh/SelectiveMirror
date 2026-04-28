@@ -111,6 +111,15 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating state dir: %w", err)
 	}
 
+	// SEC-H7: refuse to open the state DB if the path is a symlink. Opening
+	// state.db via os.OpenFile would follow the symlink; in service mode
+	// (LocalSystem) a user-writable symlink to e.g. C:\Windows\System32\
+	// drivers\etc\hosts would let a non-admin overwrite system files via
+	// the SQLite WAL/journal writes. Lstat first; reject if symlink.
+	if linfo, lerr := os.Lstat(dbPath); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("state DB path %q is a symlink; refused (SEC-H7)", dbPath)
+	}
+
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=ON&_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("opening state db: %w", err)

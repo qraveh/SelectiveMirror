@@ -70,6 +70,12 @@ type projectWatcher struct {
 	// to catch any fsnotify events dropped under burst load (SM-050).
 	deleteCount     int
 	deleteWindowEnd time.Time
+
+	// PF-A7: serialize OnFilterChange (LEAK-cleanup) goroutines per project.
+	// At most one running at a time; if more changes arrive while one is
+	// in flight, filterChangePending coalesces them into a single re-run.
+	filterChangeRunning bool
+	filterChangePending bool
 }
 
 // NewManager creates a watcher manager for all configured projects.
@@ -448,6 +454,14 @@ func (m *Manager) handleEvent(event fsnotify.Event) {
 
 	// Use Lstat info to check the object itself (not symlink target)
 	if lerr == nil {
+		// SEC-H4: reject Windows reparse points (junctions, mount points,
+		// other non-symlink reparse types). os.ModeSymlink covers symlinks
+		// but NOT directory junctions — `mklink /J` would otherwise smuggle
+		// paths past the symlink check below.
+		if IsReparsePoint(event.Name) && linfo.Mode()&os.ModeSymlink == 0 {
+			m.log.Debug("skipping reparse point (junction/mount)", "path", event.Name)
+			return
+		}
 		// Symlinks to files: follow the target to get real size for limit check.
 		// Symlinks to directories were already rejected above.
 		checkInfo := linfo
@@ -763,11 +777,25 @@ func (m *Manager) isSyncIgnoreFile(pw *projectWatcher, absPath string) bool {
 }
 
 // reloadFilter hot-reloads a project's .syncignore and triggers reconciliation if rules changed.
+//
+// PF-A7: rapid .syncignore edits used to spawn an unbounded number of
+// OnFilterChange goroutines (one per change event), each running the full
+// LEAK-cleanup walk. We now coalesce: only one OnFilterChange goroutine
+// runs per project at a time. If a second filter change arrives mid-walk,
+// pw.filterChangePending is set; the first goroutine re-runs the callback
+// once it finishes. Worst case is two end-to-end cleanups per N edits.
 func (m *Manager) reloadFilter(pw *projectWatcher) {
 	start := time.Now()
 	changed, err := pw.filter.Reload()
 	if err != nil {
 		m.log.Error("failed to reload .syncignore", "project", pw.project.Name, "error", err)
+		// PF-D2: a failed reload that leaves the filter in its previous
+		// committed state still bumps the watcher's logical "filter epoch"
+		// so any tasks queued under what may have been a torn state get
+		// reconsidered on the next successful reload. The filter package
+		// already keeps the previous valid rules; we just trigger a
+		// reconcile so downstream sees them.
+		pw.queue.Enqueue(msync.Task{Project: pw.project, RelPath: ""})
 		return
 	}
 	if !changed {
@@ -785,11 +813,37 @@ func (m *Manager) reloadFilter(pw *projectWatcher) {
 		RelPath: "", // empty = full project sync
 	})
 
-	// Clean LEAKs: files excluded by the new rules but still on remote.
-	// This runs asynchronously so it doesn't block the event loop.
-	if m.OnFilterChange != nil {
-		go m.OnFilterChange(pw.project)
+	// PF-A7: coalesce concurrent OnFilterChange goroutines per project.
+	// If a callback is already running, just mark that another change
+	// arrived and let the running goroutine re-fire when it finishes.
+	if m.OnFilterChange == nil {
+		return
 	}
+	pw.mu.Lock()
+	if pw.filterChangeRunning {
+		pw.filterChangePending = true
+		pw.mu.Unlock()
+		return
+	}
+	pw.filterChangeRunning = true
+	pw.mu.Unlock()
+
+	go func() {
+		for {
+			m.OnFilterChange(pw.project)
+			pw.mu.Lock()
+			if !pw.filterChangePending {
+				pw.filterChangeRunning = false
+				pw.mu.Unlock()
+				return
+			}
+			pw.filterChangePending = false
+			pw.mu.Unlock()
+			// Loop: re-run callback for the change we coalesced. At most
+			// one extra iteration regardless of how many writes piled up
+			// during the previous run.
+		}
+	}()
 }
 
 // timerCleanupLoop waits for context cancellation and cleans up pending static-mode timers.

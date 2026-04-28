@@ -497,6 +497,22 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		return
 	}
 
+	// SEC-H3: re-check the local path is still a regular file immediately
+	// before invoking rclone. The TOCTOU window between hash computation
+	// and rclone copyto is small but non-zero — an attacker who can write
+	// in the project root could swap the file for a symlink to /etc/shadow
+	// (or in service mode, C:\Windows\System32\config\SAM). Lstat is
+	// cheap; if it changed, abort and re-enqueue at the next event.
+	if linfo, lerr := os.Lstat(localPath); lerr == nil {
+		if linfo.Mode()&os.ModeSymlink != 0 || !linfo.Mode().IsRegular() {
+			e.log.Warn("path mode changed between quiescence and rclone (TOCTOU defense)",
+				"project", proj.Name, "path", relPath, "mode", linfo.Mode().String())
+			e.state.LogAction(proj.Name, relPath, "toctou_aborted",
+				fmt.Sprintf("file mode changed to %s after quiescence; aborted", linfo.Mode()), 0)
+			return
+		}
+	}
+
 	// Build rclone command for content sync
 	remotePath := proj.Remote + "/" + filepath.ToSlash(relPath)
 	args := []string{"copyto", localPath, remotePath}
@@ -783,7 +799,13 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 		}
 
 	case config.DeleteQuarantine:
-		ts := time.Now().UTC().Format("20060102T150405Z")
+		// SEC-M8: include nanosecond component to avoid collision when two
+		// quarantines for the same path happen within the same second
+		// (rapid edit-cycle on a delete_policy=quarantine project). The
+		// previous second-resolution stamp would have caused the second
+		// moveto to overwrite the first.
+		now := time.Now().UTC()
+		ts := now.Format("20060102T150405Z") + fmt.Sprintf(".%09d", now.Nanosecond())
 		quarantinePath := proj.Remote + "/.quarantine/" + filepath.ToSlash(relPath) + "." + ts
 		args := []string{"moveto", remotePath, quarantinePath}
 		args = append(args, e.deleteFlags(proj)...)

@@ -1159,8 +1159,11 @@ When smirror exits, the exit code tells scripts and CI what happened:
 | 3 | ExitRcloneError | rclone-related failure (binary not found, remote unreachable, auth failed) |
 | 4 | ExitLockConflict | Another smirror instance is already running |
 | 5 | ExitDrift | Diagnostic found drift (leaks, orphans, hash mismatches) -- the tool worked correctly, but action is needed |
+| 6 | ExitUpgrade | `smirror selfupdate`: a newer version is available but the user declined the upgrade prompt or the preflight check failed (rclone unreachable, lock held, config invalid) — the tool worked correctly, no upgrade was applied |
 
 **Note on exit code 5**: `smirror test-mirrors` exits with 5 when drift is detected. This is NOT an error -- it means the diagnostic succeeded and found issues. Scripts can check for exit code 5 to trigger automated remediation (`smirror sync-now`), while exit code 3 indicates an infrastructure problem that needs human attention.
+
+**Note on exit code 6**: `smirror selfupdate` exits with 6 when a newer version exists but no upgrade was applied — either because the user said "n" at the confirmation prompt, or because preflight (rclone health, lock state, config validity) failed. Scripts that auto-update can distinguish 6 (upgrade-deferred) from 1 (real error).
 
 ## rclone Exit Codes
 
