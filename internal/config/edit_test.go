@@ -394,3 +394,59 @@ func TestUniqueMirrorName_CaseInsensitive(t *testing.T) {
 		t.Errorf("got %q, want MyProject-2 (case-insensitive collision)", got)
 	}
 }
+
+// SEC-M6: a mirror name (or any other Project field) containing newline
+// or other control characters must be rejected before AddMirror writes
+// it into the YAML. Otherwise "Foo\npre_sync_hook: calc.exe" would
+// inject a hook line that the next config load happily applies.
+func TestAddMirror_RejectsControlCharsInName(t *testing.T) {
+	configPath := testConfigDir(t, baseConfig)
+	dir := t.TempDir()
+	cases := []struct {
+		name string
+		val  string
+	}{
+		{"newline in name", "Inject\npre_sync_hook: calc.exe"},
+		{"carriage return", "Inject\rpre_sync_hook: calc.exe"},
+		{"tab in name", "tab\there"},
+		{"control char", "X\x01Y"},
+		{"DEL char", "X\x7fY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := AddMirror(configPath, Project{
+				Name:      tc.val,
+				LocalPath: dir,
+				Remote:    "x:y",
+			})
+			if err == nil {
+				t.Fatalf("AddMirror accepted control-char name %q", tc.val)
+			}
+			lowerErr := strings.ToLower(err.Error())
+			if !strings.Contains(lowerErr, "control") && !strings.Contains(lowerErr, "del") {
+				t.Errorf("error %v doesn't mention control char or DEL", err)
+			}
+		})
+	}
+}
+
+func TestSetField_RejectsControlCharsInValue(t *testing.T) {
+	configPath := testConfigDir(t, baseConfig)
+	if err := SetField(configPath, "default_remote", "gdrive:foo\nrclone_path: calc.exe"); err == nil {
+		t.Fatal("SetField accepted newline in value (SEC-M6)")
+	}
+}
+
+// SEC-M6 atomic write: writePreservingMode uses temp+rename so a partial
+// write doesn't truncate config.yaml. We can't easily simulate a
+// crash mid-write in a unit test, but we can verify no .tmp file is
+// left behind on success.
+func TestSetField_NoTempFileLeftBehind(t *testing.T) {
+	configPath := testConfigDir(t, baseConfig)
+	if err := SetField(configPath, "log_level", "debug"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(configPath + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf(".tmp file was not cleaned up after successful write")
+	}
+}

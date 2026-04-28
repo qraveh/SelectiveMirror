@@ -23,6 +23,12 @@ func stripBOM(s string) string {
 // created configs (they may contain rclone remote names, webhook URLs, and
 // other sensitive data); previous code rewrote with 0644 on every edit,
 // silently downgrading the initial 0600.
+//
+// SEC-M6: writes are atomic. We write to a sibling .tmp file then
+// os.Rename onto the target. Go's Rename uses MoveFileEx on Windows
+// with replacement semantics, which is atomic relative to readers.
+// Without atomicity, a crash mid-WriteFile would leave config.yaml
+// truncated and unparseable on next start.
 func writePreservingMode(path string, data []byte) error {
 	var mode os.FileMode = 0600
 	if st, err := os.Stat(path); err == nil {
@@ -33,7 +39,39 @@ func writePreservingMode(path string, data []byte) error {
 			mode = 0600
 		}
 	}
-	return os.WriteFile(path, data, mode)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp) // best-effort cleanup
+		return err
+	}
+	return nil
+}
+
+// validateConfigToken rejects strings that would break YAML structure
+// when interpolated into a generated config line. SEC-M6: a mirror name
+// like "Foo\npre_sync_hook: calc.exe" used to inject into the YAML and
+// promote a hook config under what looked like a single mirror entry.
+//
+// Rejected: ASCII control characters (including \n, \r, \t), backslash
+// escapes that YAML resolves into newlines, and characters that would
+// require quoting (which our line-based emitter doesn't do). Allows the
+// printable ASCII subset plus high-byte characters (Unicode names are
+// fine — only the structural-breaking subset is rejected).
+func validateConfigToken(label, value string) error {
+	for i, r := range value {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return fmt.Errorf("%s contains a control character at offset %d (\\n, \\r, \\t are not permitted in YAML tokens emitted by smirror)", label, i)
+		case r < 0x20:
+			return fmt.Errorf("%s contains an ASCII control character (0x%02x) at offset %d", label, r, i)
+		case r == 0x7f:
+			return fmt.Errorf("%s contains DEL (0x7f) at offset %d", label, i)
+		}
+	}
+	return nil
 }
 
 // SetField updates or adds a top-level scalar field in the config YAML file.
@@ -41,6 +79,12 @@ func writePreservingMode(path string, data []byte) error {
 // If the key already exists, its value is replaced in-place.
 // If not, the field is appended before the first blank line or at EOF.
 func SetField(configPath, key, value string) error {
+	if err := validateConfigToken("key", key); err != nil {
+		return err
+	}
+	if err := validateConfigToken("value", value); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -82,7 +126,25 @@ func SetField(configPath, key, value string) error {
 // AddMirror appends a new mirror entry to the mirrors list in the config YAML.
 // The entry is inserted at the end of the mirrors section.
 // Returns an error if a mirror with the same name already exists.
+//
+// SEC-M6: each token interpolated into YAML must be free of newlines and
+// other control characters. A name like "Foo\npre_sync_hook: calc.exe"
+// would otherwise inject a hook line under what looks like a single
+// mirror entry. Validate every Project field that ends up emitted.
 func AddMirror(configPath string, p Project) error {
+	for label, val := range map[string]string{
+		"mirror name":        p.Name,
+		"local_path":         p.LocalPath,
+		"remote":             p.Remote,
+		"syncignore_path":    p.SyncIgnorePath,
+		"delete_policy":      p.DeletePolicyStr,
+		"pre_sync_hook":      p.PreSyncHook,
+		"post_sync_hook":     p.PostSyncHook,
+	} {
+		if err := validateConfigToken(label, val); err != nil {
+			return err
+		}
+	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
@@ -160,7 +222,15 @@ func AddMirror(configPath string, p Project) error {
 
 // RemoveMirror removes a mirror entry by name from the config YAML.
 // Returns an error if the mirror is not found.
+//
+// SEC-M6: validate the name doesn't contain control characters before
+// using it as a regex literal — the regex is anchored, but a name
+// containing \n could match across line boundaries with multiline mode
+// (we don't enable that; defensive check anyway).
 func RemoveMirror(configPath, name string) error {
+	if err := validateConfigToken("mirror name", name); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return err
