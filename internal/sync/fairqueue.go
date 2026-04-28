@@ -87,6 +87,14 @@ func queueKey(t Task) string {
 // If a task for the same file is already queued, the old entry is removed
 // and the new one is appended at the tail (move-to-back).
 // Full-project syncs (RelPath="") are never deduplicated.
+//
+// SEC-M12: when the queue depth reaches the hard cap, sync tasks are
+// REJECTED at the gate (Enqueue returns silently). Delete tasks always
+// go through (they're already deduped via priority insertion in
+// EnqueuePriority). Without this, a runaway event source or a stalled
+// worker could grow the queue arbitrarily — the previous "natural
+// dedup bound" worked for steady-state but not for any pathological
+// burst (renamed top-level dir → 100k events).
 func (q *FairQueue) Enqueue(task Task) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -102,13 +110,22 @@ func (q *FairQueue) Enqueue(task Task) {
 		q.removeByKey(key)
 	}
 
+	// SEC-M12: hard cap. If we'd exceed the limit AND the existing
+	// entry didn't dedup with us, refuse the enqueue. Reconciliation
+	// will cover the missed file on the next pass.
+	const hardCap = 100000 // 2× overflow warn threshold
+	if len(q.items) >= hardCap {
+		slog.Warn("queue depth at hard cap; dropping task (will be picked up by next reconciliation)",
+			"depth", len(q.items), "project", task.Project.Name, "path", task.RelPath)
+		return
+	}
+
 	q.items = append(q.items, task)
 	if key != "" {
 		q.pending[key] = true
 	}
 
-	// FR-QUEUE-08/10: No artificial limit — dedup is the natural bound.
-	// Log warning and fire overflow callback at 50K depth.
+	// FR-QUEUE-08/10: log warning and fire overflow callback at 50K depth.
 	const overflowThreshold = 50000
 	const drainThreshold = 25000
 	depth := len(q.items)
@@ -279,7 +296,16 @@ func (q *FairQueue) Dequeue(ctx context.Context) (Task, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	// Start a goroutine to signal cond when context is cancelled
+	// PF-D1 design note: this Dequeue spawns a "cancel helper" goroutine
+	// that waits on either ctx.Done() or the local `done` channel and
+	// broadcasts q.cond on cancel. Defer LIFO ordering guarantees the
+	// helper exits cleanly:
+	//   - defer close(done) runs FIRST (registered later)
+	//   - defer q.mu.Unlock() runs SECOND
+	// The helper sees <-done before any caller observes the unlocked
+	// mutex, so it cannot outlive Dequeue. We explicitly q.mu.Unlock()
+	// during cooldown waits (line ~380) and re-Lock before any return,
+	// so the deferred Unlock always sees a locked mutex on the way out.
 	done := make(chan struct{})
 	go func() {
 		select {

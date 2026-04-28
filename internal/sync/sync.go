@@ -17,8 +17,9 @@ import (
 
 	"github.com/qraveh/SelectiveMirror/internal/anomaly"
 	"github.com/qraveh/SelectiveMirror/internal/config"
-	"github.com/qraveh/SelectiveMirror/internal/hooks"
 	"github.com/qraveh/SelectiveMirror/internal/filter"
+	"github.com/qraveh/SelectiveMirror/internal/fsutil"
+	"github.com/qraveh/SelectiveMirror/internal/hooks"
 	"github.com/qraveh/SelectiveMirror/internal/metrics"
 	"github.com/qraveh/SelectiveMirror/internal/state"
 )
@@ -1277,6 +1278,13 @@ func (e *Engine) findGhosts(proj config.Project) ([]GhostFile, error) {
 			return nil
 		}
 		if d.IsDir() {
+			// SEC-M13: skip into reparse points (junctions, mount points).
+			// On Windows a junction in a watched dir can point to a parent,
+			// producing an unbounded WalkDir recursion. We never follow
+			// reparse points anywhere else in the codebase either.
+			if path != proj.LocalPath && fsutil.IsReparsePoint(path) {
+				return filepath.SkipDir
+			}
 			relPath, _ := filepath.Rel(proj.LocalPath, path)
 			if relPath != "." && fe.IsExcluded(relPath+"/") {
 				return filepath.SkipDir
@@ -1334,6 +1342,10 @@ func (e *Engine) backfillStateAfterBatchSync(ctx context.Context, proj config.Pr
 			return nil
 		}
 		if d.IsDir() {
+			// SEC-M13: don't recurse into reparse points (junctions etc.).
+			if path != proj.LocalPath && fsutil.IsReparsePoint(path) {
+				return filepath.SkipDir
+			}
 			relPath, _ := filepath.Rel(proj.LocalPath, path)
 			relPath = filepath.ToSlash(relPath)
 			if relPath != "." && fe.IsExcluded(relPath+"/") {
