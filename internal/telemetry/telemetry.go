@@ -106,8 +106,10 @@ func (c *Client) CheckForUpdate(ctx context.Context) (*ReleaseInfo, error) {
 	req.Header.Set("User-Agent", fmt.Sprintf("smirror/%s", c.version))
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	// Authenticate if possible (required for private repos)
-	if token := GithubToken(); token != "" {
+	// Authenticate if possible (required for private repos). Pass the
+	// caller's ctx through so a hanging `gh auth token` can't outlast
+	// the request budget. SM-174.
+	if token := GithubTokenContext(ctx); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
@@ -138,17 +140,50 @@ func (c *Client) CheckForUpdate(ctx context.Context) (*ReleaseInfo, error) {
 	return &release, nil
 }
 
-// GithubToken returns a GitHub API token if available.
-// Priority: 1) gh CLI auth token, 2) GITHUB_TOKEN env var, 3) empty string.
-func GithubToken() string {
-	// Try gh CLI (most common for developers)
-	if out, err := exec.CommandContext(context.Background(), "gh", "auth", "token").Output(); err == nil {
+// ghAuthTokenTimeout caps the time we'll spend shelling out to
+// `gh auth token`. SM-174: a malicious or broken `gh.exe` earlier on
+// PATH (or just one that hangs on a slow keyring backend) would
+// otherwise stall every selfupdate / report-bug invocation
+// indefinitely, since the HTTP client's timeout doesn't start until
+// AFTER the subprocess returns.
+//
+// Two seconds is generous for a credential-helper read and short
+// enough that a hang stays unnoticeable on the typical user-action
+// path. Tests can override via withGhAuthTokenTimeout.
+var ghAuthTokenTimeout = 2 * time.Second
+
+// GithubTokenContext returns a GitHub API token if available, bounded
+// by ctx. Priority:
+//  1. gh CLI `gh auth token` (subject to ghAuthTokenTimeout)
+//  2. GITHUB_TOKEN environment variable
+//  3. empty string (caller falls back to unauthenticated)
+//
+// The function never returns an error: a token-lookup failure means
+// "no token available" and is identical from the caller's standpoint
+// to "user has no token configured."
+func GithubTokenContext(ctx context.Context) string {
+	// Apply the gh-specific timeout on top of whatever ctx the caller
+	// brought. Whichever expires first wins.
+	subCtx, cancel := context.WithTimeout(ctx, ghAuthTokenTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(subCtx, "gh", "auth", "token")
+	out, err := cmd.Output()
+	if err == nil {
 		if token := strings.TrimSpace(string(out)); token != "" {
 			return token
 		}
 	}
-	// Fall back to environment variable
+	// Fall back to environment variable.
 	return os.Getenv("GITHUB_TOKEN")
+}
+
+// GithubToken is the legacy entry point for callers that don't have a
+// context handy. It uses a fresh background context bounded by
+// ghAuthTokenTimeout, so a hanging gh.exe still can't stall longer
+// than that.
+func GithubToken() string {
+	return GithubTokenContext(context.Background())
 }
 
 // FindAsset returns the first asset whose name contains the given substring,

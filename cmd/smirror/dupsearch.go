@@ -55,7 +55,9 @@ func searchSimilarIssues(ctx context.Context, report string) ([]issueItem, error
 	req.Header.Set("User-Agent", fmt.Sprintf("smirror/%s", version))
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	if token := telemetry.GithubToken(); token != "" {
+	// SM-174: pass ctx so a hanging `gh auth token` can't outlast the
+	// dup-search budget.
+	if token := telemetry.GithubTokenContext(ctx); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 

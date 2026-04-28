@@ -83,20 +83,42 @@ type MetaReader interface {
 // Pass a nil MetaReader to skip state-DB lookup (e.g., very early in
 // startup before the DB is open). The function then falls through to
 // the registry check.
+//
+// Fail-closed semantics (SM-173): if a non-nil meta reader returns an
+// error from GetMeta, we treat the runtime state as unreadable and
+// return TierNone immediately. We do NOT fall through to the registry,
+// because that would be the wrong move for a user who opted DOWN at
+// runtime: their state-DB-stored "none" choice would be silently
+// reverted to the installer-time "standard" / "reliability" value.
+// "Can't read runtime state" must mean "send nothing", per the
+// docs/PRIVACY.md contract.
 func ReadTier(meta MetaReader) Tier {
 	// 1. State DB is authoritative once populated.
 	if meta != nil {
-		if v, err := meta.GetMeta("telemetry_tier"); err == nil && v != "" {
+		v, err := meta.GetMeta("telemetry_tier")
+		if err != nil {
+			// SM-173: fail closed. Don't consult the registry — its
+			// value is stale relative to whatever the user did
+			// post-install via `smirror telemetry`.
+			return TierNone
+		}
+		if v != "" {
 			t := Tier(v)
 			if t.IsValid() {
 				return t
 			}
-			// Any other value (corruption, manual edit) → fail closed.
+			// Any other value (corruption, manual edit, future
+			// version) → fail closed. Don't fall through to registry.
 			return TierNone
 		}
+		// v == "" with no error → key genuinely absent. Fall through
+		// to the first-run registry-migration path below.
 	}
 
 	// 2. Registry fallback (Windows-only; stub on other platforms).
+	//    Only reached when state DB is unavailable (meta == nil) OR
+	//    when state DB is readable but the key is genuinely unset
+	//    (first run after install).
 	if v := readTierFromRegistry(); v != "" {
 		t := Tier(v)
 		if t.IsValid() {

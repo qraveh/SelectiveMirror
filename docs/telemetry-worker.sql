@@ -45,34 +45,49 @@ AS $$
 DECLARE
     affected BIGINT;
 BEGIN
+    -- SM-178: each taxonomy dimension is collapsed to one row per
+    -- bug_report BEFORE we join into the parent — so a report tagged
+    -- with both a 'bug.kind' and a 'bug.surface' produces one
+    -- (kind, surface) tuple, not the cross-product
+    -- {(kind,surface), (kind,unknown), (unknown,surface),
+    -- (unknown,unknown)} that the previous join order produced.
+    -- The collapsing aggregator picks an arbitrary slug when a single
+    -- report has multiple terms in one namespace; that is acceptable
+    -- because the schema does not document multi-tag-per-namespace as
+    -- a valid state. (If multi-tag becomes a feature, change MIN()
+    -- to a deterministic tiebreaker.)
     INSERT INTO telemetry.bug_daily_rollup AS dst (
         rollup_date, bug_kind, bug_surface, client_version,
         reports, unique_signatures, unclassified_reports
     )
     SELECT
         target_date AS rollup_date,
-        COALESCE(MAX(t_kind.slug),    'unknown') AS bug_kind,
-        COALESCE(MAX(t_surface.slug), 'unknown') AS bug_surface,
-        COALESCE(br.client_version,   'unknown') AS client_version,
+        COALESCE(kind_per_report.slug,    'unknown') AS bug_kind,
+        COALESCE(surface_per_report.slug, 'unknown') AS bug_surface,
+        COALESCE(br.client_version,       'unknown') AS client_version,
         COUNT(DISTINCT br.id)         AS reports,
         COUNT(DISTINCT br.signature)
             FILTER (WHERE br.signature IS NOT NULL) AS unique_signatures,
         COUNT(DISTINCT br.id)
             FILTER (WHERE br.taxonomy_state != 'classified') AS unclassified_reports
     FROM telemetry.bug_report br
-    LEFT JOIN telemetry.bug_report_taxonomy_assignment a_kind
-        ON a_kind.bug_report_id = br.id
-    LEFT JOIN telemetry.taxonomy_term t_kind
-        ON t_kind.id = a_kind.term_id
-       AND t_kind.namespace = 'bug.kind'
-    LEFT JOIN telemetry.bug_report_taxonomy_assignment a_surface
-        ON a_surface.bug_report_id = br.id
-    LEFT JOIN telemetry.taxonomy_term t_surface
-        ON t_surface.id = a_surface.term_id
-       AND t_surface.namespace = 'bug.surface'
+    LEFT JOIN (
+        SELECT a.bug_report_id, MIN(t.slug) AS slug
+        FROM telemetry.bug_report_taxonomy_assignment a
+        JOIN telemetry.taxonomy_term t ON t.id = a.term_id
+        WHERE t.namespace = 'bug.kind'
+        GROUP BY a.bug_report_id
+    ) kind_per_report ON kind_per_report.bug_report_id = br.id
+    LEFT JOIN (
+        SELECT a.bug_report_id, MIN(t.slug) AS slug
+        FROM telemetry.bug_report_taxonomy_assignment a
+        JOIN telemetry.taxonomy_term t ON t.id = a.term_id
+        WHERE t.namespace = 'bug.surface'
+        GROUP BY a.bug_report_id
+    ) surface_per_report ON surface_per_report.bug_report_id = br.id
     WHERE br.reported_at >= target_date
       AND br.reported_at <  target_date + INTERVAL '1 day'
-    GROUP BY t_kind.slug, t_surface.slug, br.client_version
+    GROUP BY kind_per_report.slug, surface_per_report.slug, br.client_version
     ON CONFLICT (rollup_date, bug_kind, bug_surface, client_version)
     DO UPDATE SET
         reports              = EXCLUDED.reports,
@@ -154,31 +169,58 @@ COMMENT ON FUNCTION telemetry.refresh_install_daily_rollup(DATE) IS
 -- still idempotent and analytics still see the row), but frees the bulk
 -- storage of the original payload.
 --
--- Only operates on classified rows. Unclassified envelopes remain
--- intact for inspection regardless of age.
+-- SM-172: also strips the normalized raw text fields on
+-- telemetry.bug_report (`report_text`, `anomaly_summary`,
+-- `status_snapshot`). The PRIVACY.md commitment is "raw payloads are
+-- stripped after 90 days"; the previous implementation only emptied
+-- ingest_envelope.payload, leaving the same content alive in
+-- bug_report's normalized columns. Now both layers are purged in a
+-- single transaction, keyed on the same retention boundary.
+--
+-- Only operates on classified rows. Unclassified envelopes / unfiled
+-- bug reports remain intact for inspection regardless of age — the
+-- maintainer needs them to do the classification.
 
 CREATE OR REPLACE FUNCTION telemetry.purge_old_envelopes(
     retention_days INTEGER DEFAULT 90
 )
-RETURNS TABLE(purged_count BIGINT)
+RETURNS TABLE(purged_envelopes BIGINT, purged_bug_report_text BIGINT)
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    affected BIGINT;
+    affected_envelopes      BIGINT;
+    affected_bug_report     BIGINT;
+    cutoff                  TIMESTAMPTZ := now() - (retention_days || ' days')::INTERVAL;
 BEGIN
+    -- Layer 1: raw envelope payload.
     UPDATE telemetry.ingest_envelope
     SET payload = '{}'::jsonb
-    WHERE received_at < (now() - (retention_days || ' days')::INTERVAL)
+    WHERE received_at < cutoff
       AND payload != '{}'::jsonb
       AND classification_state = 'classified';
+    GET DIAGNOSTICS affected_envelopes = ROW_COUNT;
 
-    GET DIAGNOSTICS affected = ROW_COUNT;
-    RETURN QUERY SELECT affected;
+    -- Layer 2: SM-172 — normalized raw text on bug_report.
+    -- report_text is NOT NULL TEXT, so we replace with the empty
+    -- string. anomaly_summary and status_snapshot are NOT NULL JSONB
+    -- with default '{}'::jsonb, matching the empty-payload sentinel
+    -- we use for envelopes. Only purge classified rows so the
+    -- maintainer can still look at unfiled reports.
+    UPDATE telemetry.bug_report
+    SET report_text     = '',
+        anomaly_summary = '{}'::jsonb,
+        status_snapshot = '{}'::jsonb
+    WHERE reported_at < cutoff
+      AND taxonomy_state = 'classified'
+      AND (report_text != '' OR anomaly_summary != '{}'::jsonb OR status_snapshot != '{}'::jsonb);
+    GET DIAGNOSTICS affected_bug_report = ROW_COUNT;
+
+    RETURN QUERY SELECT affected_envelopes, affected_bug_report;
 END;
 $$;
 
 COMMENT ON FUNCTION telemetry.purge_old_envelopes(INTEGER) IS
-'Retention janitor: nulls out raw payloads of classified ingest_envelope rows older than retention_days (default 90). Keeps the row and dedupe_key for idempotency. Safe to run repeatedly; no-op when nothing matches.';
+'Retention janitor: empties raw payloads on classified ingest_envelope rows AND raw text on classified bug_report rows older than retention_days (default 90). Keeps row identity / dedupe_key / aggregate-safe metadata. Safe to run repeatedly; no-op when nothing matches. Returns (envelope_rows_emptied, bug_report_rows_emptied).';
 
 -- ============================================================================
 -- Schedule the jobs

@@ -117,29 +117,44 @@ SELECT
 FROM wk;
 """
 
+# SM-166 + SM-178: bug-this-week breakdown.
+# - install_id (and any prefix of it) is NEVER published. The previous
+#   query exposed a 4-char prefix; even at sub-1% collision risk, it
+#   directly contradicts PRIVACY.md's "no install_id" promise for the
+#   public digest.
+# - The taxonomy joins use the same per-dimension pre-aggregation as
+#   refresh_bug_daily_rollup so a single multi-tag report doesn't
+#   appear as multiple rows.
 Q_BUGS_THIS_WEEK = """
 WITH wk AS (
   SELECT date_trunc('week', now() AT TIME ZONE 'UTC')::date AS this_wk
+),
+kind_per_report AS (
+  SELECT a.bug_report_id, MIN(t.slug) AS slug
+  FROM telemetry.bug_report_taxonomy_assignment a
+  JOIN telemetry.taxonomy_term t ON t.id = a.term_id
+  WHERE t.namespace = 'bug.kind'
+  GROUP BY a.bug_report_id
+),
+surface_per_report AS (
+  SELECT a.bug_report_id, MIN(t.slug) AS slug
+  FROM telemetry.bug_report_taxonomy_assignment a
+  JOIN telemetry.taxonomy_term t ON t.id = a.term_id
+  WHERE t.namespace = 'bug.surface'
+  GROUP BY a.bug_report_id
 )
 SELECT
-  br.reported_at::date          AS day,
-  COALESCE(t_kind.slug,    'unknown') AS bug_kind,
-  COALESCE(t_surface.slug, 'unknown') AS bug_surface,
-  COALESCE(br.client_version, 'unknown') AS client_version,
-  COALESCE(br.signature, '<no signature>') AS signature,
-  LEFT(COALESCE(br.install_id, ''), 4) AS install_id_4
+  COALESCE(kind_per_report.slug,    'unknown') AS bug_kind,
+  COALESCE(surface_per_report.slug, 'unknown') AS bug_surface,
+  COALESCE(br.client_version,       'unknown') AS client_version,
+  COUNT(*)                                     AS reports
 FROM telemetry.bug_report br, wk
-LEFT JOIN telemetry.bug_report_taxonomy_assignment a_kind
-       ON a_kind.bug_report_id = br.id
-LEFT JOIN telemetry.taxonomy_term t_kind
-       ON t_kind.id = a_kind.term_id AND t_kind.namespace = 'bug.kind'
-LEFT JOIN telemetry.bug_report_taxonomy_assignment a_surf
-       ON a_surf.bug_report_id = br.id
-LEFT JOIN telemetry.taxonomy_term t_surface
-       ON t_surface.id = a_surf.term_id AND t_surface.namespace = 'bug.surface'
+LEFT JOIN kind_per_report    ON kind_per_report.bug_report_id    = br.id
+LEFT JOIN surface_per_report ON surface_per_report.bug_report_id = br.id
 WHERE br.reported_at >= wk.this_wk
   AND br.reported_at <  wk.this_wk + INTERVAL '7 days'
-ORDER BY br.reported_at ASC;
+GROUP BY kind_per_report.slug, surface_per_report.slug, br.client_version
+ORDER BY reports DESC, bug_kind, bug_surface, client_version;
 """
 
 Q_SIGNATURE_RECURRENCE = """
@@ -252,13 +267,17 @@ def sparkline(values: list) -> str:
 
 
 # SM-166: Server-side fields inserted into the published Markdown
-# digest (signature, client_version, bug_kind, bug_surface, install_id_4)
-# originate from opt-in submissions. Despite schema validation at
-# ingest, an unforeseen string containing pipes, backticks, link syntax,
-# or line breaks could corrupt the rendered table or inject formatting
-# / clickable content into the public docs. md_cell_escape neutralizes
+# digest (signature, client_version, bug_kind, bug_surface) originate
+# from opt-in submissions. Despite schema validation at ingest, an
+# unforeseen string containing pipes, backticks, link syntax, or line
+# breaks could corrupt the rendered table or inject formatting /
+# clickable content into the public docs. md_cell_escape neutralizes
 # Markdown structural characters and collapses whitespace so a single
 # cell stays a single cell. Truncation keeps wide tables readable.
+#
+# Note: install_id (or any prefix of it) is intentionally NEVER part
+# of the digest — see Q_BUGS_THIS_WEEK above for the SM-166 design
+# rationale.
 _MD_ESCAPE_PAIRS = (
     ("\\", "\\\\"),
     ("|", "\\|"),
@@ -469,32 +488,75 @@ def render_headline(headline, sparkline_values):
     )
 
 
-def render_bugs_section(bugs, recurrence, quiet_kinds):
+def render_bugs_section(bugs_this_week, recurrence, quiet_kinds):
+    """SM-166: per-report rows with low-n privacy.
+
+    Rows are now aggregated by (kind, surface, client_version) at the
+    SQL layer with a row count. We then apply the k-anonymity floor:
+    cells with fewer than K_ANONYMITY_FLOOR reports are suppressed
+    entirely (a "<5"-shaped placeholder would still leak the existence
+    of a unique combination).
+
+    Recurring signatures get their own k-anon-bounded section below
+    (it requires distinct_installs >= K).
+    """
     out = ["## Bug reports — this week\n"]
-    if not bugs:
+    if not bugs_this_week:
         out.append("_No bug reports this week._\n")
     else:
-        out.append(
-            md_table(
-                [
-                    {
-                        "Kind": b["bug_kind"],
-                        "Surface": b["bug_surface"],
-                        "Version": b["client_version"],
-                        "Signature": b["signature"][:60],
-                        "Install (4)": b["install_id_4"] or "—",
-                    }
-                    for b in bugs
-                ],
-                ["Kind", "Surface", "Version", "Signature", "Install (4)"],
+        visible = k_anon_filter(bugs_this_week, "reports")
+        suppressed = len(bugs_this_week) - len(visible)
+        if not visible:
+            out.append(
+                f"_All bug-categorization cells fall below the "
+                f"k-anonymity floor ({K_ANONYMITY_FLOOR}). "
+                f"Suppressed: {suppressed} category combination(s)._\n"
             )
-        )
+        else:
+            out.append(
+                md_table(
+                    [
+                        {
+                            "Kind": b["bug_kind"],
+                            "Surface": b["bug_surface"],
+                            "Version": b["client_version"],
+                            "Reports": b["reports"],
+                        }
+                        for b in visible
+                    ],
+                    ["Kind", "Surface", "Version", "Reports"],
+                    aligns=["left", "left", "left", "right"],
+                )
+            )
+            if suppressed:
+                out.append(
+                    f"\n_({suppressed} additional category combination(s) "
+                    f"with reports below k={K_ANONYMITY_FLOOR} suppressed.)_"
+                )
         out.append("")
 
-    out.append("\n### Recurring signatures (last 90 days, n≥2)\n")
-    if not recurrence:
-        out.append("_No signature recurrences. Either everything's unique, or "
-                   "we don't have enough data yet._\n")
+    # SM-166: apply k-anonymity to recurrence rows. A signature seen by
+    # only 1-4 distinct installs identifies those installs (they're
+    # the only ones in that bucket); only show signatures that 5+
+    # different users have hit.
+    visible_recurrence = [
+        r for r in recurrence
+        if (r.get("distinct_installs") or 0) >= K_ANONYMITY_FLOOR
+    ]
+    suppressed_recurrence = len(recurrence) - len(visible_recurrence)
+    out.append(
+        f"\n### Recurring signatures "
+        f"(last 90 days, distinct installs ≥ {K_ANONYMITY_FLOOR})\n"
+    )
+    if not visible_recurrence:
+        msg = "_No signature has been hit by enough distinct installs to publish."
+        if suppressed_recurrence:
+            msg += (
+                f" Suppressed {suppressed_recurrence} signature(s) "
+                f"below k={K_ANONYMITY_FLOOR}."
+            )
+        msg += "_\n"
+        out.append(msg)
     else:
         out.append(
             md_table(
@@ -507,13 +569,18 @@ def render_bugs_section(bugs, recurrence, quiet_kinds):
                         "Last seen": r["last_seen"],
                         "Versions": ", ".join(r["versions"][:4]),
                     }
-                    for r in recurrence
+                    for r in visible_recurrence
                 ],
                 ["Signature", "Distinct installs", "Total reports",
                  "First seen", "Last seen", "Versions"],
                 aligns=["left", "right", "right", "left", "left", "left"],
             )
         )
+        if suppressed_recurrence:
+            out.append(
+                f"\n_({suppressed_recurrence} additional signature(s) "
+                f"below k={K_ANONYMITY_FLOOR} suppressed.)_"
+            )
 
     out.append("\n### What nobody hit this week\n")
     if not quiet_kinds:

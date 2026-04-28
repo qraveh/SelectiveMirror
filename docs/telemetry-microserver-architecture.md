@@ -61,10 +61,24 @@ A separate, narrowly-scoped data flow for clients that explicitly opt in. Disabl
 
 ### Consent surfaces
 
-Two surfaces, both default to disabled:
+Two surfaces, both default to **None** (silent):
 
-1. **MSI installer checkbox** at install time. Wording on the checkbox: "Help improve SelectiveMirror by sharing anonymous install/version telemetry. You can change this anytime with `smirror telemetry off`." Unchecked by default. Setting the property `INSTALL_TELEMETRY_OPT_IN=1` (via checkbox or `msiexec` command line) writes the consent to the local state at install time.
-2. **Runtime CLI**: `smirror telemetry on/off/status`. Persists to the state DB metadata. Independent of the installer choice (a user who declined at install time can opt in later, and vice versa). The most recent decision wins.
+1. **MSI installer tier selector** at install time. Property
+   `INSTALL_TELEMETRY_TIER` (string: `none` / `standard` /
+   `reliability`); default `none`. Set via `msiexec
+   INSTALL_TELEMETRY_TIER=standard` or, when the custom dialog ships
+   (SM-168 deferred), via radio buttons. Writes
+   `HKLM\Software\SelectiveMirror\TelemetryTier` (REG_SZ).
+2. **Runtime CLI** (planned, SM-157): `smirror telemetry [none |
+   standard | reliability | status | policy | forget]`. Persists to
+   the state DB metadata. Most recent decision wins; the registry
+   value is consulted only on first run after install.
+
+Historical note: pre-v0.9.16 used a boolean `INSTALL_TELEMETRY_OPT_IN`
+property and `TelemetryOptIn` registry value (REG_DWORD). On upgrade,
+the legacy `TelemetryOptIn=1` is treated as `standard`; `=0` becomes
+`none`. See `installer/TelemetryConsent.wxi` for the migration
+comment.
 
 The consent decision is checked at startup; no install-telemetry events fire unless consent is currently `on`.
 
@@ -548,12 +562,23 @@ The repository contains earlier telemetry scaffolding (`internal/telemetry/`) th
 - non-blocking telemetry goroutine with durable on-disk queue, exponential backoff with jitter, dead-letter handling
 - explicit user approval flow: generate bundle, show preview, prompt for consent, enqueue, return immediately
 
-### Install-telemetry consent + emission (opt-in)
+### Install-telemetry consent + emission (three-tier opt-in)
 
-- consent flag in state DB metadata (key: `install_telemetry_opt_in`, values: `'on' | 'off'`)
-- migration on first run: read `HKLM\Software\SelectiveMirror\TelemetryOptIn` (set by MSI custom action) and copy into state DB metadata, then ignore registry going forward
-- `smirror telemetry on/off/status` commands — design in [cli-telemetry-command.md](./cli-telemetry-command.md)
-- startup probe: if consent is `on` and `first_seen` not yet recorded → enqueue `first_seen` event
+- consent flag in state DB metadata (key: `telemetry_tier`, values:
+  `'none' | 'standard' | 'reliability'`); default `'none'`.
+- migration on first run: read
+  `HKLM\Software\SelectiveMirror\TelemetryTier` (string, set by MSI
+  custom action) and copy into state DB metadata; then ignore the
+  registry going forward. Legacy boolean `TelemetryOptIn` from pre-
+  v0.9.16 is translated (1 → `standard`, 0 → `none`).
+- `smirror telemetry [none|standard|reliability|status|policy|forget]`
+  commands — design in
+  [`cli-telemetry-command.md`](./cli-telemetry-command.md);
+  implementation status in
+  [`SM-157-telemetry-cli-plan.md`](./SM-157-telemetry-cli-plan.md).
+- startup probe: if tier ≥ `standard` and `first_seen` not yet
+  recorded → enqueue `first_seen` event. Tier `reliability` adds
+  bucketed deltas at upgrade events (only).
 - startup probe: if consent is `on` and current_version differs from stored last version → enqueue `upgrade` event
 - on `telemetry off`: clear queued install events from disk; do not affect bug-report queue
 - shared HMAC client with bug-report path (single signing implementation)
@@ -629,9 +654,15 @@ For a single-maintainer OSS project at low volume, dashboards are the wrong tool
 1. Create the Postgres schema and migrations from `telemetry-microserver.sql`.
 2. Apply RLS + CHECK constraints from `telemetry-rls.sql` (size cap, anon INSERT only on `ingest_envelope`, etc.).
 3. Configure HMAC verification function in Postgres + master key in Supabase Vault.
-4. Wire MSI checkbox to `INSTALL_TELEMETRY_OPT_IN` property + registry write (see `installer/TelemetryConsent.wxi`).
-5. Implement client-side `smirror telemetry on/off/status` command and consent persistence in state DB metadata.
-6. Set up Cloudflare Worker (deferred until first telemetry-capable binary ships).
+4. Wire MSI tier selector to `INSTALL_TELEMETRY_TIER` property +
+   registry write (see `installer/TelemetryConsent.wxi`).
+5. Implement client-side
+   `smirror telemetry [none|standard|reliability|status|policy|forget]`
+   command and consent persistence in state DB metadata
+   (`SM-157` — deferred to a focused session; design in
+   [`cli-telemetry-command.md`](./cli-telemetry-command.md)).
+6. Set up Cloudflare Worker (live as of 0.9.4-dev; further hardening
+   tracked under `SM-163`).
 7. Rewrite client-side telemetry: bug-report submission (with per-event approval) + install-telemetry emission (consent-gated, first_seen + upgrade only) + shared HMAC signer.
 8. Implement the asynchronous classifier with deterministic rules only.
 9. Add review queue and duplicate clustering.

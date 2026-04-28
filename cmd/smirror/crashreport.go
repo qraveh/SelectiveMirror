@@ -14,6 +14,7 @@ import (
 
 	"github.com/qraveh/SelectiveMirror/internal/config"
 	"github.com/qraveh/SelectiveMirror/internal/rclone"
+	"github.com/qraveh/SelectiveMirror/internal/telemetry"
 )
 
 // crashReportDir is the directory where crash reports are saved.
@@ -53,6 +54,14 @@ func runWithCrashReport(fn func()) {
 }
 
 // buildCrashReport assembles the crash report content from a panic.
+//
+// SM-171: the assembled report is run through telemetry.SanitizeReport
+// before being returned, so callers (saveCrashReport for the on-disk
+// copy and offerCrashSubmission for the GitHub-bound copy) get the
+// same redacted bytes. The previous implementation only stripped the
+// home directory from log lines, which left filenames, remote URIs,
+// and credential strings intact — exactly the data the privacy policy
+// promises will never leave the machine.
 func buildCrashReport(panicVal interface{}, stack string) string {
 	var b strings.Builder
 	tz := time.Now().Format("-07:00")
@@ -78,10 +87,12 @@ func buildCrashReport(panicVal interface{}, stack string) string {
 	}
 
 	configPath := config.DefaultConfigPath()
+	var loadedCfg *config.Global
 	if cfg, err := config.Load(configPath); err == nil {
+		loadedCfg = cfg
 		b.WriteString(fmt.Sprintf("config: %s (%d mirrors)\n", configPath, len(cfg.Projects)))
 
-		// Recent log lines — redacted
+		// Recent log lines — redacted by the shared sanitizer below.
 		b.WriteString("\n--- Recent Logs (last 30 lines) ---\n")
 		if logData, err := os.ReadFile(cfg.LogFile); err == nil {
 			lines := strings.Split(string(logData), "\n")
@@ -89,11 +100,7 @@ func buildCrashReport(panicVal interface{}, stack string) string {
 			if len(lines) > 30 {
 				start = len(lines) - 30
 			}
-			home, _ := os.UserHomeDir()
 			for _, line := range lines[start:] {
-				if home != "" {
-					line = strings.ReplaceAll(line, home, "<USER_HOME>")
-				}
 				b.WriteString(line + "\n")
 			}
 		} else {
@@ -103,7 +110,28 @@ func buildCrashReport(panicVal interface{}, stack string) string {
 		b.WriteString(fmt.Sprintf("config: %s (load error: %v)\n", configPath, err))
 	}
 
-	return b.String()
+	// SM-171: route the entire crash bundle through the shared
+	// sanitizer. Path prefixes, mirror labels, credentials, and
+	// remote URIs all get redacted in one pass — exactly the same
+	// transformation report-bug applies. Any future field added
+	// above benefits automatically.
+	report := b.String()
+	sanOpts := telemetry.SanitizeOptions{}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		sanOpts.HomeDir = home
+	}
+	if dir := filepath.Dir(configPath); dir != "" && dir != "." {
+		sanOpts.ConfigDir = dir
+	}
+	if loadedCfg != nil {
+		sanOpts.MirrorPaths = make([]string, len(loadedCfg.Projects))
+		sanOpts.MirrorNames = make([]string, len(loadedCfg.Projects))
+		for i, p := range loadedCfg.Projects {
+			sanOpts.MirrorPaths[i] = p.LocalPath
+			sanOpts.MirrorNames[i] = p.Name
+		}
+	}
+	return telemetry.SanitizeReport(report, sanOpts)
 }
 
 // saveCrashReport writes a crash report file to ~/.selectivemirror/.
@@ -134,13 +162,26 @@ func saveCrashReport(panicVal interface{}, stack string) string {
 	return filename
 }
 
-// offerCrashSubmission prompts the user to submit the crash report as a GitHub issue.
+// offerCrashSubmission prompts the user to submit the crash report as
+// a GitHub issue.
+//
+// SM-171:
+//   - The prompt now defaults to N, not Y. Submitting a crash report
+//     publishes process state to a public issue tracker; the default
+//     must be the side that doesn't surprise a user who just hit Enter.
+//   - The submitted bundle is re-sanitized via telemetry.SanitizeReport.
+//     The on-disk file written by saveCrashReport was already
+//     sanitized by buildCrashReport, but we sanitize again here in
+//     case a future code path writes a non-sanitized file or in case
+//     the file was edited externally between save and submit.
+//   - We never URL-encode the raw bytes. Even on the truncation
+//     branch, we sanitize the truncated slice before encoding.
 func offerCrashSubmission(reportPath string) {
 	if reportPath == "" {
 		return
 	}
 
-	fmt.Fprint(os.Stderr, "Submit this report to help fix the issue? [Y/n] ")
+	fmt.Fprint(os.Stderr, "Submit this report to help fix the issue? [y/N] ")
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
 	if err != nil {
@@ -149,27 +190,47 @@ func offerCrashSubmission(reportPath string) {
 		return
 	}
 	line = strings.TrimSpace(strings.ToLower(line))
-	if line == "n" || line == "no" {
+	// Default-N: only an explicit affirmative submits.
+	if line != "y" && line != "yes" {
 		fmt.Fprintln(os.Stderr, "Report saved. Submit later: smirror report-bug --open")
 		return
 	}
 
-	// Read the report and open browser with pre-filled issue
-	report, err := os.ReadFile(reportPath)
+	// Read the report and re-sanitize before sending.
+	rawReport, err := os.ReadFile(reportPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Cannot read report: %v\n", err)
 		return
 	}
+	sanOpts := telemetry.SanitizeOptions{}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		sanOpts.HomeDir = home
+	}
+	configPath := config.DefaultConfigPath()
+	if dir := filepath.Dir(configPath); dir != "" && dir != "." {
+		sanOpts.ConfigDir = dir
+	}
+	if cfg, err := config.Load(configPath); err == nil {
+		sanOpts.MirrorPaths = make([]string, len(cfg.Projects))
+		sanOpts.MirrorNames = make([]string, len(cfg.Projects))
+		for i, p := range cfg.Projects {
+			sanOpts.MirrorPaths[i] = p.LocalPath
+			sanOpts.MirrorNames[i] = p.Name
+		}
+	}
+	report := telemetry.SanitizeReport(string(rawReport), sanOpts)
 
 	crashURL := issueBugURL + "&title=" + url.QueryEscape("[Crash] panic in smirror "+version)
-	encoded := url.QueryEscape(string(report))
-	fullURL := crashURL + "&environment=" + encoded
+	fullURL := crashURL + "&environment=" + url.QueryEscape(report)
 
-	// Windows cmd.exe has ~8191 char limit for URLs
+	// Windows cmd.exe has ~8191 char limit for URLs. If we have to
+	// truncate, sanitize the TRUNCATED slice (not the raw input) so
+	// the truncation can't accidentally cut into a redacted region
+	// and re-expose the next byte.
 	if len(fullURL) > 8000 {
-		truncated := string(report)
+		truncated := report
 		if len(truncated) > 3500 {
-			truncated = truncated[:3500] + "\n... (truncated, paste full report from " + reportPath + ")"
+			truncated = truncated[:3500] + "\n... (truncated, paste full sanitized report from " + reportPath + ")"
 		}
 		fullURL = crashURL + "&environment=" + url.QueryEscape(truncated)
 	}
@@ -216,14 +277,15 @@ func checkUnsentCrashReports(configPath string) {
 		fmt.Fprintf(os.Stderr, "Note: %d unsent crash reports found.\n", len(unsent))
 	}
 
-	fmt.Fprint(os.Stderr, "Submit now? [Y/n] ")
+	// SM-171: default-N here too, mirroring the post-panic prompt.
+	fmt.Fprint(os.Stderr, "Submit now? [y/N] ")
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		return // non-interactive
 	}
 	line = strings.TrimSpace(strings.ToLower(line))
-	if line == "n" || line == "no" {
+	if line != "y" && line != "yes" {
 		fmt.Fprintln(os.Stderr)
 		return
 	}

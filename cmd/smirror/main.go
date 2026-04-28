@@ -18,7 +18,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	gosync "sync"
 	"syscall"
@@ -42,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.17-dev"
+var version = "0.9.18-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -1969,9 +1968,28 @@ func openBrowserURL(rawURL string) error {
 	return exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL).Start()
 }
 
+// readReportBugTier reads the user's telemetry tier the same way the
+// (deferred) submit flow will: state DB first, registry fallback,
+// fail-closed to TierNone on read errors. Used by report-bug --submit
+// to distinguish the None / Standard / Reliability code paths. SM-158.
+func readReportBugTier(configPath string) telemetry.Tier {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return telemetry.ReadTier(nil)
+	}
+	st, err := state.Open(cfg.StateDB)
+	if err != nil {
+		return telemetry.ReadTier(nil)
+	}
+	defer st.Close()
+	return telemetry.ReadTier(st)
+}
+
 func cmdReportBug(configPath string, args []string) {
 	toStdout := false
 	openBrowser := false
+	submitFlag := false
+	oneShot := false
 	for _, a := range args {
 		switch a {
 		case "--help", "-h":
@@ -1980,17 +1998,38 @@ func cmdReportBug(configPath string, args []string) {
 Generate a diagnostic report for bug filing.
 
 Flags:
-  --stdout    Print report to stdout instead of saving to file
-  --open      Open a pre-filled GitHub issue in the browser
+  --stdout      Print report to stdout instead of saving to file
+  --browser     Open a pre-filled GitHub issue in the browser after
+                generating the report
+  --open        Deprecated alias for --browser; will be removed in a
+                future release
+  --submit      Submit the sanitized report through the telemetry
+                bug-report endpoint (per-event approval; requires
+                Standard or Reliability tier — or pair with --one-shot)
+  --one-shot    Allow a single bug-report submission while remaining
+                on tier None: per-event consent, no ongoing telemetry
 
 The report includes: version, platform, rclone info, config summary
 (sanitized), state DB stats, and recent log lines. All paths are
-sanitized and remote paths are redacted.`)
+sanitized, remote paths are redacted, and credential-style values
+(token=, password=, bearer …) are stripped before output.
+
+See "smirror telemetry policy" or docs/PRIVACY.md for the contract
+covering each submit / browser / one-shot path.`)
 			return
 		case "--stdout":
 			toStdout = true
-		case "--open":
+		case "--browser":
 			openBrowser = true
+		case "--open":
+			// SM-158 transition: --open is the legacy spelling. We
+			// continue to honor it but the help text marks it
+			// deprecated. New code/docs should use --browser.
+			openBrowser = true
+		case "--submit":
+			submitFlag = true
+		case "--one-shot":
+			oneShot = true
 		default:
 			if strings.HasPrefix(a, "-") {
 				fmt.Fprintf(os.Stderr, "unknown flag: %s\nRun 'smirror report-bug --help' for usage.\n", a)
@@ -1998,6 +2037,41 @@ sanitized and remote paths are redacted.`)
 			}
 		}
 	}
+
+	// SM-158 (partial): --submit at tier None. The full per-tier
+	// submission pipeline (preview → approve → enqueue → send) is
+	// still deferred (see docs/SM-158-report-bug-submit-plan.md), but
+	// the surface needs to exist now so:
+	//   1. Users discover it without hitting "unknown flag"
+	//   2. None-tier non-interactive callers get a consistent failure
+	//      with a pointer to --one-shot
+	// When the full pipeline lands, this branch will route through
+	// the stuck-user prompt for interactive callers and the actual
+	// submission code for tier == standard / reliability.
+	if submitFlag {
+		tier := readReportBugTier(configPath)
+		if tier == telemetry.TierNone && !oneShot {
+			fmt.Fprintln(os.Stderr,
+				"bug submission requires telemetry tier 'standard' or 'reliability', "+
+					"or pass --one-shot for per-event consent.")
+			fmt.Fprintln(os.Stderr,
+				"View options:  smirror telemetry policy")
+			os.Exit(ExitError)
+		}
+		// At Standard / Reliability, or with --one-shot, the submit
+		// pipeline is not yet wired; emit a clear "not yet implemented"
+		// pointer rather than silently doing nothing.
+		fmt.Fprintln(os.Stderr,
+			"Note: --submit pipeline is not yet wired in this build. "+
+				"Use --stdout to inspect the report locally, or --browser to "+
+				"open a pre-filled GitHub issue.")
+		fmt.Fprintln(os.Stderr,
+			"Tracking: docs/SM-158-report-bug-submit-plan.md")
+		// Continue to print/save the report so users still get value;
+		// don't exit-1 because at Standard/Reliability the user isn't
+		// blocked on consent — they're blocked on us shipping the code.
+	}
+	_ = oneShot // referenced by the conditional above
 
 	var b strings.Builder
 	tz := time.Now().Format("-07:00")
@@ -2108,86 +2182,28 @@ sanitized and remote paths are redacted.`)
 		}
 	}
 
-	// SM-103 + SM-164: Sanitize all paths AND mirror local paths AND
-	// mirror names in the report. Replace:
-	//   home directory     → ~
-	//   config directory   → <configdir>
-	//   mirror local paths → <mirror_N_path>
-	//   mirror names       → mirror_N
-	// Done case-insensitively because Windows paths are case-insensitive.
+	// SM-103 + SM-164 + SM-171: route the report through the shared
+	// telemetry sanitizer (internal/telemetry/sanitize.go). It covers
+	// path prefixes, mirror names, mirror local paths, credential-style
+	// key=value pairs, rclone-style remote URIs, and trailing-path
+	// redaction. Both the bug-report and crash-report paths use this.
 	report := b.String()
-	sanitizePaths := []struct{ pattern, replacement string }{}
+	sanOpts := telemetry.SanitizeOptions{}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		sanitizePaths = append(sanitizePaths,
-			struct{ pattern, replacement string }{home, "~"},
-			struct{ pattern, replacement string }{filepath.ToSlash(home), "~"},
-		)
+		sanOpts.HomeDir = home
 	}
-	// Also sanitize config directory (covers sandbox paths not under home)
 	if configDir := filepath.Dir(configPath); configDir != "" && configDir != "." {
-		sanitizePaths = append(sanitizePaths,
-			struct{ pattern, replacement string }{configDir, "<configdir>"},
-			struct{ pattern, replacement string }{filepath.ToSlash(configDir), "<configdir>"},
-		)
+		sanOpts.ConfigDir = configDir
 	}
-	// SM-164: redact each mirror's local path (handles absolute Windows
-	// paths like C:\Code\MyProject that aren't under the home dir, plus
-	// the slash-flipped form). Longest patterns first so a parent path
-	// doesn't shadow a more specific child.
 	if cfg != nil {
-		// Sort indices by descending local-path length to ensure longest
-		// substring matches first. Rare edge case but cheap to be safe.
-		order := make([]int, len(cfg.Projects))
-		for i := range cfg.Projects {
-			order[i] = i
-		}
-		sort.SliceStable(order, func(a, b int) bool {
-			return len(cfg.Projects[order[a]].LocalPath) > len(cfg.Projects[order[b]].LocalPath)
-		})
-		for _, i := range order {
-			lp := cfg.Projects[i].LocalPath
-			if lp == "" {
-				continue
-			}
-			repl := fmt.Sprintf("<mirror_%d_path>", i)
-			sanitizePaths = append(sanitizePaths,
-				struct{ pattern, replacement string }{lp, repl},
-				struct{ pattern, replacement string }{filepath.ToSlash(lp), repl},
-			)
-		}
-	}
-	for _, sp := range sanitizePaths {
-		patLower := strings.ToLower(sp.pattern)
-		for {
-			idx := strings.Index(strings.ToLower(report), patLower)
-			if idx < 0 {
-				break
-			}
-			report = report[:idx] + sp.replacement + report[idx+len(sp.pattern):]
-		}
-	}
-	// SM-164: substitute mirror names AFTER paths (so a name appearing
-	// inside a path is already covered by the path substitution). Names
-	// are user-chosen identifiers; substring replacement is correct for
-	// these because they're typically distinctive (e.g., "ClientAcme",
-	// not English words). Sort by descending length to avoid replacing
-	// a name that's a prefix of another.
-	if cfg != nil {
-		type nameSub struct{ name, replacement string }
-		subs := make([]nameSub, 0, len(cfg.Projects))
+		sanOpts.MirrorPaths = make([]string, len(cfg.Projects))
+		sanOpts.MirrorNames = make([]string, len(cfg.Projects))
 		for i, p := range cfg.Projects {
-			if p.Name == "" {
-				continue
-			}
-			subs = append(subs, nameSub{p.Name, fmt.Sprintf("mirror_%d", i)})
-		}
-		sort.SliceStable(subs, func(a, b int) bool {
-			return len(subs[a].name) > len(subs[b].name)
-		})
-		for _, s := range subs {
-			report = strings.ReplaceAll(report, s.name, s.replacement)
+			sanOpts.MirrorPaths[i] = p.LocalPath
+			sanOpts.MirrorNames[i] = p.Name
 		}
 	}
+	report = telemetry.SanitizeReport(report, sanOpts)
 
 	if toStdout {
 		fmt.Print(report)

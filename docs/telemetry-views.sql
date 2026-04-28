@@ -263,6 +263,40 @@ COMMENT ON VIEW telemetry.install_config_distribution IS
 
 
 -- ============================================================================
+-- View 8: version_dist
+-- ============================================================================
+--
+-- SM-175: the operations runbook (`docs/operations/telemetry-ops.md`)
+-- references `telemetry.version_dist` from the bad-version-recovery
+-- procedure. Defines it here as the canonical "active install version
+-- distribution over the last 30 days," matching the digest's
+-- Q_VERSION_DIST query so the maintainer sees the same number on the
+-- dashboard and in the published digest.
+--
+-- "Active" = emitted any installation_event (first_seen / upgrade)
+-- within the last 30 days. We then take each install's most recent
+-- client_version and group.
+
+CREATE OR REPLACE VIEW telemetry.version_dist AS
+WITH active AS (
+    SELECT DISTINCT ON (install_id) install_id, client_version
+    FROM telemetry.installation_event
+    WHERE reported_at >= now() - INTERVAL '30 days'
+    ORDER BY install_id, reported_at DESC
+)
+SELECT
+    client_version,
+    COUNT(*)                                                     AS installs,
+    ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0), 1) AS pct
+FROM active
+GROUP BY client_version
+ORDER BY installs DESC, client_version DESC;
+
+COMMENT ON VIEW telemetry.version_dist IS
+'Active install version distribution over the last 30 days. Apply k-anonymity floor of 5 in the digest layer before publishing aggregates.';
+
+
+-- ============================================================================
 -- Read access for non-admin users
 -- ============================================================================
 --

@@ -99,19 +99,19 @@ func TestReadTier_NilMetaDoesNotPanic(t *testing.T) {
 	}
 }
 
-func TestReadTier_MetaErrorTreatedAsUnset(t *testing.T) {
-	// GetMeta error (DB locked, schema mismatch) must not propagate as
-	// a panic and must not return a higher-than-None tier silently.
-	// Falls through to registry + default.
+func TestReadTier_MetaErrorFailsClosed(t *testing.T) {
+	// SM-173: GetMeta error (DB locked, schema mismatch, corrupt file)
+	// must fail CLOSED to TierNone. We deliberately don't fall through
+	// to the Windows registry, because the registry holds the
+	// installer-time choice — the user may have opted DOWN at runtime
+	// to TierNone, and silently reading "standard" out of the registry
+	// after a runtime read error would re-enable telemetry against
+	// their wishes. "If you don't know, send nothing" is the contract.
 	meta := &fakeMeta{err: errFake}
 	got := ReadTier(meta)
-	if !got.IsValid() {
-		t.Errorf("ReadTier with errored meta = %q (invalid tier)", got)
+	if got != TierNone {
+		t.Errorf("ReadTier with errored meta = %q, want %q (fail-closed)", got, TierNone)
 	}
-	// On non-Windows (where readTierFromRegistry returns ""), result
-	// must be exactly TierNone. On Windows we can't assert that without
-	// knowing the test machine's registry state, so we only check
-	// validity. The intent is: never silently escalate above None.
 }
 
 // errFake is a sentinel to make the meta-error test independent of any

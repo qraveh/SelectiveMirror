@@ -301,7 +301,7 @@ Creates a filter engine with no global excludes and no `.syncignore`, useful whe
 | `anomaly` | `internal/anomaly/` | 11-category classification, JSON-lines recording, 30-day/50MB rotation, causal hypothesis templates, path sanitization |
 | `hooks` | `internal/hooks/` | Pre/post-sync shell command execution (cmd.exe /C on Windows, sh -c on Unix), 30s timeout, shell-metachar rejection in env |
 | `task` | `internal/task/` | Per-user Scheduled Task registration via `schtasks.exe` + XML task definitions. Schema 1.2 (Windows 7+). Runner indirection for test injection. |
-| `telemetry` | `internal/telemetry/` | Opt-in anonymous telemetry payload builder + GitHub Releases update check (code written, not wired; see `docs/telemetry-microserver-architecture.md` and `docs/telemetry-microserver.sql` for the planned server-side design) |
+| `telemetry` | `internal/telemetry/` | Three-tier opt-in consent (None/Standard/Reliability), tier-gated startup update check, shared report sanitizer (bug-report + crash), version-derived HMAC signer, durable disk queue, length-first JSONB-canonical JSON. Live server-side: Supabase + Cloudflare Worker proxy (since 0.9.4-dev). Pending: `smirror telemetry` runtime CLI (SM-157), report-bug --submit pipeline (SM-158), MSI custom dialog UI (SM-168). See `docs/telemetry-microserver-architecture.md`, `docs/PRIVACY.md`, and `docs/cli-telemetry-command.md`. |
 
 ## Dependency Graph
 
