@@ -952,7 +952,7 @@ collected during v0.6.0 field usage — hardening priorities guided by real fail
 | **32-mirror load test** | NFR-CA-01 | Medium | Medium — resource contention at scale |
 | **100K-file stress test** | NFR-CA-02 | Medium | Medium — state DB performance under load |
 | **Documentation audit** | — | Medium | Low |
-| **Security audit** | NFR-SEC-* | Medium | Medium — external review recommended |
+| **Security audit** | NFR-SEC-* | Medium | Medium — self-audit (`docs/security-audit-2026-04-18.md`) + adversarial multi-role panel reviews are the project's standing process |
 | **Release packaging** | — | Small | Low |
 
 ### 11.8 Implementation Priorities (Decision Framework)

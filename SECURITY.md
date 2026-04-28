@@ -40,6 +40,16 @@ SelectiveMirror handles file paths, rclone credentials (indirectly via rclone's 
 - The MSI installer is perMachine (`%ProgramFiles%\SelectiveMirror\`) — the binary directory is admin-owned, so a standard user cannot replace `smirror.exe` to hijack a running service (SEC-C2).
 - Background registration is an opt-in post-install step (`smirror task install` or `smirror service install`), not an automatic MSI side effect — users choose their privilege model.
 
+## Code Signing
+
+**Current status (pre-v1.0)**: `smirror.exe` and `SelectiveMirror.msi` are NOT Authenticode-signed. SmartScreen will warn on first download from a GitHub release ("Microsoft Defender SmartScreen prevented an unrecognized app from starting"). Click "More info" → "Run anyway" to proceed, or install via `winget install Qodeh.SelectiveMirror` (winget has its own trust chain and bypasses SmartScreen for verified packages).
+
+**Integrity-only verification today**: `selfupdate` and manual downloads can be verified against `checksums.txt` (SHA-256) published with each release. This is integrity, not authenticity — a compromise of the release pipeline taints the checksum file alongside the binaries.
+
+**Plan (post-v1.0)**: applying to **SignPath Foundation** (free EV code-signing for vetted open-source projects). Once the foundation cert is issued the release pipeline gains a SignPath GitHub Action between MSI build and upload — every tag automatically produces signed artifacts. The cert is project-bound; no per-version re-application. SmartScreen reputation builds quickly under EV.
+
+If SignPath Foundation declines or response time is slow, the fallback is **Microsoft Trusted Signing** (cloud-hosted OV at $120/year, no hardware token, integrates via `azure/trusted-signing-action`). Self-signed certificates are explicitly rejected as a path — they don't help SmartScreen and confuse users into thinking a binary is verified when it isn't.
+
 ## Hook Security (pre_sync_hook / post_sync_hook)
 
 Hooks are user-provided shell commands executed by smirror before/after each file sync. They follow the same trust model as git hooks or CI scripts:

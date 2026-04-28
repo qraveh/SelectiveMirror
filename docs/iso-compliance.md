@@ -40,7 +40,7 @@ This document is the **single source of truth** for SelectiveMirror's compliance
 3. Track remediation actions with accountable owner, role-context, priority, calendar date.
 4. Survive re-audit cycles (quarterly or pre-release).
 
-This is a **self-assessment** — authored by the same agent that authored the SRS and V&V Plan. Independent external review is required before claiming third-party compliance (action `A-GOV-01`).
+This is a **self-assessment** — authored by the same agent that authored the SRS and V&V Plan. The self-assessment label is retained permanently; third-party compliance is not claimed and is not planned.
 
 ### 1.1 Compliance levels used in this document
 
@@ -534,7 +534,7 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-GOV-01 | **DECIDED 2026-04-27**: SELF-ASSESSMENT label retained for v1.0. External independent review committed for v1.0.1 (post-2026-05-01 release). Reading list for external reviewer: see §10.5 below. | Raveh | P1 | v1.0.1 (post-release) | **In progress (deferred path)** |
+| A-GOV-01 | **DECIDED 2026-04-29**: SELF-ASSESSMENT label retained permanently. Third-party / independent compliance review is not planned and not claimed. The disclosure throughout this document and SRS is "compliance is self-asserted by the project authors; users should treat it as such." | Raveh | — | — | **Closed (decision: self-assessment is final)** |
 | A-GOV-02 | Assign calendar dates to all P0 / P1 actions in this register | Raveh | P1 | 2026-05-15 | Open |
 | ~~A-GOV-03~~ | ~~Reconcile SRS §11.9 and VV-Plan §11 risk registers~~ — **withdrawn 2026-04-27 v0.3**: VV-Plan has no §11 risk register; only SRS §11.9 exists. The audit doc invented a phantom reference. No action needed. | — | — | — | **Closed (invalid)** |
 | A-GOV-04 | Track closure status of every `docs/security-audit-2026-04-18.md` finding with linked issue ID and date. **v0.4 update**: 0.9.9-dev (commit a0c5b3e "P1 security/correctness fixes from adversarial review") closed multiple findings: SEC-H6 (file-mode 0600→0644 invariant + ACL DACL walk), config.SetField column-0 match, path-traversal hardening on `deleteRemote*`, allowLoopbackWebhooks unexported, report-bug CWD, state.Open meta-write idempotency, emergency crash logs to safe paths. Need: enumerate every finding from 2026-04-18 audit, mark closed/open/deferred with commit reference. | Winston | P1 | 2026-Q2 (TBD) | **Partially closed; enumeration pending** |
@@ -574,7 +574,7 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 - A-25023-01, A-25023-04 (measurement-function table)
 - A-29148-01, A-29148-05, A-29148-12, A-29148-17 (29148 P0/P1 attributes)
 - A-25010-02, -04, -05, -06, -10, -12 (25010 P0/P1)
-- A-GOV-01 (external review or self-assessment label retention)
+- A-GOV-01 (self-assessment label retention — closed by decision)
 
 **Post-v1.0**:
 - All P3 items
@@ -623,46 +623,4 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 | 0.2 | 2026-04-27 | Raveh / Claude (Adversarial Reviewer + Edge-Case Hunter incorporated) | Revisions: reclassified 4 items v0.1-Partial → v0.2-Non-compliant (User docs §4.1, Approval §4.1, Change history §4.1, Usability §5.1, Org Test Strategy §7.1); split compound `A-25023-02` into 11 singular P0 actions; added 17 new actions; replaced "Owner = persona" with "Accountable = Raveh; Role-context = persona"; corrected §4.3 ConOps reference; removed §10.3 cross-link TODO; removed unverified "25023:2024 reissue" claim. |
 | 0.3 | 2026-04-27 | Raveh / Claude | Decisions baselined: (β) ship v1.0 on 2026-05-01 with partial-compliance disclosure; (A-GOV-01) SELF-ASSESSMENT label retained for v1.0, external review committed for v1.0.1; (A-25010-01) Version B (deviation note) chosen — SRS §4.0 added; full restructure deferred to v1.1 as new action `A-25010-01b`; (X-04) deferred to v1.0.1 with NFR-TE-01 status disclosure; SM-153 fixed via per-NFR decisions for NFR-TB-01 / TB-02 / RU-01 / RU-03; SM-152 + SM-154 filed in BugTracker. Withdrew phantom A-GOV-03 / X-09 (VV-Plan has no §11). Added §10.5 external-reviewer reading list. |
 | 0.4 | 2026-04-27 | Raveh / Claude | Parallel-session integration. Five commits (0.9.8..0.9.12-dev) landed after v0.3 baseline. Re-measured coverage: total internal/ is **66.6%** (was 35.8% baseline; ~65% claimed in VV-Plan); watcher is **59.3%** (NOT 16.6% as VV-Plan §5.2 still says). X-04 reclassified from P0 to P2; ~~deferred to v1.0.1~~ → mostly closed. Test Monitoring & Control (29119-2) improved from ⚠️ → ✅ via release.yml hardening. A-25010-04 Faultlessness has substantive evidence shipped (`internal/sync/liveness.go` multi-signal stall detection with measurable thresholds). A-25010-08 Analysability strengthened by new anomaly kinds (Sync:Stalled, Sync:LsJsonSlow). A-GOV-04 now records partial closure of security-audit findings. New action `A-29119-12` added (per-release VV-Plan §5.2 re-measurement ritual). New bugs SM-155 (VV-Plan stale per-package coverage) and SM-156 (CHANGELOG SEC-C2 / SM-152 misattribution) filed. Methodology validation: parallel session used multi-role BMad design review (architect / senior dev / adversarial / edge-case hunter) on production design `docs/rclone-stall-design-for-review.md` — same pattern as this audit. |
-
-### 10.5 External-reviewer reading list (for A-GOV-01 closure)
-
-When the SELF-ASSESSMENT label is removed (post-v1.0), an independent human reviewer must read:
-
-**Must-read in full** (~3 hours):
-1. `docs/iso-compliance.md` (this document — the artifact under review)
-2. `docs/SRS.md` (952 lines)
-3. `docs/VV-Plan.md` (711 lines)
-
-**Must-skim** (~1 hour):
-4. `CHANGELOG.md`
-5. `CLAUDE.md`
-6. `docs/security-audit-2026-04-18.md`
-7. `docs/validation-report-2026-04-16.md`
-8. `docs/user-manual.md`, `docs/installation-manual.md`, `docs/developer-manual.md`
-9. `.github/workflows/ci.yml`
-
-**Sample artifacts** (~1 hour):
-10. ~5 source files from `internal/` (e.g., `watcher/watcher.go`, `sync/sync.go`, `state/state.go`)
-11. ~5 test files (`*_test.go`) — verify SM-xxx markers link to BugTracker entries
-12. `test/sla_smoke.ps1`
-13. ~3 BugTracker entries — verify methodology is real (e.g., `C:\BugTracker\projects\SelectiveMirror\SM-148.md`, SM-150, SM-152)
-14. SRS §11.9 risk register
-
-**ISO standards (paywalled — reviewer must have access)**:
-15. ISO/IEC/IEEE 29148:2018 — focus §5.2, §6.2, §6.4, §9.5.5, Annex A
-16. ISO/IEC 25010:2023 — §5.3, §6
-17. ISO/IEC 25023:2016 — §5.2, §6
-18. ISO/IEC/IEEE 29119-1:2022 (vocabulary), -2:2022 (processes), -3:2021 (documentation), -4:2022 (techniques)
-
-**Reviewer deliverable**: `docs/iso-compliance-review-2026-NN-NN.md` containing: reviewer identity + credentials + COI declaration; per-section concurrence/dispute; independent gap findings; ship/ship-with-conditions/do-not-ship recommendation; signature + date.
-
-**ISO clauses fulfilled by removing self-assessment label** (verify exact clause numbers against the editions held):
-- 29148:2018 §5.2.4 (requirements quality — peer review)
-- 29148:2018 §6.5 (requirements validation — independent stakeholder)
-- 29148:2018 §9.5.5 (Approval / sign-off attribute)
-- 29119-2:2022 §6.4 / §7.4.2 (Test Strategy + Test Plan review by independent reviewer)
-- 25010:2023 §6 (reproducibility by independent assessor)
-- 25023:2016 §5.2 (audience attribute presupposes external reader)
-- General ISO doctrine: distinction between self-assessment / first-party / second-party / third-party audit.
-
-**Acceptable reviewer profile**: Quality/Compliance professional outside the project; senior engineer at another company under NDA; ISO-certified auditor (paid). **Not acceptable**: another Claude session, another BMad persona, or Raveh re-reviewing after delay (all remain self-assessment).
+| 0.5 | 2026-04-29 | Raveh / Claude | **A-GOV-01 closed by decision**: external/independent ISO compliance review is not planned. The SELF-ASSESSMENT label is retained permanently as the project's compliance posture. §10.5 (external-reviewer reading list) removed; A-GOV-01 status changed from "in progress (deferred path)" to "closed (decision: self-assessment is final)". §1 wording updated to remove "external review required" framing. Panel-review work (commits 0.9.19..0.9.22-dev) closed BUG-1 case-only mirror name dedup; GAP-1..5 config-validation hardening (rclone_extra_flags denylist, rclone_config validation, overlap rejection, drive-root rejection, traversal-remote rejection); PF-A3 (SEC-H5) service-mode default-rejects symlink-to-file; GAP-7 state DB refuses forward-version; GAP-6 --config last-wins; PF-A8 async OnRecord callback. |
