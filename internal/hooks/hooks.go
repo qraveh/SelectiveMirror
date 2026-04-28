@@ -4,6 +4,7 @@
 package hooks
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -104,7 +105,44 @@ func (r *Runner) Run(ctx context.Context, hookCmd string, env Env) error {
 		"SMIRROR_EVENT="+env.Event,
 	)
 
-	output, err := cmd.CombinedOutput()
+	// Capture stdout+stderr in a single buffer (matches the previous
+	// CombinedOutput semantics) so the diagnostic log line that
+	// follows still has the hook's output.
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+
+	// SEC-M14 / PF-A5: wrap the hook subprocess in a Windows Job
+	// Object. When the deferred closeJobObject below runs (on hook
+	// completion OR timeout OR panic), the kernel terminates every
+	// process descendant of the hook command. Without this, a
+	// `pre_sync_hook: cmd /C start /B malware.exe` would orphan
+	// malware.exe past the hook timeout. POSIX path is a no-op stub.
+	job, jobErr := newJobObject()
+	if jobErr != nil {
+		// Job Object creation failure is non-fatal — we proceed
+		// without the kill-tree guarantee, with a warn log so the
+		// operator sees that orphan-protection is degraded.
+		r.log.Warn("hook job-object creation failed; orphan-grandchildren will not be killed on timeout",
+			"event", env.Event, "project", env.Project, "error", jobErr)
+	}
+	defer closeJobObject(job)
+
+	if err := cmd.Start(); err != nil {
+		r.log.Warn("hook start failed",
+			"event", env.Event, "project", env.Project, "cmd", hookCmd, "error", err)
+		return fmt.Errorf("hook start: %w", err)
+	}
+
+	if job != 0 && cmd.Process != nil {
+		if err := assignPIDToJob(job, cmd.Process.Pid); err != nil {
+			r.log.Warn("hook job-object assignment failed; orphan-grandchildren will not be killed on timeout",
+				"event", env.Event, "project", env.Project, "error", err)
+		}
+	}
+
+	err := cmd.Wait()
+	output := outBuf.Bytes()
 	if err != nil {
 		if hookCtx.Err() == context.DeadlineExceeded {
 			r.log.Warn("hook timed out",
