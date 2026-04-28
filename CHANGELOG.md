@@ -5,6 +5,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Security / robustness — autonomous B.1+B.2+B.3 batch
+
+Closure of audit + panel findings via 10 commits (0.9.27-dev → 0.9.36-dev).
+
+**Audit SEC-H batch (high)**:
+- **SEC-H9** rclone arg log at DEBUG sanitized via `telemetry.SanitizeReport` — credential regex set + remote-URI redactor strip `token=`, `signature=`, `Authorization:`, `Bearer …`, `gdrive:secret-path` from log lines.
+- **SEC-H10** rclone stderr log on failure now sanitized the same way — OAuth tokens, signed-URL params, Authorization headers from upstream HTTP errors are redacted before landing in the log.
+- **SEC-H11** `installer/install-rclone.ps1` now verifies SHA-256 of the downloaded rclone zip against `downloads.rclone.org/*.sha256`. Mismatch exits non-zero with diagnostics.
+
+**Audit SEC-M batch (medium)**:
+- **SEC-M1** `crashreport.go` now uses `openBrowserURL` instead of `cmd /c start`.
+- **SEC-M3** closed by GAP-1 `--config` denylist (per-Project rclone_config field doesn't exist).
+- **SEC-M5** anomaly sanitizer extended to per-mirror local_path prefixes via new `anomaly.SetExtraSanitizePrefixes` — cmdStart and serviceMain populate from cfg.Projects.
+- **SEC-M6** atomic config writes (temp+Rename) and control-character rejection in mirror name / local_path / remote / hook fields. Closes the YAML newline injection vector.
+- **SEC-M8** quarantine timestamp gains nanosecond precision (`.NNNNNNNNN` suffix).
+- **SEC-M9** `recordUpdateTime` errors warn-logged instead of silently swallowed.
+- **SEC-M10** explicit comment documenting that `cmp >= 0` already protects selfupdate from downgrade attacks.
+- **SEC-M11** verified CLOSED — `webhook.go::NewWebhookSender` sets `CheckRedirect` to `ErrUseLastResponse` (no redirects at any depth, stricter than the requested cap).
+- **SEC-M12** FairQueue hard cap at 100k items — sync tasks rejected at the gate beyond that, picked up by next reconciliation.
+- **SEC-M13** WalkDir now refuses to recurse into Windows reparse points (junctions). New `internal/fsutil` package shares the check across `watcher` and `sync`.
+- **SEC-M14 / PF-A5** hook child processes wrapped in a Windows Job Object with `KILL_ON_JOB_CLOSE` — the entire process tree dies on hook timeout. POSIX path is a no-op stub.
+
+**Audit SEC-L batch (low)**:
+- **SEC-L1** strict-YAML downgrade warning now also goes through `slog.Warn` (visible in smirror.log) in addition to stderr — service-mode users now see typo warnings.
+- **SEC-L2** lock file mode 0644 → 0600 to match SECURITY.md baseline.
+- **SEC-L4** documented in `metrics.RecordError` comment: status.json is local-only; callers concerned about export sanitize before calling.
+- **SEC-L5** webhook URL on delivery failure is now redacted to scheme+host (Slack/Discord URL-path tokens no longer leak into log).
+
+**Panel findings (autonomous closures)**:
+- **PF-A7** filter-change `OnFilterChange` callbacks coalesced per project — no longer unbounded goroutine spawn on rapid `.syncignore` edits.
+- **PF-D1** FairQueue.Dequeue cancel-helper goroutine: design note added documenting the existing defer LIFO ordering is correct (no behavior change).
+- **PF-D2** failed `.syncignore` reload now triggers a project reconcile so torn-state queued tasks get re-evaluated.
+- **PF-E1** behavior-pin test: cross-layer negation under globally-excluded directory currently re-includes via the gitignore library; logged for awareness, no assertion (matches panel's t.Logf observation).
+- **PF-E3** lsjson truncation defense: ListRemote rejects output that doesn't start with `[` and end with `]` — ghost cleanup never runs against a partial listing.
+- **PF-E5** new `smirror report-bug --clipboard` flag — pipes the sanitized report to OS clipboard (clip.exe / pbcopy / xclip / wl-copy) avoiding the URL-history leak from `--browser`.
+
+**State / lock robustness**:
+- **GAP-8** `state.Open` now hints fresh / zero-byte conditions via `Store.WasFreshOpen` and `Store.WasZeroByteOpen`. cmdStart warn-logs when either is true (user wiped state.db is about to lose all sync history).
+- **GAP-9** `lock.Acquire` now classifies "stale lock" — if the recorded PID is dead, returns `ErrStaleLockHeld` with a clear remedy. Otherwise returns existing `ErrAlreadyRunning`. Windows `OpenProcess` + `GetExitCodeProcess` / POSIX `kill -0` for the liveness check.
+
+**Doc / CI hygiene**:
+- **DOC-08** test counts refreshed in story.md and CLAUDE.md (530+ → 640+).
+- **DOC-11** exit codes 5 and 6 documented in user-manual.md.
+- All three workflows (ci.yml, release.yml, telemetry-digest.yml) opt into Node 24 via `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true` ahead of the 2026-06-02 default flip — silences the deprecation warning.
+
+### Deferred to dedicated security session (audit doc updated)
+
+- **SEC-M7** state DB foreign-write trust bypass — needs deliberate threat-model decision before HMAC scheme / key storage / schema migration is designed.
+- **SEC-M16** `gh auth token` PATH hijack — three fix candidates with UX/security trade-offs; defer until the right call is clear.
+
 ## [0.9.26] — 2026-04-29
 
 The first successfully-tagged release in the 0.9.x line since v0.9.0 (2026-04-18). Two earlier tag attempts (v0.9.22 in this cycle) were deleted before publish because the MSI job failed in CI on a WiX 6 schema regression in `installer/TelemetryConsent.wxi` — `Property` and `ComponentGroup` need a `<Fragment>` parent, not direct `<Include>` children. Fixed in commit `bbb0d3c`.
