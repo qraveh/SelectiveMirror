@@ -128,6 +128,27 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
 
+	// GAP-7 (panel review 2026-04-28): refuse to open a state DB whose
+	// schema_version is HIGHER than this binary supports. A downgrade
+	// scenario (newer binary writes schema 17 → user runs older 0.9.12
+	// binary that knows only schemas 0..12) used to silently skip the
+	// missing migrations and operate as if at the older schema, with
+	// undefined behavior on rows written by the newer binary. We now
+	// detect this before any migration runs and refuse with a clear
+	// error pointing the user at the right remedy (upgrade smirror or
+	// restore an older state DB).
+	{
+		var v string
+		row := db.QueryRow("SELECT value FROM meta WHERE key = 'schema_version'")
+		if err := row.Scan(&v); err == nil {
+			recorded := atoiOrZero(v)
+			if recorded > len(migrations) {
+				db.Close()
+				return nil, fmt.Errorf("state DB schema version %d is newer than this binary supports (%d). Upgrade smirror or restore an older state DB", recorded, len(migrations))
+			}
+		}
+	}
+
 	// Run auto-migration framework
 	if err := runMigrations(db); err != nil {
 		db.Close()

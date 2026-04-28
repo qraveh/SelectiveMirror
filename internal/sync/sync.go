@@ -110,6 +110,13 @@ type Engine struct {
 	// Hooks is the optional hook runner. Nil-safe (no-op when nil).
 	Hooks *hooks.Runner
 
+	// RejectSymlinkedFiles, when true, makes quiesceFile reject any symlink
+	// (even to a regular file) instead of following it. Set to true by
+	// service-mode startup (LocalSystem) to prevent privileged exfiltration
+	// of arbitrary files via a symlink planted in a watched directory.
+	// PF-A3 / audit SEC-H5 (panel review 2026-04-28).
+	RejectSymlinkedFiles bool
+
 	// Per-file locks prevent two workers from syncing the same file simultaneously.
 	// Key: "project:relPath". Full-project syncs (relPath="") use project name as key.
 	fileLocks gosync.Map // map[string]*gosync.Mutex
@@ -265,6 +272,13 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 // Returns the os.FileInfo if stable, or nil if the file is still changing or locked.
 // For symlinks to files, follows the link and checks the target.
 // Rejects symlinks to directories, non-regular files, and broken symlinks.
+//
+// PF-A3 (SEC-H5, panel review 2026-04-28): in service mode (Engine.
+// RejectSymlinkedFiles=true), symlinks to files are also rejected.
+// Service mode runs as LocalSystem; a symlink in a watched mirror that
+// targets `C:\Windows\System32\config\SAM` would otherwise sync the SAM
+// hive to the configured remote. Foreground / per-user-task mode keeps
+// the symlink-follow behavior for legitimate monorepo / dotfiles use.
 func (e *Engine) quiesceFile(localPath string) (os.FileInfo, error) {
 	start := time.Now()
 	defer func() {
@@ -286,6 +300,12 @@ func (e *Engine) quiesceFile(localPath string) (os.FileInfo, error) {
 
 	var info1 os.FileInfo
 	if linfo.Mode()&os.ModeSymlink != 0 {
+		// PF-A3: service mode rejects all symlinks (even to files) to prevent
+		// LocalSystem-privileged exfiltration of arbitrary files via a symlink
+		// planted in a watched directory.
+		if e.RejectSymlinkedFiles {
+			return nil, fmt.Errorf("symlink rejected in service mode (SEC-H5): %s", localPath)
+		}
 		// Resolve to absolute target path once — all further I/O uses this.
 		resolved, serr := filepath.EvalSymlinks(localPath)
 		if serr != nil {

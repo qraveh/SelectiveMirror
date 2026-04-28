@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	gosync "sync"
 	"testing"
 	"time"
@@ -76,6 +77,11 @@ func TestMarkDaemonStartup_Sets(t *testing.T) {
 // read-only command used to overwrite the meta entry with its own (lower)
 // migration count, which then triggered migration re-runs on the next
 // daemon startup.
+//
+// (After GAP-7 panel-review fix this test is partly obsoleted: Open now
+// REFUSES to operate on a DB whose recorded schema_version exceeds
+// len(migrations). To test the no-downgrade invariant we use a value
+// equal to len(migrations), where Open is allowed to proceed.)
 func TestOpen_DoesNotDowngradeSchemaVersion(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -85,9 +91,10 @@ func TestOpen_DoesNotDowngradeSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a future binary having bumped the version higher.
-	highVersion := fmt.Sprintf("%d", len(migrations)+5)
-	if err := st.SetMeta("schema_version", highVersion); err != nil {
+	// Set the recorded version to exactly len(migrations) (no migrations
+	// to apply, no refusal). Then re-open and confirm it stays put.
+	currentVersion := fmt.Sprintf("%d", len(migrations))
+	if err := st.SetMeta("schema_version", currentVersion); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {
@@ -104,8 +111,39 @@ func TestOpen_DoesNotDowngradeSchemaVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != highVersion {
-		t.Errorf("Open downgraded schema_version: got %q, want %q", v, highVersion)
+	if v != currentVersion {
+		t.Errorf("Open downgraded schema_version: got %q, want %q", v, currentVersion)
+	}
+}
+
+// GAP-7 (panel review 2026-04-28): Open must REFUSE to operate when the
+// recorded schema_version is higher than len(migrations). The downgrade
+// scenario (newer binary writes schema 17 → user runs older binary that
+// knows only 0..12) used to silently skip migrations and operate at the
+// older schema, with undefined behavior on rows the newer binary wrote.
+// Now we detect and refuse with a clear error.
+func TestOpen_RefusesOnForwardSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// First open creates the DB at len(migrations).
+	st, err := Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a future-binary write of a higher version.
+	if err := st.SetMeta("schema_version", fmt.Sprintf("%d", len(migrations)+5)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-open with current binary. Must REFUSE.
+	if _, err := Open(dbPath); err == nil {
+		t.Fatal("expected refusal when schema_version > len(migrations); got nil error")
+	} else if !strings.Contains(err.Error(), "newer than this binary supports") {
+		t.Errorf("error %v does not mention forward-version diagnostic", err)
 	}
 }
 

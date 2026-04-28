@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -234,6 +235,49 @@ func TestQuiesceFile_Directory(t *testing.T) {
 	}
 	if err != nil && !strings.Contains(err.Error(), "not a regular file") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// PF-A3 (SEC-H5, panel review 2026-04-28): in service mode (Engine.
+// RejectSymlinkedFiles=true), symlinks to regular files are rejected
+// instead of followed. Foreground/per-user-task mode follows them as
+// before. This test exercises both modes against the same symlink.
+func TestQuiesceFile_SymlinkToFile_ServiceModeRejects(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Symlink creation on Windows requires SeCreateSymbolicLinkPrivilege
+		// (Developer Mode) or admin; CI runners may lack it. Skip on
+		// platform where os.Symlink would fail; the same code path is
+		// exercised on Linux/macOS where this test runs cleanly.
+		t.Skip("Windows symlink creation requires elevated privilege; covered on POSIX")
+	}
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	// Real target file (under the project root so SM-087 path-escape doesn't fire).
+	target := filepath.Join(proj.LocalPath, "real.txt")
+	if err := os.WriteFile(target, []byte("contents"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(proj.LocalPath, "link.txt")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	// Foreground mode (default RejectSymlinkedFiles=false): follow OK.
+	eFG := testEngine(t, cfg, nil)
+	if _, err := eFG.quiesceFile(link); err != nil {
+		t.Errorf("foreground mode: symlink-to-file should succeed, got %v", err)
+	}
+
+	// Service mode (RejectSymlinkedFiles=true): refuse.
+	eSvc := testEngine(t, cfg, nil)
+	eSvc.RejectSymlinkedFiles = true
+	_, err := eSvc.quiesceFile(link)
+	if err == nil {
+		t.Fatal("service mode: expected symlink rejection, got nil")
+	}
+	if !strings.Contains(err.Error(), "service mode") || !strings.Contains(err.Error(), "SEC-H5") {
+		t.Errorf("error %v does not mention service-mode SEC-H5 rationale", err)
 	}
 }
 

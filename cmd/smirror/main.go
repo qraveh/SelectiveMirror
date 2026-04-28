@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.20-dev"
+var version = "0.9.21-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -3082,6 +3082,11 @@ func serviceMain() {
 
 		syncEngine := msync.NewEngine(cfg, st, filters, m)
 		syncEngine.Anomaly = anomalyRecorder
+		// PF-A3 / audit SEC-H5: in service mode (LocalSystem), refuse to
+		// follow any symlink in a watched directory. A symlink under e.g.
+		// C:\Orch\.tricky targeting C:\Windows\System32\config\SAM would
+		// otherwise sync the SAM hive to the configured remote.
+		syncEngine.RejectSymlinkedFiles = true
 		if cfg.PreSyncHook != "" || cfg.PostSyncHook != "" || hasProjectHooks(cfg) {
 			syncEngine.Hooks = hooks.New(30 * time.Second)
 		}

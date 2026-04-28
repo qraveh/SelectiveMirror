@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Security / robustness (panel review 2026-04-28 — service-mode hardening)
+
+- **PF-A3 / audit SEC-H5 — service-mode default-rejects symlinks-to-files.** `internal/sync/sync.go::quiesceFile`. Service mode (LocalSystem) running with the previous follow-symlink behavior would happily sync a symlink in a watched directory targeting `C:\Windows\System32\config\SAM` — exfiltrating the SAM hive to the configured remote. Foreground / per-user-task mode is unchanged (legitimate monorepo / dotfiles use). New `Engine.RejectSymlinkedFiles` field; serviceMain sets it to true unconditionally. POSIX test added (Windows symlink creation requires elevated privilege; skip on CI runners that lack it).
+- **GAP-7 — `state.Open` refuses forward-version state DBs.** `internal/state/state.go`. Previously, downgrading the binary (newer 0.9.20 wrote schema 17 → user runs older 0.9.12 binary that knows only 0..12) used to silently skip the missing migrations and operate at the older schema, with undefined behavior on rows the newer binary wrote. Now Open reads `meta.schema_version` BEFORE running migrations and refuses with a clear error: `"state DB schema version %d is newer than this binary supports (%d). Upgrade smirror or restore an older state DB."` Unit test `TestOpen_RefusesOnForwardSchemaVersion` added.
+
 ### Security (panel review 2026-04-28 — config validation hardening)
 
 - **GAP-1 (Critical) — `rclone_extra_flags` denylist.** `internal/config/config.go::validateRcloneExtraFlags`. The list is appended verbatim into every rclone invocation; an attacker (or an honest typo) that lands `--rc --rc-addr 0.0.0.0:5572 --rc-no-auth` exposed an unauthenticated rclone control plane on the network — full filesystem access as the smirror principal (LocalSystem in service mode). `--log-file` enabled arbitrary file overwrite. `--config` swapped the rclone backend out from under smirror. Now rejected at config load: any flag starting with `--rc*` (the entire remote-control plane), plus `--log-file`, `--log-format`, `--config`, `--password-command`, `--ask-password` — both global `rclone_extra_flags` and per-mirror lists checked. Both separate-form (`--flag value`) and `=`-form (`--flag=value`) caught.
