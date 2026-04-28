@@ -53,32 +53,46 @@
 -->
 <Include xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
-  <!-- Public property holding the user's chosen tier. Default "none"
-       = silent. Set to "standard" or "reliability" via UI radio
-       (when integrated) or `msiexec INSTALL_TELEMETRY_TIER=...`. -->
-  <Property Id="INSTALL_TELEMETRY_TIER" Value="none" Secure="yes" />
+  <!-- WiX 4+/6 enforces strict schema: <Property> and <ComponentGroup>
+       are NOT valid as direct children of <Wix>. They must live inside
+       a <Fragment> (or directly inside <Package>). The .wxi is included
+       at the top of Package.wxs (before <Package>), so its body lands
+       under <Wix>. We wrap in <Fragment> here; the property is then
+       referenced via PropertyRef + the component group via
+       ComponentGroupRef from inside <Package>.
 
-  <!-- Component group containing the registry write component.
-       Referenced from Package.wxs via <ComponentGroupRef />. -->
-  <ComponentGroup Id="TelemetryConsentComponents" Directory="INSTALLFOLDER">
+       Previous (broken) shape: Property + ComponentGroup directly under
+       Include; build-msi failed in CI with WIX0005. Closed: 2026-04-29. -->
+  <Fragment>
 
-    <!-- Registry component:
-         Always writes the current value of INSTALL_TELEMETRY_TIER to
-         HKLM\Software\SelectiveMirror\TelemetryTier as a string. The
-         registry key always exists; its value tells smirror the
-         user's chosen tier (or "none" by default).
+    <!-- Public property holding the user's chosen tier. Default "none"
+         = silent. Set to "standard" or "reliability" via UI radio
+         (when integrated) or `msiexec INSTALL_TELEMETRY_TIER=...`. -->
+    <Property Id="INSTALL_TELEMETRY_TIER" Value="none" Secure="yes" />
 
-         RegistryValue is the KeyPath because there is no associated file. -->
-    <Component Id="TelemetryConsentRegistry" Bitness="always64" Guid="*">
-      <RegistryValue
-          Root="HKLM"
-          Key="Software\$(var.ProductName)"
-          Name="TelemetryTier"
-          Type="string"
-          Value="[INSTALL_TELEMETRY_TIER]"
-          KeyPath="yes" />
-    </Component>
+    <!-- Component group containing the registry write component.
+         Referenced from Package.wxs via <ComponentGroupRef />. -->
+    <ComponentGroup Id="TelemetryConsentComponents" Directory="INSTALLFOLDER">
 
-  </ComponentGroup>
+      <!-- Registry component:
+           Always writes the current value of INSTALL_TELEMETRY_TIER to
+           HKLM\Software\SelectiveMirror\TelemetryTier as a string. The
+           registry key always exists; its value tells smirror the
+           user's chosen tier (or "none" by default).
+
+           RegistryValue is the KeyPath because there is no associated file. -->
+      <Component Id="TelemetryConsentRegistry" Bitness="always64" Guid="*">
+        <RegistryValue
+            Root="HKLM"
+            Key="Software\$(var.ProductName)"
+            Name="TelemetryTier"
+            Type="string"
+            Value="[INSTALL_TELEMETRY_TIER]"
+            KeyPath="yes" />
+      </Component>
+
+    </ComponentGroup>
+
+  </Fragment>
 
 </Include>
