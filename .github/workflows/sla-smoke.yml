@@ -1,0 +1,90 @@
+name: SLA smoke
+
+# PR-Q4 (panel review pre-release 2026-04-28). Latency / integrity /
+# throughput / memory smoke tests live in test/sla_smoke.ps1. They are
+# noisy on shared CI and not safe to gate every release on, but they
+# catch real regressions in the metrics smirror commits to in the SRS
+# (NFR-TB-01..07, RU-01..05, CA-01..03).
+#
+# Strategy: run on a nightly schedule + workflow_dispatch. The
+# SM-keeper agent (docs/operations/release-runbook.md) checks the
+# latest run before approving a tag — pre-tag procedure includes
+# "release-dryrun green AND latest sla-smoke green within 48h."
+# release.yml itself does NOT depend on this workflow (so a flaky
+# nightly doesn't block tagging), but a sustained red here is a
+# release-readiness signal.
+
+on:
+  schedule:
+    # 03:00 UTC nightly. Off-peak for shared GitHub-hosted runners,
+    # gives the maintainer fresh data each morning.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch / SHA to test (default: master)'
+        required: false
+        default: 'master'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  sla:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+
+      - name: Install rclone (winget)
+        shell: pwsh
+        run: |
+          # winget is available on windows-latest. --accept-* avoids the
+          # interactive prompt; --silent suppresses progress UI.
+          winget install Rclone.Rclone `
+              --accept-package-agreements `
+              --accept-source-agreements `
+              --silent `
+              --disable-interactivity
+          # Verify the binary is on PATH.
+          $rclone = Get-Command rclone -ErrorAction SilentlyContinue
+          if (-not $rclone) {
+              # Fallback: the system PATH update may not have propagated.
+              # Try the standard winget install location.
+              $candidate = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Rclone.Rclone_Microsoft.Winget.Source_8wekyb3d8bbwe\rclone.exe"
+              if (Test-Path $candidate) {
+                  echo "$([System.IO.Path]::GetDirectoryName($candidate))" >> $env:GITHUB_PATH
+              } else {
+                  Write-Error "rclone not found after winget install"
+                  exit 1
+              }
+          }
+
+      - name: Build smirror.exe
+        env:
+          CGO_ENABLED: '1'
+        run: go build -o bin/smirror.exe ./cmd/smirror/
+
+      - name: SLA smoke (latency / integrity / throughput / memory)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File test/sla_smoke.ps1
+
+      - name: Upload SLA results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sla-results-${{ github.run_id }}
+          path: |
+            test/sla-results-*.txt
+            test/sla-results-*.json
+          if-no-files-found: warn
+          retention-days: 30

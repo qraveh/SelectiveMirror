@@ -4,7 +4,13 @@
 # IDE / AI tools
 .idea/
 .vscode/
-.claude/
+.claude/*
+# Carve-out: project-shared Claude Code subagents live under
+# .claude/agents/ (PR-PM3, panel review pre-release 2026-04-28). Local
+# state (settings.local.json, worktrees/, scheduled_tasks.lock, etc.)
+# remains ignored.
+!.claude/agents/
+!.claude/agents/**
 *.swp
 *.swo
 

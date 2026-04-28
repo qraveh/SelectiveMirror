@@ -3,12 +3,20 @@
 # Install WiX: dotnet tool install --global wix
 #               wix extension add WixToolset.UI.wixext/6.0.2
 #
-# -Version: MSI ProductVersion (x.y.z, no -dev suffix). Defaults to the
-#   version from cmd/smirror/main.go with -dev stripped. CI (release.yml)
-#   overrides this with the git tag's version.
+# -Version:      MSI ProductVersion (x.y.z, no -dev suffix). Defaults to
+#                the version from cmd/smirror/main.go with -dev stripped.
+#                CI (release.yml) overrides this with the git tag's version.
+# -SkipGoBuild:  PR-R3 (panel review pre-release 2026-04-28). Skip the
+#                `go build` step and consume an existing bin/smirror.exe.
+#                Used by release.yml to feed the GoReleaser-built binary
+#                straight into the MSI, so the binary inside the MSI is
+#                byte-equal to the one inside the published ZIP. The script
+#                still verifies the binary is present and reports the
+#                expected version before building the MSI.
 
 param(
-    [string]$Version = ""
+    [string]$Version = "",
+    [switch]$SkipGoBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,27 +45,47 @@ Write-Host "=== SelectiveMirror MSI Build ===" -ForegroundColor Cyan
 Write-Host "Version: $Version"
 Write-Host ""
 
-# Step 1: Build smirror.exe
-Write-Host "[1/3] Building smirror.exe..." -NoNewline
+# Step 1: Build smirror.exe (or use a pre-built one if -SkipGoBuild)
 $binDir = Join-Path $root "bin"
 if (-not (Test-Path $binDir)) { New-Item -ItemType Directory -Path $binDir | Out-Null }
-
 $exe = Join-Path $binDir "smirror.exe"
-$ldflags = "-s -w -X main.version=$Version"
 
-Push-Location $root
-try {
-    # CGo required (mattn/go-sqlite3). Ensure a C compiler is on PATH.
-    $env:CGO_ENABLED = "1"
-    & go build -ldflags $ldflags -o $exe ./cmd/smirror/ 2>&1
-    if ($LASTEXITCODE -ne 0) {
+if ($SkipGoBuild) {
+    Write-Host "[1/3] Using pre-built smirror.exe (-SkipGoBuild)..." -NoNewline
+    if (-not (Test-Path $exe)) {
         Write-Host " FAILED" -ForegroundColor Red
+        Write-Host "  -SkipGoBuild requested but $exe is missing. Place the binary first." -ForegroundColor Red
+        exit 1
+    }
+    # Sanity-check: the binary must report a version that matches $Version
+    # (with optional -dev suffix or build metadata appended). This catches
+    # the "downloaded the wrong artifact" failure mode at MSI build time.
+    $reported = (& $exe version 2>&1) -join ' '
+    if ($reported -notmatch [regex]::Escape($Version)) {
+        Write-Host " FAILED" -ForegroundColor Red
+        Write-Host "  Pre-built binary reports '$reported'; expected to contain '$Version'." -ForegroundColor Red
         exit 1
     }
     $size = (Get-Item $exe).Length / 1MB
-    Write-Host (" OK ({0:N1} MB)" -f $size) -ForegroundColor Green
-} finally {
-    Pop-Location
+    Write-Host (" OK ({0:N1} MB; version contains '{1}')" -f $size, $Version) -ForegroundColor Green
+} else {
+    Write-Host "[1/3] Building smirror.exe..." -NoNewline
+    $ldflags = "-s -w -X main.version=$Version"
+
+    Push-Location $root
+    try {
+        # CGo required (mattn/go-sqlite3). Ensure a C compiler is on PATH.
+        $env:CGO_ENABLED = "1"
+        & go build -ldflags $ldflags -o $exe ./cmd/smirror/ 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host " FAILED" -ForegroundColor Red
+            exit 1
+        }
+        $size = (Get-Item $exe).Length / 1MB
+        Write-Host (" OK ({0:N1} MB)" -f $size) -ForegroundColor Green
+    } finally {
+        Pop-Location
+    }
 }
 
 # Step 2: Verify required files exist

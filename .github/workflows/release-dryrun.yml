@@ -1,0 +1,251 @@
+name: Release dry-run
+
+# PR-R1 (panel review pre-release 2026-04-28): exercise the full release
+# pipeline against any branch / commit, without uploading anything to a
+# tag. Catches the v0.9.22-class failure mode where the MSI build broke
+# only at tag-push time because release.yml was the only path that ran
+# installer/build-msi.ps1 + smoke-test.ps1.
+#
+# Trigger: workflow_dispatch (manual or via gh CLI). The SM-keeper
+# agent runs this as part of the pre-tag procedure documented in
+# docs/operations/release-runbook.md, so the human / agent doesn't have
+# to remember to launch it — every successful pre-tag conversation
+# concludes with "release-dryrun green".
+#
+# Differences from release.yml:
+#   * No upload of artifacts to a real tag (no `gh release upload`).
+#   * No SLSA attestations (no real release to attest about).
+#   * No winget manifest submission.
+#   * HMAC master key is optional: building with empty derived key is
+#     fine for a dry-run since the binary won't be shipped.
+#   * Tag-source assertion still runs against the `intended-tag` input,
+#     so version drift is caught BEFORE the real tag is pushed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      intended-tag:
+        description: 'Intended next tag (e.g. v0.9.27). Asserted against cmd/smirror/main.go::var version.'
+        required: true
+        type: string
+      ref:
+        description: 'Branch / SHA to dry-run (default: master)'
+        required: false
+        default: 'master'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  dryrun-release:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+
+      - name: Extract intended version
+        id: version
+        shell: pwsh
+        run: echo "VERSION=$('${{ inputs.intended-tag }}' -replace '^v','')" >> $env:GITHUB_OUTPUT
+
+      - name: Assert intended-tag matches source version
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.version.outputs.VERSION }}'
+          $main = Get-Content cmd/smirror/main.go -Raw
+          if ($main -notmatch 'var\s+version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)(?:-[a-zA-Z0-9]+)?"') {
+              Write-Error "Could not parse 'var version' from cmd/smirror/main.go"
+              exit 1
+          }
+          $src = $Matches[1]
+          if ($src -ne $tag) {
+              Write-Error "Intended-tag-source drift: '${{ inputs.intended-tag }}' (stripped: '$tag') but main.go has '$src'. Fix one before tagging."
+              exit 1
+          }
+          Write-Host "OK: intended-tag $tag matches main.go source version $src"
+
+      - name: Verify C toolchain present
+        shell: pwsh
+        run: gcc --version
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Unit tests (internal + cmd)
+        run: go test ./internal/... ./cmd/... -count=1
+        env:
+          CGO_ENABLED: 1
+
+      - name: System-validation tests (panel-derived black-box)
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          Push-Location system-validation
+          go test -count=1 -json ./... | Tee-Object -FilePath ../system-validation-results.json | Out-Null
+          $exitCode = $LASTEXITCODE
+          Pop-Location
+          if ($exitCode -eq 0) {
+              Write-Host "system-validation: all tests pass"
+              exit 0
+          }
+          $allowed = @(
+              'TestPanelR3_Gitignore_ExcludedParentBlocksChildNegation'
+          )
+          $events = @(Get-Content ../system-validation-results.json | ForEach-Object { $_ | ConvertFrom-Json })
+          $failed = $events | Where-Object { $_.Action -eq 'fail' -and $_.Test } | ForEach-Object { ($_.Test -split '/')[0] } | Sort-Object -Unique
+          $unexpected = @($failed | Where-Object { $allowed -notcontains $_ })
+          if ($unexpected.Count -gt 0) {
+              Write-Error "system-validation has unexpected failures: $($unexpected -join ', ')"
+              exit 1
+          }
+          Write-Host "system-validation: only allowlisted failures present ($($failed -join ', '))"
+
+      - name: report-bug PII smoke
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/check-pii-leak.ps1
+
+      # Dry-run accepts an empty HMAC key; the binary that comes out
+      # cannot submit telemetry to the production endpoint, but that
+      # doesn't matter because the binary won't ship.
+      - name: Compute version-derived telemetry HMAC key (optional in dry-run)
+        shell: pwsh
+        env:
+          MASTER_KEY: ${{ secrets.SMIRROR_TELEMETRY_MASTER_KEY }}
+        run: |
+          if ([string]::IsNullOrEmpty($env:MASTER_KEY)) {
+              Write-Host "Dry-run: SMIRROR_TELEMETRY_MASTER_KEY missing; building with empty derived key. (OK for dry-run; production release.yml fails on absent key.)"
+              echo "SMIRROR_TELEMETRY_DERIVED_KEY=" >> $env:GITHUB_ENV
+              exit 0
+          }
+          $version = '${{ steps.version.outputs.VERSION }}'
+          $masterBytes = New-Object byte[] ($env:MASTER_KEY.Length / 2)
+          for ($i = 0; $i -lt $masterBytes.Length; $i++) {
+              $masterBytes[$i] = [Convert]::ToByte($env:MASTER_KEY.Substring($i * 2, 2), 16)
+          }
+          $hmac = [System.Security.Cryptography.HMACSHA256]::new()
+          $hmac.Key = $masterBytes
+          $versionBytes = [System.Text.Encoding]::UTF8.GetBytes($version)
+          $hash = $hmac.ComputeHash($versionBytes)
+          $derived = -join ($hash | ForEach-Object { $_.ToString('x2') })
+          if ($derived.Length -ne 64) {
+              Write-Error "Derived key has unexpected length: $($derived.Length)"
+              exit 1
+          }
+          echo "SMIRROR_TELEMETRY_DERIVED_KEY=$derived" >> $env:GITHUB_ENV
+          Write-Host "Derived key computed for version $version (64 hex chars, value redacted)."
+
+      # Use GoReleaser's `--snapshot` mode so it builds without needing
+      # a tag, doesn't try to publish, and adds a `-SNAPSHOT` suffix to
+      # outputs. We override the version to the intended-tag so the
+      # binary's `--version` matches what would ship.
+      - name: Run GoReleaser (snapshot mode)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --snapshot --clean
+        env:
+          SMIRROR_TELEMETRY_DERIVED_KEY: ${{ env.SMIRROR_TELEMETRY_DERIVED_KEY }}
+
+      - name: Locate built smirror.exe
+        id: locate-exe
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist -Recurse -Filter smirror.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "smirror.exe not found in dist/"; exit 1 }
+          echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          Write-Host "Located: $($exe.FullName)"
+
+      - name: Upload smirror.exe artifact for msi job
+        uses: actions/upload-artifact@v4
+        with:
+          name: smirror-exe-dryrun-${{ steps.version.outputs.VERSION }}-${{ github.run_id }}
+          path: ${{ steps.locate-exe.outputs.EXE_PATH }}
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Extract release notes from CHANGELOG (dry-run)
+        shell: pwsh
+        run: |
+          # Don't fail the dry-run if the CHANGELOG section is missing;
+          # missing notes is a soft warning that surfaces here so the
+          # maintainer fixes it before the real tag.
+          try {
+              powershell -ExecutionPolicy Bypass -File scripts/extract-changelog.ps1 -Version '${{ steps.version.outputs.VERSION }}' -Output release-notes-preview.md -AllowMissing
+              Write-Host "=== release-notes-preview.md ==="
+              Get-Content release-notes-preview.md
+          } catch {
+              Write-Host "::warning::Could not extract release notes: $_"
+          }
+
+      - name: Upload release notes preview
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-preview-${{ steps.version.outputs.VERSION }}-${{ github.run_id }}
+          path: release-notes-preview.md
+          if-no-files-found: warn
+          retention-days: 7
+
+  dryrun-msi:
+    runs-on: windows-latest
+    needs: dryrun-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Install WiX (v6 — avoid v7 OSMF EULA requirement)
+        run: dotnet tool install --global wix --version 6.0.2
+
+      - name: Add WiX UI extension
+        run: wix extension add WixToolset.UI.wixext/6.0.2 -g
+
+      - name: Download smirror.exe artifact from dryrun-release
+        uses: actions/download-artifact@v4
+        with:
+          name: smirror-exe-dryrun-${{ needs.dryrun-release.outputs.version }}-${{ github.run_id }}
+          path: bin
+
+      - name: Verify downloaded smirror.exe
+        shell: pwsh
+        run: |
+          $exe = "bin\smirror.exe"
+          if (-not (Test-Path $exe)) { Write-Error "Downloaded smirror.exe missing"; exit 1 }
+          $reported = (& $exe version 2>&1) -join ' '
+          $expected = '${{ needs.dryrun-release.outputs.version }}'
+          if ($reported -notmatch [regex]::Escape($expected)) {
+              Write-Error "Downloaded smirror.exe reports version '$reported'; expected to contain '$expected'"
+              exit 1
+          }
+          Write-Host "OK: smirror.exe reports version containing '$expected'"
+
+      - name: Build MSI (using artifact binary; -SkipGoBuild)
+        run: powershell -ExecutionPolicy Bypass -File installer\build-msi.ps1 -Version ${{ needs.dryrun-release.outputs.version }} -SkipGoBuild
+
+      - name: MSI smoke test (install / task round-trip / uninstall)
+        run: powershell -ExecutionPolicy Bypass -File installer\smoke-test.ps1 -SkipBuild -Version ${{ needs.dryrun-release.outputs.version }}
+
+      - name: Upload MSI as dryrun artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SelectiveMirror-dryrun-${{ needs.dryrun-release.outputs.version }}-${{ github.run_id }}
+          path: installer\bin\Release\SelectiveMirror.msi
+          retention-days: 7
+          if-no-files-found: error

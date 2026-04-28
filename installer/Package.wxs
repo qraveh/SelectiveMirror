@@ -21,6 +21,13 @@
     <!-- UI -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="Resources\license.rtf" />
+    <!-- PR-S2 (panel review pre-release 2026-04-28): pull in the
+         telemetry-tier selection dialog defined in
+         installer/TelemetryConsent.wxi. The UI element there contains
+         the Dialog + RadioButtonGroup + Publish overrides that splice
+         TelemetryTierDlg between LicenseAgreementDlg and InstallDirDlg
+         in the WixUI_InstallDir chain. -->
+    <UIRef Id="WixUI_TelemetryTier" />
 
     <!-- Media -->
     <MediaTemplate EmbedCab="yes" />

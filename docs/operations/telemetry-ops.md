@@ -85,10 +85,22 @@ The master HMAC key in Supabase Vault doesn't expire. Rotate only if:
 - General hygiene (annual is fine)
 
 To rotate:
-1. Generate new key: `openssl rand -hex 32` (locally; never paste anywhere)
-2. Update in Bitwarden + Supabase Vault (`telemetry_master_key`)
-3. Update GitHub Actions repo secret `SMIRROR_TELEMETRY_MASTER_KEY`
-4. Cut a new release; old binaries will continue to verify (their derived keys are based on the old master) — wait, no, that's wrong. **Rotating the master invalidates ALL existing derived keys.** Old shipped binaries will silently fail to submit telemetry until users upgrade. Plan accordingly.
+1. Generate new key: `openssl rand -hex 32` (locally; never paste anywhere).
+2. Update in Bitwarden + Supabase Vault (`telemetry_master_key`).
+3. Update GitHub Actions repository secret `SMIRROR_TELEMETRY_MASTER_KEY`.
+4. Cut a new release. Old binaries will continue to verify (their derived keys are based on the old master) — wait, no, that's wrong. **Rotating the master invalidates ALL existing derived keys.** Old shipped binaries will silently fail to submit telemetry until users upgrade. Plan accordingly.
+
+### What happens if `SMIRROR_TELEMETRY_MASTER_KEY` is absent at release time
+
+PR-S3 (panel review pre-release 2026-04-28). Before this batch, an absent secret produced a binary with an empty derived key — silent telemetry-disabled state, no alarm. After this batch, the release pipeline **fails by default** when the secret is missing. The release proceeds only when the maintainer has explicitly opted out.
+
+Override: set the **repository variable** (not secret) `RELEASE_ALLOW_NO_TELEMETRY_KEY=1` under repo Settings → Secrets and variables → Actions → Variables. Then re-run the workflow. The build will produce a binary that cannot submit telemetry; the release body should reflect that fact.
+
+Use the override when:
+- You're cutting a security hot-fix on a fork or in a paired session where access to the production master key is not available.
+- You're deliberately shipping a build whose telemetry surface should be disabled (e.g., a test release for a controlled environment).
+
+Do NOT use the override for normal releases. The `release.yml` step will print a `::warning::` annotation when the override is active so weekly-digest readers can see which release(s) had telemetry off.
 
 ---
 

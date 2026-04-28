@@ -528,3 +528,84 @@ func TestValidate_Remote_NormalAllowed(t *testing.T) {
 		}
 	}
 }
+
+// =========================================================================
+// PR-S6 (panel review pre-release 2026-04-28) — Unicode-confusable bypass
+// of GAP-1 denylist + alert_min_severity enum validation
+// =========================================================================
+
+// PR-S6: a flag whose name carries any non-ASCII glyph is rejected
+// before denylist matching. This blocks `--rс` (Cyrillic 'с' U+0441) and
+// `--rс-addr`-style lookalikes that would otherwise slip past the
+// `--rc` ASCII prefix check.
+func TestValidate_RcloneExtraFlags_NonASCIIRejected(t *testing.T) {
+	cases := []struct {
+		name  string
+		flags []string
+	}{
+		{"cyrillic c in --rc", []string{"--rс"}},                  // --rс
+		{"cyrillic c in --rc-addr", []string{"--rс-addr", "x"}},   // --rс-addr
+		{"cyrillic a in --bwlimit", []string{"--bwlimitа"}},       // --bwlimitа
+		{"greek omicron in --config", []string{"--cοnfig", "x"}},  // --cοnfig
+		// NB: an entry that does NOT start with ASCII '--' is not a flag from
+		// our parser's standpoint (e.g. "－－rc" with fullwidth hyphens) — it
+		// will be passed verbatim to rclone, which itself rejects it because
+		// rclone's flag namespace requires ASCII '-'. We don't need to
+		// reject it here; covered by rclone's own argument parsing.
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// First flag is the one with non-ASCII name; the rest can be values.
+			err := validateRcloneExtraFlags("global", tc.flags[:1])
+			if err == nil {
+				t.Fatalf("expected non-ASCII rejection for %q", tc.flags[0])
+			}
+			if !strings.Contains(err.Error(), "non-ASCII") {
+				t.Errorf("error should explain non-ASCII rejection: %v", err)
+			}
+		})
+	}
+}
+
+// PR-S6: alert_min_severity must be one of the canonical severity strings.
+// A typo like `erro` previously passed Validate() and silently demoted
+// filtering (severityAtLeast returns 0 for unknown thresholds).
+func TestValidate_AlertMinSeverity_RejectsTypo(t *testing.T) {
+	cases := []string{
+		"erro",            // missing 'r'
+		"warn",            // shortened
+		"WARNING",         // wrong case
+		"high",            // wrong vocabulary
+		" error ",         // whitespace
+		"error,critical",  // list (not a single severity)
+	}
+	for _, sev := range cases {
+		t.Run(sev, func(t *testing.T) {
+			cfg := &Global{
+				Projects:         []Project{{Name: "a", LocalPath: t.TempDir(), Remote: "local:x"}},
+				AlertMinSeverity: sev,
+			}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatalf("expected rejection of alert_min_severity %q", sev)
+			}
+			if !strings.Contains(err.Error(), "alert_min_severity") {
+				t.Errorf("error did not name alert_min_severity: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidate_AlertMinSeverity_AcceptsValid(t *testing.T) {
+	for _, sev := range []string{"", "info", "warning", "error", "critical"} {
+		t.Run(sev, func(t *testing.T) {
+			cfg := &Global{
+				Projects:         []Project{{Name: "a", LocalPath: t.TempDir(), Remote: "local:x"}},
+				AlertMinSeverity: sev,
+			}
+			if err := cfg.Validate(); err != nil {
+				t.Errorf("valid severity %q rejected: %v", sev, err)
+			}
+		})
+	}
+}

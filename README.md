@@ -2,6 +2,8 @@
 
 Real-time selective file synchronization for Windows. Watches local directories for changes and mirrors them to any [rclone](https://rclone.org/)-supported backend (Google Drive, S3, Dropbox, OneDrive, SFTP, and 70+ others).
 
+> **Audience and maturity (v0.9.x)**: This release line targets the maintainer and a small group of testers. The codebase is feature-complete for Phases 1–7 (Phase 3 USN journal recovery still pending), but a public-launch checklist — Authenticode code signing (SignPath Foundation, in flight), winget submission to `microsoft/winget-pkgs`, the in-installer telemetry consent dialog, and one final round of panel review — is the bar for "general use". Live checklist: [docs/release-maturity.md](docs/release-maturity.md). If you are evaluating the project for the first time, expect SmartScreen friction on first install (see below) and read [CHANGELOG.md](CHANGELOG.md) for known issues against the version you are about to install.
+
 > **ISO compliance status (v1.0)**: SelectiveMirror applies four ISO standards as engineering scaffolding — ISO/IEC/IEEE 29148:2018 (requirements), ISO/IEC 25010:2023 (quality model), ISO/IEC 25023:2016 (measurement), and ISO/IEC/IEEE 29119 family (testing). Compliance status is **Partial** with 63 tracked remediation actions. The audit is currently a **self-assessment**; independent external review is committed for v1.0.1. See [docs/iso-compliance.md](docs/iso-compliance.md) for the full audit, gap list, and per-standard status.
 
 ## Features
@@ -18,13 +20,56 @@ Real-time selective file synchronization for Windows. Watches local directories 
 
 ## Installation
 
-### MSI Installer (recommended)
+The MSI is the recommended path on Windows. The ZIP is for portable use; both are top-level assets on every release. The MSI is **not** bundled inside the ZIP — winget consumers and most users want the MSI as a direct URL.
 
-Download `SelectiveMirror.msi` from [Releases](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to your system PATH.
+### MSI installer (recommended)
 
-### ZIP Archive
+Download `SelectiveMirror.msi` from [Releases](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to the system PATH and registers an uninstaller entry. perMachine install (`%ProgramFiles%\SelectiveMirror\`) — admin elevation required. Background registration is **not** automatic; pick the privilege model after install with `smirror task install` (per-user, no admin) or `smirror service install` (LocalSystem, admin + admin-owned config). See [SECURITY.md](SECURITY.md#scope) for the trust model.
 
-Download the ZIP from [Releases](https://github.com/qraveh/SelectiveMirror/releases), extract to a directory of your choice, and add it to your PATH.
+**SmartScreen on first install (v0.9.x — pre-SignPath)**
+
+Until [SignPath Foundation](https://signpath.io/) issues an EV certificate for the project (in flight; tracked in [SECURITY.md § Code Signing](SECURITY.md#code-signing)), the MSI ships unsigned. Microsoft Defender SmartScreen will display **"Microsoft Defender SmartScreen prevented an unrecognized app from starting"** on first launch. Click **More info → Run anyway**.
+
+To verify the binary is the one published from CI before clicking through:
+
+```powershell
+# Compare the published MSI's SHA-256 against the entry in checksums.txt
+# from the same release.
+certutil -hashfile SelectiveMirror.msi SHA256
+```
+
+Each release also carries a [GitHub build-provenance attestation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds), verifiable with the GitHub CLI:
+
+```bash
+gh attestation verify SelectiveMirror.msi --repo qraveh/SelectiveMirror
+```
+
+This confirms the MSI was built by this repository's CI on the tagged commit — independent of the (still-pending) Authenticode signature.
+
+### Portable ZIP (no install)
+
+Download `SelectiveMirror_<version>_windows_amd64.zip` from [Releases](https://github.com/qraveh/SelectiveMirror/releases) for portable use. Extract anywhere, run `smirror.exe` directly, manage your own PATH and uninstall path. The ZIP carries the same `smirror.exe` byte-for-byte as the MSI (CI builds once and feeds the binary into both artifacts).
+
+### Compatibility and rollback
+
+The local state database (`~/.selectivemirror/state.db`, perMachine: `%ProgramData%\SelectiveMirror\state.db`) is migrated forward on each startup. As of v0.9.20-dev, downgrading the binary to a version that does not know the current schema **will refuse to start** rather than silently misbehave (GAP-7). This protects against undefined-behavior on rows the newer binary wrote.
+
+If you need to revert to an older version:
+
+```powershell
+# 1. Stop any running smirror (foreground / task / service)
+smirror task stop      # if you used `task install`
+smirror service stop   # if you used `service install`
+
+# 2. Remove user data, including the state DB
+smirror clean --self
+
+# 3. Install the older MSI on a clean state. Your config.yaml and the
+#    remote contents are NOT touched; only the local state DB is
+#    rebuilt on next startup.
+```
+
+The first start after a downgrade re-syncs known files via checksum comparison, which is bandwidth-bounded by your rclone backend's pacer.
 
 ## Prerequisites
 

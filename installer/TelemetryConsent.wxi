@@ -35,21 +35,15 @@
     in place (not deleted) until smirror starts and migrates it to
     state DB metadata.
 
-  UI integration TODO (still pending — needs WiX dialog work):
-    The current installer uses WixUI_InstallDir, which is a stock
-    dialog set without a slot for a custom selector. Adding the tier
-    radio buttons requires either:
-      Option A: Define a custom dialog (`<Dialog Id="TelemetryTierDlg">`)
-        with three RadioButtonGroup options bound to INSTALL_TELEMETRY_TIER.
-        Defaults to "none". Insert between LicenseAgreementDlg and
-        InstallDirDlg.
-      Option B: Replace WixUI_InstallDir with a custom UI extension.
-      Option C: Add the controls to the existing InstallDirDlg via
-        `<Publish>` element overrides.
-
-    Until the UI is integrated, the tier is set via msiexec command
-    line. Default behavior (no override) is "none" — the consent-honest
-    default per docs/PRIVACY.md.
+  UI integration (PR-S2, panel review pre-release 2026-04-28):
+    Implemented as Option A — a custom <Dialog Id="TelemetryTierDlg">
+    with three RadioButtonGroup options bound to INSTALL_TELEMETRY_TIER.
+    The dialog is defined below and inserted between LicenseAgreementDlg
+    and InstallDirDlg by Publish overrides on the WixUI_InstallDir
+    chain. Default radio selection is "none" (consent-honest); the
+    user must actively pick Standard or Reliability to enroll.
+    Silent installs (msiexec /quiet) honor the command-line property
+    or fall back to "none" — silent default does NOT enroll users.
 -->
 <Include xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
@@ -92,6 +86,116 @@
       </Component>
 
     </ComponentGroup>
+
+  </Fragment>
+
+  <!-- =====================================================================
+       PR-S2 (panel review pre-release 2026-04-28): custom telemetry-tier
+       selection dialog. Lives in a separate Fragment so the Property +
+       ComponentGroup above stay reusable independently of the UI.
+
+       The dialog binds three radio options to INSTALL_TELEMETRY_TIER:
+       none / standard / reliability. Default selection is "none"
+       because the Property's default (in the previous Fragment) is
+       "none". Silent / unattended installs (msiexec /quiet) bypass the
+       UI entirely; they read the Property directly from the
+       command-line value or fall back to the default — neither path
+       enrolls users in any tier without an explicit choice.
+       ===================================================================== -->
+  <Fragment>
+
+    <!-- WiX 4+/6 schema: Dialog, RadioButtonGroup, and Publish
+         overrides all live INSIDE a <UI> element, not at Fragment
+         scope. We use a DIFFERENT Id from the stock WixUI_InstallDir
+         (which the WixUI extension already defines) and reach this
+         fragment from Package.wxs via <UIRef Id="WixUI_TelemetryTier" />
+         alongside the existing <ui:WixUI Id="WixUI_InstallDir" />. The
+         Publish overrides reference WixUI_InstallDir's stock dialogs
+         by name; merging happens at link time. -->
+    <UI Id="WixUI_TelemetryTier">
+
+      <Dialog Id="TelemetryTierDlg" Width="370" Height="270" Title="[ProductName] Setup">
+
+        <!-- Banner — match the WixUI stock visual so the dialog feels
+             like a native part of the installer chain. -->
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
+                 TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
+                 Transparent="yes"
+                 Text="{\WixUI_Font_Title}Telemetry preference" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15"
+                 Transparent="yes"
+                 Text="Choose how much diagnostic data SelectiveMirror submits." />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
+
+        <!-- Intro text -->
+        <Control Id="Intro" Type="Text" X="20" Y="60" Width="330" Height="35"
+                 Transparent="yes"
+                 Text="SelectiveMirror can submit anonymous diagnostic data to help improve the project. Telemetry is fully opt-in. You can change this setting later by running &quot;smirror telemetry&quot; with one of: none, standard, or reliability." />
+
+        <!-- Radio group bound to the public property INSTALL_TELEMETRY_TIER.
+             Default is "none" (set in the Property declaration in the
+             sibling Fragment). RadioButtonGroup is declared inside this
+             same UI element (below) and referenced here by Property name. -->
+        <Control Id="TierRadio" Type="RadioButtonGroup" X="20" Y="100" Width="330"
+                 Height="105" Property="INSTALL_TELEMETRY_TIER" />
+
+        <!-- Privacy link. WiX 4+ requires the inner <Text> element to
+             carry its content via the Value= attribute instead of inner
+             text, and obviously inner XML must be escaped. -->
+        <Control Id="PrivacyLink" Type="Hyperlink" X="20" Y="210" Width="330" Height="15"
+                 Transparent="yes">
+          <Text Value="&lt;a href=&quot;https://github.com/qraveh/SelectiveMirror/blob/master/docs/PRIVACY.md&quot;&gt;See PRIVACY.md for the full data contract&lt;/a&gt;" />
+        </Control>
+
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
+
+        <!-- Standard nav buttons. The Publish elements outside this
+             Dialog (below) wire LicenseAgreementDlg → here → InstallDirDlg. -->
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
+                 Text="!(loc.WixUIBack)">
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg" />
+        </Control>
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17"
+                 Default="yes" Text="!(loc.WixUINext)">
+          <Publish Event="NewDialog" Value="InstallDirDlg" />
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17"
+                 Cancel="yes" Text="!(loc.WixUICancel)">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+
+      </Dialog>
+
+      <!-- Radio button group: defines the three values bound to
+           INSTALL_TELEMETRY_TIER. Order is none / standard / reliability;
+           visual y-positions space them out within the Control's 105-tall
+           box (defined above). -->
+      <RadioButtonGroup Property="INSTALL_TELEMETRY_TIER">
+        <RadioButton Value="none" X="0" Y="0" Width="330" Height="30"
+                     Text="&amp;None — no telemetry submitted (default; recommended unless you actively want to help shape the project)." />
+        <RadioButton Value="standard" X="0" Y="35" Width="330" Height="30"
+                     Text="&amp;Standard — install/uninstall events, version, OS version. No filenames, no path content, no hashes." />
+        <RadioButton Value="reliability" X="0" Y="70" Width="330" Height="30"
+                     Text="&amp;Reliability — Standard plus sanitized bug reports when smirror crashes or hits a recurring anomaly." />
+      </RadioButtonGroup>
+
+      <!-- Sequencing: insert TelemetryTierDlg between LicenseAgreementDlg
+           and InstallDirDlg in the WixUI_InstallDir chain. WixUI's stock
+           Publishes have lower Order values, so these higher Orders win.
+
+           The condition on LicenseAgreementDlg.Next mirrors the stock
+           WixUI condition (LicenseAccepted = "1") so a user who hasn't
+           ticked "I accept" is not advanced. WiX 4+/6 requires the
+           condition as the Condition= attribute, not inner text. -->
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog"
+               Value="TelemetryTierDlg" Order="3"
+               Condition="LicenseAccepted = &quot;1&quot;" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog"
+               Value="TelemetryTierDlg" Order="3"
+               Condition="1" />
+
+    </UI>
 
   </Fragment>
 

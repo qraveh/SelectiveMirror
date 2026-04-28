@@ -475,6 +475,21 @@ func (g *Global) Validate() error {
 		}
 	}
 
+	// PR-S6 (panel review pre-release 2026-04-28): validate alert_min_severity
+	// against the canonical severity set. Without this, a typo like
+	// `alert_min_severity: erro` silently demotes filtering — the lookup
+	// in severityAtLeast() falls to the default-0 branch, so every severity
+	// (including info) compares "at or above" the unknown threshold. Empty
+	// string is allowed: it means "use the default" (error).
+	if g.AlertMinSeverity != "" {
+		switch g.AlertMinSeverity {
+		case "info", "warning", "error", "critical":
+			// valid
+		default:
+			return fmt.Errorf("alert_min_severity %q is not recognized (must be one of: info, warning, error, critical; empty defaults to error)", g.AlertMinSeverity)
+		}
+	}
+
 	return nil
 }
 
@@ -661,6 +676,14 @@ var rcloneExtraFlagDenylist = struct {
 // a human-readable origin label ("global" or `mirror "name"`) included in
 // the error message. Both separate-form (`--flag value`) and `=`-form
 // (`--flag=value`) are caught.
+//
+// PR-S6 (panel review pre-release 2026-04-28): the denylist match is
+// done after a strict ASCII check on the flag name. rclone's flag
+// namespace is entirely ASCII; a non-ASCII glyph in the flag name (e.g.
+// Cyrillic 'с' U+0441 standing in for ASCII 'c' in `--rc`) is either a
+// configuration typo or a deliberate denylist-bypass attempt via Unicode
+// confusables. We reject before prefix matching so `--rс` (Cyrillic 'с')
+// can't slip past the `--rc` prefix check.
 func validateRcloneExtraFlags(where string, flags []string) error {
 	for _, raw := range flags {
 		if !strings.HasPrefix(raw, "--") {
@@ -669,6 +692,14 @@ func validateRcloneExtraFlags(where string, flags []string) error {
 		name := raw
 		if eq := strings.Index(raw, "="); eq > 0 {
 			name = raw[:eq]
+		}
+		// PR-S6: ASCII-only check on flag name. r > 127 catches every
+		// non-ASCII byte, including the BMP confusables (Cyrillic а/с/о/р/у,
+		// Greek ο/α, fullwidth forms, etc.) and non-BMP characters.
+		for _, r := range name {
+			if r > 127 {
+				return fmt.Errorf("%s rclone_extra_flags: %q contains a non-ASCII character in the flag name (rclone flag names are ASCII; non-ASCII glyphs are rejected to block confusable-lookalike bypass of the denylist)", where, raw)
+			}
 		}
 		if rcloneExtraFlagDenylist.exact[name] {
 			return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; this flag changes what rclone executes — see docs/SECURITY.md GAP-1)", where, name)

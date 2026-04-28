@@ -1,22 +1,30 @@
 name: Release
 
+# Pre-release process is tracked in docs/operations/release-runbook.md
+# and gated by docs/release-maturity.md (panel-review pre-release batch
+# 2026-04-28). The matching dry-run lives in release-dryrun.yml; run it
+# manually or via the SM-keeper agent before pushing a tag.
+
 on:
   push:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: write       # release upload
+  id-token: write       # PR-S4: SLSA build-provenance attestations
+  attestations: write   # PR-S4: SLSA build-provenance attestations
 
-# Opt into the upcoming Node.js 24 default for JavaScript actions so we
-# exercise the new runtime before GitHub flips the default on
-# 2026-06-02. Silences the deprecation warning. Safe to remove once
-# Node 24 is the default.
+# Opt into Node.js 24 default for JavaScript actions ahead of the
+# 2026-06-02 GitHub flip. Silences the deprecation warning. Safe to
+# remove once Node 24 is the default.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   release:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,14 +34,34 @@ jobs:
         with:
           go-version: '1.26.1'
 
-      # Defense in depth: re-run the unit suite at release time. CI runs on
-      # `push: branches: [master]` / `pull_request: branches: [master]`, but
-      # release runs on `push: tags: ['v*']` — a separate trigger. GitHub
-      # Actions `needs:` does not cross-link between workflows, so without
-      # this step a tag pushed onto a commit whose CI failed would still
-      # produce a published release. We do NOT skip on CI-already-green
-      # status because the cost of re-running the suite is far less than
-      # the cost of a broken release.
+      - name: Extract version from tag
+        id: version
+        shell: pwsh
+        run: echo "VERSION=$($env:GITHUB_REF_NAME -replace '^v','')" >> $env:GITHUB_OUTPUT
+
+      # PR-R2 (panel review pre-release 2026-04-28): assert tag matches
+      # cmd/smirror/main.go::var version (with -dev stripped). Without
+      # this, a tag pushed onto a commit whose source version does not
+      # match silently produces a binary whose `smirror version` output
+      # disagrees with the tag — at best confusing, at worst (per
+      # build-msi.ps1's source-of-truth fallback) an MSI built with the
+      # wrong version. Fail loudly here.
+      - name: Assert tag matches source version
+        shell: pwsh
+        run: |
+          $tag = '${{ steps.version.outputs.VERSION }}'
+          $main = Get-Content cmd/smirror/main.go -Raw
+          if ($main -notmatch 'var\s+version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)(?:-[a-zA-Z0-9]+)?"') {
+              Write-Error "Could not parse 'var version' from cmd/smirror/main.go"
+              exit 1
+          }
+          $src = $Matches[1]
+          if ($src -ne $tag) {
+              Write-Error "Tag-source version drift: tag '$tag' but cmd/smirror/main.go has '$src'. Bump main.go to match the intended release version, recommit, and re-tag."
+              exit 1
+          }
+          Write-Host "OK: tag $tag matches main.go source version $src"
+
       - name: Verify C toolchain present (CGo required for SQLite driver)
         shell: pwsh
         run: gcc --version
@@ -41,27 +69,84 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      - name: Unit tests
+      # Defense in depth: re-run the unit suite at release time. CI's
+      # branch trigger does not cross-link to this tag trigger, so a tag
+      # pushed onto a CI-failed commit would otherwise still ship.
+      - name: Unit tests (internal + cmd)
         run: go test ./internal/... ./cmd/... -count=1
         env:
           CGO_ENABLED: 1
 
-      # Compute the per-version telemetry HMAC derived key from the master
-      # key (stored as a GitHub Actions repository secret). The master key
-      # never enters the binary; only the version-derived key does. See
-      # docs/telemetry-microserver-architecture.md "HMAC signing scheme".
+      # PR-Q3 (panel review pre-release 2026-04-28): system-validation
+      # tests are a separate Go module (system-validation/go.mod) and
+      # therefore miss the `./internal/... ./cmd/...` globs above. ~70
+      # panel-derived black-box tests previously did not gate release.
+      # Known-RED tests listed in the allowlist (mirror of CHANGELOG
+      # "Known issues" section) are tolerated; everything else blocks
+      # the release.
+      - name: System-validation tests (panel-derived black-box)
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          Push-Location system-validation
+          go test -count=1 -json ./... | Tee-Object -FilePath ../system-validation-results.json | Out-Null
+          $exitCode = $LASTEXITCODE
+          Pop-Location
+          if ($exitCode -eq 0) {
+              Write-Host "system-validation: all tests pass"
+              exit 0
+          }
+          # Allowlist of known-RED tests. Each entry must also appear in
+          # CHANGELOG `## Known issues` for the release to be tolerable.
+          $allowed = @(
+              'TestPanelR3_Gitignore_ExcludedParentBlocksChildNegation' # BUG-R3-1: gitignore parent-exclusion + child negation divergence; documented deviation, fix planned for v1.0.
+          )
+          $events = @(Get-Content ../system-validation-results.json | ForEach-Object { $_ | ConvertFrom-Json })
+          $failed = $events | Where-Object { $_.Action -eq 'fail' -and $_.Test } | ForEach-Object { ($_.Test -split '/')[0] } | Sort-Object -Unique
+          $unexpected = @($failed | Where-Object { $allowed -notcontains $_ })
+          if ($unexpected.Count -gt 0) {
+              Write-Error "system-validation has unexpected failures: $($unexpected -join ', ')"
+              exit 1
+          }
+          Write-Host "system-validation: only allowlisted failures present ($($failed -join ', '))"
+
+      # PR-S5 (panel review pre-release 2026-04-28): report-bug PII
+      # smoke. SM-164 / BUG-2 closed the placeholder substitution in
+      # `smirror report-bug --stdout`; without a release-time test, a
+      # regression in the redactor would silently leak user paths and
+      # mirror names into a public GitHub issue. The script builds a
+      # throwaway binary, runs report-bug against a canary config
+      # containing uniquely-identifiable patterns, and asserts the
+      # output contains zero of them.
+      - name: report-bug PII smoke
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/check-pii-leak.ps1
+
+      # PR-S3 (panel review pre-release 2026-04-28): HMAC master key is
+      # required by default. Previous behavior built with empty key on
+      # absent secret and silently produced a binary unable to submit
+      # telemetry. Now the release fails unless the maintainer
+      # explicitly opts out via repository variable
+      # RELEASE_ALLOW_NO_TELEMETRY_KEY=1 (set under repo Settings →
+      # Secrets and variables → Actions → Variables).
       - name: Compute version-derived telemetry HMAC key
         id: hmac
         shell: pwsh
         env:
           MASTER_KEY: ${{ secrets.SMIRROR_TELEMETRY_MASTER_KEY }}
+          ALLOW_NO_KEY: ${{ vars.RELEASE_ALLOW_NO_TELEMETRY_KEY }}
         run: |
           if ([string]::IsNullOrEmpty($env:MASTER_KEY)) {
-              Write-Host "SMIRROR_TELEMETRY_MASTER_KEY secret is not set; building with empty derived key (binary will not be able to submit telemetry to the production endpoint)."
-              echo "SMIRROR_TELEMETRY_DERIVED_KEY=" >> $env:GITHUB_ENV
-              exit 0
+              if ($env:ALLOW_NO_KEY -eq '1') {
+                  Write-Host "::warning::SMIRROR_TELEMETRY_MASTER_KEY missing; building with empty derived key (telemetry submission disabled). Override active: RELEASE_ALLOW_NO_TELEMETRY_KEY=1."
+                  echo "SMIRROR_TELEMETRY_DERIVED_KEY=" >> $env:GITHUB_ENV
+                  exit 0
+              }
+              Write-Error "SMIRROR_TELEMETRY_MASTER_KEY is not set. To intentionally release a binary without telemetry, set repository variable RELEASE_ALLOW_NO_TELEMETRY_KEY=1 and re-run this workflow. See docs/operations/telemetry-ops.md `"HMAC key rotation`"."
+              exit 1
           }
-          $version = "${{ github.ref_name }}" -replace '^v',''
+          $version = '${{ steps.version.outputs.VERSION }}'
           $masterBytes = New-Object byte[] ($env:MASTER_KEY.Length / 2)
           for ($i = 0; $i -lt $masterBytes.Length; $i++) {
               $masterBytes[$i] = [Convert]::ToByte($env:MASTER_KEY.Substring($i * 2, 2), 16)
@@ -71,14 +156,10 @@ jobs:
           $versionBytes = [System.Text.Encoding]::UTF8.GetBytes($version)
           $hash = $hmac.ComputeHash($versionBytes)
           $derived = -join ($hash | ForEach-Object { $_.ToString('x2') })
-          # Sanity check on length — derived key must be 64 hex chars.
           if ($derived.Length -ne 64) {
               Write-Error "Derived key has unexpected length: $($derived.Length)"
               exit 1
           }
-          # Add to GITHUB_ENV so subsequent steps (including GoReleaser)
-          # see it as an environment variable. We do NOT echo the value
-          # to logs (it would leak the per-version key).
           echo "SMIRROR_TELEMETRY_DERIVED_KEY=$derived" >> $env:GITHUB_ENV
           Write-Host "Derived key computed for version $version (64 hex chars, value redacted)."
 
@@ -93,15 +174,64 @@ jobs:
           # ldflags can reference {{.Env.SMIRROR_TELEMETRY_DERIVED_KEY}}.
           SMIRROR_TELEMETRY_DERIVED_KEY: ${{ env.SMIRROR_TELEMETRY_DERIVED_KEY }}
 
+      # PR-R3 (panel review pre-release 2026-04-28): pass the
+      # GoReleaser-built smirror.exe to the msi job as a workflow
+      # artifact. Eliminates the second `go build` that build-msi.ps1
+      # used to do, so the binary inside the MSI is byte-equal to the
+      # binary inside the published ZIP. Required for SignPath / SLSA
+      # provenance: there is exactly one signed/attested binary per
+      # release, not two.
+      - name: Locate built smirror.exe
+        id: locate-exe
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist -Recurse -Filter smirror.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "smirror.exe not found in dist/"; exit 1 }
+          echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          Write-Host "Located: $($exe.FullName)"
+
+      - name: Upload smirror.exe artifact for msi job
+        uses: actions/upload-artifact@v4
+        with:
+          name: smirror-exe-${{ steps.version.outputs.VERSION }}
+          path: ${{ steps.locate-exe.outputs.EXE_PATH }}
+          retention-days: 7
+          if-no-files-found: error
+
+      # PR-S4 (panel review pre-release 2026-04-28): SLSA
+      # build-provenance attestation for the release binary. Produces a
+      # GitHub-signed statement linking the artifact to this exact
+      # commit + workflow run; users verify with `gh attestation
+      # verify`. SBOM generation is deferred to a future cycle (the
+      # provenance + checksums.txt + LICENSE/CREDITS bundle covers the
+      # immediate user need).
+      - name: Generate build-provenance attestation for smirror.exe
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ steps.locate-exe.outputs.EXE_PATH }}
+
+      # PR-W4 (panel review pre-release 2026-04-28): extract the matching
+      # CHANGELOG section and pin it as the GitHub Release body.
+      # GoReleaser's auto-changelog uses commit messages with limited
+      # filters; this surfaces the hand-written narrative instead.
+      - name: Extract release notes from CHANGELOG
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/extract-changelog.ps1 -Version ${{ steps.version.outputs.VERSION }} -Output release-notes.md
+
+      - name: Set GitHub Release body to CHANGELOG section
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit ${{ github.ref_name }} --notes-file release-notes.md
+
   msi:
     runs-on: windows-latest
     needs: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.1'
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -116,21 +246,130 @@ jobs:
       - name: Add WiX UI extension
         run: wix extension add WixToolset.UI.wixext/6.0.2 -g
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=$($env:GITHUB_REF_NAME -replace '^v','')" >> $env:GITHUB_OUTPUT
+      # PR-R3: download smirror.exe from the release job. build-msi.ps1
+      # runs with -SkipGoBuild so it consumes this binary directly
+      # rather than re-building from source. One binary per release;
+      # MSI bytes-around-binary are identical to ZIP bytes-around-binary.
+      - name: Download smirror.exe artifact from release job
+        uses: actions/download-artifact@v4
+        with:
+          name: smirror-exe-${{ needs.release.outputs.version }}
+          path: bin
 
-      - name: Build MSI
-        run: powershell -ExecutionPolicy Bypass -File installer\build-msi.ps1 -Version ${{ steps.version.outputs.VERSION }}
+      - name: Verify downloaded smirror.exe
+        shell: pwsh
+        run: |
+          $exe = "bin\smirror.exe"
+          if (-not (Test-Path $exe)) { Write-Error "Downloaded smirror.exe missing"; exit 1 }
+          $size = (Get-Item $exe).Length / 1MB
+          Write-Host ("Downloaded smirror.exe: {0:N1} MB" -f $size)
+          $reported = (& $exe version 2>&1) -join ' '
+          $expected = '${{ needs.release.outputs.version }}'
+          if ($reported -notmatch [regex]::Escape($expected)) {
+              Write-Error "Downloaded smirror.exe reports version '$reported'; expected to contain '$expected'"
+              exit 1
+          }
+          Write-Host "OK: smirror.exe reports version containing '$expected'"
 
-      # SEC-C2 regression gate: block the release if any MSI invariant fails
-      # (service silently registered, wrong install scope, HKCU registry
-      # entries, uninstall leftover files, etc.). GitHub Actions
-      # windows-latest runners execute as admin, which the script requires.
+      - name: Build MSI (using artifact binary; -SkipGoBuild)
+        run: powershell -ExecutionPolicy Bypass -File installer\build-msi.ps1 -Version ${{ needs.release.outputs.version }} -SkipGoBuild
+
+      # SEC-C2 regression gate: block the release if any MSI invariant
+      # fails (service silently registered, wrong install scope, HKCU
+      # registry entries, uninstall leftover files, etc.). GitHub
+      # Actions windows-latest runners execute as admin, which the
+      # script requires.
       - name: MSI smoke test (install / task round-trip / uninstall)
-        run: powershell -ExecutionPolicy Bypass -File installer\smoke-test.ps1 -SkipBuild -Version ${{ steps.version.outputs.VERSION }}
+        run: powershell -ExecutionPolicy Bypass -File installer\smoke-test.ps1 -SkipBuild -Version ${{ needs.release.outputs.version }}
 
       - name: Upload MSI to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload ${{ github.ref_name }} installer\bin\Release\SelectiveMirror.msi --clobber
+
+      # PR-S4: build-provenance attestation for the MSI as well.
+      - name: Generate build-provenance attestation for MSI
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: installer\bin\Release\SelectiveMirror.msi
+
+      # PR-Q5 (panel review pre-release 2026-04-28): published-artifact
+      # smoke. Download the MSI from the GitHub release URL and confirm
+      # its bytes equal what we just uploaded. Catches GitHub upload
+      # corruption, CDN cache mismatches, and the "we uploaded the
+      # wrong file" class of release-day incidents.
+      - name: Verify published MSI matches local
+        id: verify-msi
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $local = 'installer\bin\Release\SelectiveMirror.msi'
+          $localHash = (Get-FileHash $local -Algorithm SHA256).Hash
+          New-Item -ItemType Directory -Path published -Force | Out-Null
+          gh release download ${{ github.ref_name }} -p SelectiveMirror.msi -D published --clobber
+          $publishedHash = (Get-FileHash 'published\SelectiveMirror.msi' -Algorithm SHA256).Hash
+          if ($localHash -ne $publishedHash) {
+              Write-Error "Published MSI hash mismatch! local=$localHash published=$publishedHash"
+              exit 1
+          }
+          Write-Host "OK: published MSI matches local ($localHash)"
+          echo "MSI_SHA256=$($localHash.ToLower())" >> $env:GITHUB_OUTPUT
+
+      # PR-W1 (panel review pre-release 2026-04-28): regenerate the
+      # winget manifest with the published MSI URL and SHA256, upload
+      # as a workflow artifact for downstream submission. Submission
+      # itself is gated on a configured PAT so a fresh fork without
+      # winget credentials still completes the release. The manifest
+      # at winget/RavehNeeman.SelectiveMirror.yaml in the repo is a
+      # template; this step is the source of truth for what gets
+      # submitted to microsoft/winget-pkgs.
+      - name: Generate winget manifest
+        id: winget-gen
+        shell: pwsh
+        env:
+          MSI_URL: https://github.com/qraveh/SelectiveMirror/releases/download/${{ github.ref_name }}/SelectiveMirror.msi
+          MSI_SHA256: ${{ steps.verify-msi.outputs.MSI_SHA256 }}
+        run: |
+          $version = '${{ needs.release.outputs.version }}'
+          $sha = $env:MSI_SHA256.ToUpper()
+          $tpl = Get-Content winget/RavehNeeman.SelectiveMirror.yaml -Raw
+          $tpl = $tpl -replace 'PackageVersion:\s*\S+.*', "PackageVersion: $version"
+          $tpl = $tpl -replace 'InstallerUrl:\s*\S+.*', "InstallerUrl: $env:MSI_URL"
+          $tpl = $tpl -replace 'InstallerSha256:\s*\S+.*', "InstallerSha256: $sha"
+          # Strip the inline "UPDATE" hint comments — the generated
+          # manifest is consumable as-is.
+          $tpl = $tpl -replace '\s*#\s*UPDATE.*', ''
+          $tpl | Set-Content winget-manifest-generated.yaml -Encoding UTF8
+          Write-Host "Generated winget manifest:"
+          Get-Content winget-manifest-generated.yaml
+
+      - name: Upload winget manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: winget-manifest-${{ needs.release.outputs.version }}
+          path: winget-manifest-generated.yaml
+          retention-days: 30
+
+      # Submit only if the maintainer has provisioned a PAT with
+      # public_repo + workflow scopes that can fork
+      # microsoft/winget-pkgs. Without it, the workflow uploads the
+      # manifest above for manual submission via wingetcreate.
+      - name: Submit to winget-pkgs (gated on WINGET_SUBMIT_ENABLED)
+        if: ${{ vars.WINGET_SUBMIT_ENABLED == '1' }}
+        env:
+          WINGET_PAT: ${{ secrets.WINGET_SUBMIT_PAT }}
+          MSI_URL: https://github.com/qraveh/SelectiveMirror/releases/download/${{ github.ref_name }}/SelectiveMirror.msi
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINGET_PAT)) {
+              Write-Error "WINGET_SUBMIT_ENABLED=1 but WINGET_SUBMIT_PAT secret is empty. Either set the secret or unset the variable."
+              exit 1
+          }
+          dotnet tool install --global wingetcreate
+          wingetcreate update `
+              --urls $env:MSI_URL `
+              --version '${{ needs.release.outputs.version }}' `
+              --token $env:WINGET_PAT `
+              --submit `
+              RavehNeeman.SelectiveMirror

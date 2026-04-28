@@ -9,7 +9,7 @@
 
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (smirror@qodeh.com)
-**Status**: v0.9.x-dev (Phase 1+1.5+2+2.5+4+5+6+7 complete; Phase 3 USN journal pending). v0.9.0 released 2026-04-18 with the perMachine MSI / SEC-C2 / per-user task mode batch; v0.9.4-dev brought Phase 5 telemetry live (Supabase backend, Cloudflare Worker proxy, MSI consent UI).
+**Status**: v0.9.x-dev (Phases 1, 1.5, 2, 2.5, 4, 5, 6, 7 complete; Phase 3 USN journal pending). v0.9.0 released 2026-04-18; v0.9.26 (2026-04-29) is the latest published tag. Phase 5 telemetry live since v0.9.4-dev (Supabase backend + Cloudflare Worker proxy); MSI consent **registry** wired since v0.9.4-dev — the in-installer tier-selection **dialog** is shipping in the current development cycle (was tracked as the "pending UI checkbox" in `installer/TelemetryConsent.wxi`).
 **License**: MIT
 **Language**: Go 1.26+
 
@@ -243,7 +243,7 @@ Follows [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
 - [x] **Phase 2.5**: Distribution — CI/CD, GoReleaser, WiX MSI installer, rclone auto-provisioning
 - [ ] **Phase 3**: USN journal recovery — fast restart reconciliation
 - [x] **Phase 4**: OSS polish — CONTRIBUTING, SECURITY, PR template, winget manifest, CHANGELOG
-- [x] **Phase 5**: Telemetry — opt-in analytics, update check (deployed 0.9.4-dev → 0.9.6-dev: Supabase schema, RLS, HMAC verify, MSI consent UI, Cloudflare Worker proxy, pg_cron rollups)
+- [x] **Phase 5**: Telemetry — opt-in analytics, update check (deployed 0.9.4-dev → 0.9.6-dev: Supabase schema, RLS, HMAC verify, MSI consent registry, Cloudflare Worker proxy, pg_cron rollups; in-installer consent dialog landed in current dev cycle)
 - [x] **Phase 6**: Anomaly detection — classification, recording, rotation, webhook alerts
 - [x] **Phase 7**: Hooks — pre/post-sync hook execution with environment variables
 
