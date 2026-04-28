@@ -55,6 +55,36 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Privacy guards
+# ---------------------------------------------------------------------------
+
+# K-anonymity floor: cells with fewer contributors than this are suppressed
+# (rendered as "<5" or omitted from grouped tables) rather than published.
+# This is a binding commitment in PRIVACY.md. Do not lower without
+# re-consenting all opted-in users.
+K_ANONYMITY_FLOOR = 5
+
+
+def k_anon_guard(count: int) -> str:
+    """Render a count, suppressing values below the k-anonymity floor."""
+    if count is None:
+        return "—"
+    if count < K_ANONYMITY_FLOOR:
+        return f"<{K_ANONYMITY_FLOOR}"
+    return str(count)
+
+
+def k_anon_filter(rows, count_field: str) -> list:
+    """Filter rows where the given count field is below the k-anonymity floor.
+
+    Used for grouped tables (e.g. version distribution) where small cells
+    must not appear at all — leaving the row visible with "<5" would still
+    leak that the version exists. Filter is the right move for those cases.
+    """
+    return [r for r in rows if (r.get(count_field) or 0) >= K_ANONYMITY_FLOOR]
+
+
+# ---------------------------------------------------------------------------
 # SQL queries — keep in lockstep with docs/telemetry-views.sql when possible
 # ---------------------------------------------------------------------------
 
@@ -390,8 +420,16 @@ def render_bugs_section(bugs, recurrence, quiet_kinds):
 
 def render_versions(version_dist, install_channels, backend_mix):
     out = ["## Version distribution (active installs / 30d)\n"]
+    # K-anonymity: suppress versions with fewer than K installs entirely
+    # (showing "<5" would still leak the version's existence).
+    visible_versions = k_anon_filter(version_dist, "installs")
+    suppressed_versions = len(version_dist) - len(visible_versions)
     if not version_dist:
         out.append("_No active installs._\n")
+    elif not visible_versions:
+        out.append(f"_All version cells below k-anonymity floor "
+                   f"({K_ANONYMITY_FLOOR}). Suppressed: {suppressed_versions} "
+                   f"version(s)._\n")
     else:
         out.append(
             md_table(
@@ -401,38 +439,57 @@ def render_versions(version_dist, install_channels, backend_mix):
                         "Installs": v["installs"],
                         "% of base": f"{v['pct']}%" if v["pct"] is not None else "—",
                     }
-                    for v in version_dist
+                    for v in visible_versions
                 ],
                 ["Version", "Installs", "% of base"],
                 aligns=["left", "right", "right"],
             )
         )
+        if suppressed_versions:
+            out.append(f"\n_({suppressed_versions} additional version(s) "
+                       f"with installs below k={K_ANONYMITY_FLOOR} suppressed.)_")
 
     out.append("\n## Install channel mix (cumulative)\n")
+    visible_channels = k_anon_filter(install_channels, "installs")
+    suppressed_channels = len(install_channels) - len(visible_channels)
     if not install_channels:
         out.append("_No install-method data._\n")
+    elif not visible_channels:
+        out.append(f"_All channel cells below k-anonymity floor "
+                   f"({K_ANONYMITY_FLOOR}). Suppressed: {suppressed_channels}._\n")
     else:
         out.append(
             md_table(
-                [{"Channel": c["channel"], "Installs": c["installs"]} for c in install_channels],
+                [{"Channel": c["channel"], "Installs": c["installs"]}
+                 for c in visible_channels],
                 ["Channel", "Installs"],
                 aligns=["left", "right"],
             )
         )
+        if suppressed_channels:
+            out.append(f"\n_({suppressed_channels} channel(s) suppressed below k={K_ANONYMITY_FLOOR}.)_")
 
     out.append("\n## Backend mix (current installation snapshot)\n")
+    visible_backends = k_anon_filter(backend_mix, "installs")
+    suppressed_backends = len(backend_mix) - len(visible_backends)
     if not backend_mix:
         out.append("_No backends recorded yet. (Note: `backend_types` is "
                    "captured on `upgrade` events; `first_seen` typically has "
                    "an empty array.)_\n")
+    elif not visible_backends:
+        out.append(f"_All backend cells below k-anonymity floor "
+                   f"({K_ANONYMITY_FLOOR}). Suppressed: {suppressed_backends}._\n")
     else:
         out.append(
             md_table(
-                [{"Backend": b["backend"], "Installs reporting": b["installs"]} for b in backend_mix],
+                [{"Backend": b["backend"], "Installs reporting": b["installs"]}
+                 for b in visible_backends],
                 ["Backend", "Installs reporting"],
                 aligns=["left", "right"],
             )
         )
+        if suppressed_backends:
+            out.append(f"\n_({suppressed_backends} backend(s) suppressed below k={K_ANONYMITY_FLOOR}.)_")
     return "\n".join(out)
 
 

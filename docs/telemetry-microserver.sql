@@ -57,6 +57,22 @@ CREATE TYPE telemetry.report_format AS ENUM (
     'json_bundle'
 );
 
+-- Consent tier under which an event was submitted. Used for analytics
+-- (which tier mix is in the wild) and to enforce tier-aware behaviors
+-- in views and the digest.
+--
+-- Note: the value 'none' never appears in stored rows by definition (a
+-- None-tier user sends nothing). It's part of the enum for completeness
+-- and for consent-state references in adjacent tables. 'one_shot' is
+-- used for per-event bug-report submissions from None-tier users via
+-- `smirror report-bug --submit --one-shot`.
+CREATE TYPE telemetry.consent_tier AS ENUM (
+    'none',
+    'standard',
+    'reliability',
+    'one_shot'
+);
+
 -- Immutable accepted payloads for both ingest kinds. Request handlers
 -- must write here before any asynchronous classification or rollup work.
 CREATE TABLE IF NOT EXISTS telemetry.ingest_envelope (
@@ -111,6 +127,10 @@ CREATE TABLE IF NOT EXISTS telemetry.bug_report (
     component_hint          TEXT,
     severity_hint           TEXT,
     reproduction_hint       TEXT,
+    -- Tier under which this bug report was submitted. 'standard' or
+    -- 'reliability' for users at those tiers; 'one_shot' for None-tier
+    -- users using `report-bug --submit --one-shot`. Never 'none'.
+    submitted_tier          telemetry.consent_tier,
     -- Set by the client when `smirror report-bug --browser` is used: client
     -- submitted to telemetry AND additionally launched a browser to file a
     -- prefilled GitHub issue. NULL means telemetry-only submission. The
@@ -178,6 +198,21 @@ CREATE TABLE IF NOT EXISTS telemetry.installation (
     current_os_family       TEXT,
     current_os_detail       TEXT,
     current_arch            TEXT,
+    -- Round-3 tier-model additions: structural facts that change over
+    -- time as the user reconfigures. Updated on each upgrade event.
+    -- All are bucketed/boolean to prevent fingerprinting heavy users.
+    current_tier                       telemetry.consent_tier,
+    current_mirror_count_bucket        TEXT,  -- '0' | '1' | '2-5' | '6-20' | '21+'
+    current_background_mode            TEXT,  -- 'foreground' | 'service' | 'task' | 'unknown'
+    current_delete_policy              TEXT,  -- 'ignore' | 'delete' | 'quarantine'
+    current_has_hooks                  BOOLEAN,
+    current_has_filters                BOOLEAN,
+    current_has_alert_webhook          BOOLEAN,
+    current_has_bandwidth_limit        BOOLEAN,
+    current_rclone_version             TEXT,
+    -- Snapshot of backend types the user has configured. Already exists
+    -- as data on installation_event; mirrored here for "current state."
+    current_backend_types              TEXT[] NOT NULL DEFAULT '{}',
     first_event_id          UUID REFERENCES telemetry.ingest_envelope(id),
     last_event_id           UUID REFERENCES telemetry.ingest_envelope(id)
 );
@@ -201,6 +236,23 @@ CREATE TABLE IF NOT EXISTS telemetry.installation_event (
     arch                    TEXT,
     install_method          TEXT,
     backend_types           TEXT[] NOT NULL DEFAULT '{}',
+    -- Tier this event was submitted under. 'standard' or 'reliability';
+    -- never 'none' (None-tier users send no install events).
+    submitted_tier          telemetry.consent_tier,
+    -- Round-3 structural fields. All bucketed/boolean for privacy.
+    -- Sent at first_seen and upgrade. mirror_count is bucketed at the
+    -- client to prevent identifying users with distinctive setups.
+    mirror_count_bucket            TEXT,  -- '0' | '1' | '2-5' | '6-20' | '21+'
+    background_mode                TEXT,  -- 'foreground' | 'service' | 'task' | 'unknown'
+    delete_policy                  TEXT,  -- 'ignore' | 'delete' | 'quarantine'
+    has_hooks                      BOOLEAN,
+    has_filters                    BOOLEAN,
+    has_alert_webhook              BOOLEAN,
+    has_bandwidth_limit            BOOLEAN,
+    rclone_version                 TEXT,
+    -- Only on `upgrade` events:
+    prior_version                  TEXT,
+    days_since_first_seen_bucket   TEXT,  -- '1-7' | '8-30' | '31-90' | '91-365' | '>365'
     taxonomy_state          telemetry.classification_state NOT NULL DEFAULT 'pending',
     classified_at           TIMESTAMPTZ,
     classification_error    TEXT
@@ -221,6 +273,47 @@ CREATE TABLE IF NOT EXISTS telemetry.installation_taxonomy_assignment (
     assigned_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (installation_event_id, term_id)
 );
+
+-- Reliability snapshot — Tier 3 (Reliability) ONLY.
+--
+-- Attached to each `upgrade` event from a user at Reliability tier.
+-- Lives in a separate table (not columns on installation_event) so that
+-- Standard-tier opted-in users' rows aren't polluted with NULL columns
+-- and so privacy reviewers can audit "what gets collected at T3" by
+-- looking at this table alone.
+--
+-- All fields are bucketed (not raw counts) to prevent fingerprinting
+-- via extreme values. The single integer field (restart_count) is
+-- capped at 1000 client-side per the privacy commitment.
+CREATE TABLE IF NOT EXISTS telemetry.installation_reliability_snapshot (
+    installation_event_id  UUID PRIMARY KEY REFERENCES telemetry.installation_event(id) ON DELETE CASCADE,
+    -- Anomaly counts in the last 30 days, keyed by anomaly kind. Counts
+    -- only — no payloads, no timestamps, no per-anomaly metadata.
+    -- e.g.: {"watcher_error": 3, "ghost_leak": 0, "sync_timeout": 1}
+    anomaly_counts_30d     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Bucketed sync attempt and failure counts. Buckets:
+    --   '<100' | '100-1k' | '1k-10k' | '10k-100k' | '100k+'
+    sync_attempts_bucket   TEXT,
+    sync_failures_bucket   TEXT,
+    -- Number of smirror restarts since the last upgrade event. Capped
+    -- at 1000 to prevent fingerprinting via extreme values.
+    restart_count          INTEGER,
+    -- Bucketed peak-queue-depth and dead-letter counts.
+    --   max_queue_depth: '<100' | '100-1k' | '1k-10k' | '10k+'
+    --   dead_letter:     '0'    | '1-10'   | '11-100' | '100+'
+    max_queue_depth_bucket TEXT,
+    dead_letter_count_bucket TEXT,
+    -- Bucketed state DB size:
+    --   '<10MB' | '10-100MB' | '100MB-1GB' | '1GB+'
+    state_db_size_bucket   TEXT,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS installation_reliability_snapshot_event_idx
+    ON telemetry.installation_reliability_snapshot (installation_event_id);
+
+COMMENT ON TABLE telemetry.installation_reliability_snapshot IS
+'Tier 3 (Reliability) only. Bucketed reliability deltas attached to upgrade events from opted-in users. All fields bucketed; restart_count capped at 1000. Privacy auditors: this is the entire footprint of T3 vs T2.';
 
 -- Daily rollup for install events. No `heartbeats` column (heartbeats
 -- aren't collected). `active_installs` counts distinct install_ids that

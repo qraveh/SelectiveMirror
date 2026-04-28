@@ -2,13 +2,23 @@
 
 ## Goal
 
-Define the server-side architecture for SelectiveMirror's Postgres-backed microserver that collects user-approved bug reports and minimal opt-in installation events, then assigns taxonomy labels asynchronously.
+Define the server-side architecture for SelectiveMirror's Postgres-backed microserver that collects user-approved bug reports and tier-gated installation events, then assigns taxonomy labels asynchronously.
 
-Scope and consent model:
+## Scope and consent model — three tiers
 
-- **Bug reports**: per-event approval. The user runs `smirror report-bug` and explicitly approves each submission. There is no global "send bug reports automatically" setting.
-- **Installation telemetry**: opt-in via the MSI installer checkbox at install time (default unchecked) or via the runtime command `smirror telemetry on`. If enabled, smirror sends two event types only — `first_seen` (one per install, at first run) and `upgrade` (on each version change). NO heartbeat. NO continuous phoning home. The user can revoke at any time via `smirror telemetry off`.
-- **Crashes**: never auto-submitted. Recorded only to local disk. May be embedded in a user-approved bug report via `report-bug --include-crashes`.
+The default tier is **None**. Users actively choose a tier; nothing flows by default. See `docs/PRIVACY.md` for the user-facing version of this policy.
+
+| Tier | Bug reports | Install events | Reliability deltas |
+|------|-------------|----------------|---------------------|
+| **None** (default) | ❌ disabled | ❌ | ❌ |
+| **Standard** | ✅ per-event approval | ✅ first_seen + upgrade with structural fields | ❌ |
+| **Reliability** | ✅ per-event approval | ✅ same as Standard | ✅ bucketed deltas attached to upgrade events |
+
+Plus a **one-shot escape valve**: `smirror report-bug --submit --one-shot` lets a user at None submit a single bug report with explicit per-event consent without changing their tier. This separates the bug-report consent (foreground, user-initiated) from background data collection (Standard and Reliability tiers), avoiding a bundled-consent issue.
+
+- **Bug reports**: per-event approval, regardless of tier. The user runs `smirror report-bug` and explicitly approves each submission. There is no global "send bug reports automatically" setting at any tier.
+- **Installation telemetry** (Standard / Reliability only): two event types — `first_seen` (one per install, at first run) and `upgrade` (on each version change). NO heartbeat. NO continuous phoning home. Reliability tier additionally attaches a bucketed reliability snapshot to each `upgrade` event.
+- **Crashes**: never auto-submitted at any tier. Recorded only to local disk. May be embedded in a user-approved bug report via `report-bug --include-crashes`.
 
 The key constraint on the request path is that taxonomy assignment must be non-blocking. Ingest must succeed or fail quickly without waiting for classification.
 

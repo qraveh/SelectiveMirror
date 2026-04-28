@@ -21,6 +21,7 @@ SELECT
     br.reported_at,
     br.client_version,
     br.source,
+    br.submitted_tier,                            -- 'standard' / 'reliability' / 'one_shot'
     br.title,
     COALESCE(t_kind.display_name,    'unclassified') AS kind,
     COALESCE(t_surface.display_name, 'unknown')      AS surface,
@@ -31,7 +32,8 @@ SELECT
     LEFT(br.report_text, 500) AS preview,
     br.duplicate_of,
     br.classified_at,
-    br.report_format
+    br.report_format,
+    br.browser_escalated_at
 FROM telemetry.bug_report br
 LEFT JOIN telemetry.bug_report_taxonomy_assignment a_kind
        ON a_kind.bug_report_id = br.id
@@ -149,6 +151,116 @@ FROM wk;
 
 COMMENT ON VIEW telemetry.weekly_health IS
 'Single-row dashboard for the current week. Use as the first query when checking project health.';
+
+-- ============================================================================
+-- View 5: tier_distribution
+-- ============================================================================
+--
+-- How many opted-in installs are at each tier? Drives the digest's
+-- "how many users have opted into Reliability vs Standard?" line.
+
+CREATE OR REPLACE VIEW telemetry.tier_distribution AS
+SELECT
+    COALESCE(current_tier::text, 'unknown') AS tier,
+    COUNT(*)                                AS installs
+FROM telemetry.installation
+GROUP BY current_tier
+ORDER BY installs DESC;
+
+COMMENT ON VIEW telemetry.tier_distribution IS
+'How many opted-in installs at each tier. Note: None-tier users do not appear here at all (they create no installation rows).';
+
+
+-- ============================================================================
+-- View 6: reliability_snapshot_human
+-- ============================================================================
+--
+-- Tier-3 reliability deltas joined to their parent upgrade event for
+-- maintainer scanning. One row per upgrade-with-snapshot.
+
+CREATE OR REPLACE VIEW telemetry.reliability_snapshot_human AS
+SELECT
+    ie.reported_at,
+    ie.client_version,
+    ie.prior_version,
+    LEFT(ie.install_id, 8)                 AS install_id_8,
+    rs.anomaly_counts_30d,
+    rs.sync_attempts_bucket,
+    rs.sync_failures_bucket,
+    rs.restart_count,
+    rs.max_queue_depth_bucket,
+    rs.dead_letter_count_bucket,
+    rs.state_db_size_bucket
+FROM telemetry.installation_reliability_snapshot rs
+JOIN telemetry.installation_event ie
+  ON ie.id = rs.installation_event_id
+ORDER BY ie.reported_at DESC;
+
+COMMENT ON VIEW telemetry.reliability_snapshot_human IS
+'Tier-3 (Reliability) reliability deltas joined to their upgrade event. One row per opted-in upgrade. The view a maintainer scans to spot regression patterns across releases.';
+
+
+-- ============================================================================
+-- View 7: install_config_distribution
+-- ============================================================================
+--
+-- The 9 round-3 structural fields aggregated across opted-in installs.
+-- Drives the "what does the typical install look like?" question.
+-- k-anonymity must be enforced in the digest layer (not here) — these
+-- views are admin-only via service_role.
+
+CREATE OR REPLACE VIEW telemetry.install_config_distribution AS
+SELECT
+    'mirror_count_bucket' AS field, current_mirror_count_bucket AS value, COUNT(*) AS installs
+FROM telemetry.installation
+WHERE current_mirror_count_bucket IS NOT NULL
+GROUP BY current_mirror_count_bucket
+
+UNION ALL
+
+SELECT 'background_mode', current_background_mode, COUNT(*)
+FROM telemetry.installation WHERE current_background_mode IS NOT NULL
+GROUP BY current_background_mode
+
+UNION ALL
+
+SELECT 'delete_policy', current_delete_policy, COUNT(*)
+FROM telemetry.installation WHERE current_delete_policy IS NOT NULL
+GROUP BY current_delete_policy
+
+UNION ALL
+
+SELECT 'has_hooks', current_has_hooks::text, COUNT(*)
+FROM telemetry.installation WHERE current_has_hooks IS NOT NULL
+GROUP BY current_has_hooks
+
+UNION ALL
+
+SELECT 'has_filters', current_has_filters::text, COUNT(*)
+FROM telemetry.installation WHERE current_has_filters IS NOT NULL
+GROUP BY current_has_filters
+
+UNION ALL
+
+SELECT 'has_alert_webhook', current_has_alert_webhook::text, COUNT(*)
+FROM telemetry.installation WHERE current_has_alert_webhook IS NOT NULL
+GROUP BY current_has_alert_webhook
+
+UNION ALL
+
+SELECT 'has_bandwidth_limit', current_has_bandwidth_limit::text, COUNT(*)
+FROM telemetry.installation WHERE current_has_bandwidth_limit IS NOT NULL
+GROUP BY current_has_bandwidth_limit
+
+UNION ALL
+
+SELECT 'rclone_version', current_rclone_version, COUNT(*)
+FROM telemetry.installation WHERE current_rclone_version IS NOT NULL
+GROUP BY current_rclone_version;
+
+COMMENT ON VIEW telemetry.install_config_distribution IS
+'Distribution of structural config fields across opted-in installs. Apply k-anonymity floor of 5 in the digest layer before publishing aggregates.';
+
 
 -- ============================================================================
 -- Read access for non-admin users

@@ -164,27 +164,29 @@ CREATE POLICY anon_insert_with_hmac
 -- Enabling RLS without any policy means: nobody but service_role can
 -- access. service_role bypasses RLS automatically.
 
-ALTER TABLE telemetry.bug_report                       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.bug_report_signal                ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.bug_report_taxonomy_assignment   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.installation                     ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.installation_event               ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.installation_taxonomy_assignment ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.taxonomy_term                    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.classification_job               ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.bug_daily_rollup                 ENABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.installation_daily_rollup        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.bug_report                          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.bug_report_signal                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.bug_report_taxonomy_assignment      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation                        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation_event                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation_taxonomy_assignment    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation_reliability_snapshot   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.taxonomy_term                       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.classification_job                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.bug_daily_rollup                    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation_daily_rollup           ENABLE ROW LEVEL SECURITY;
 
-ALTER TABLE telemetry.bug_report                       FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.bug_report_signal                FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.bug_report_taxonomy_assignment   FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.installation                     FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.installation_event               FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.installation_taxonomy_assignment FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.taxonomy_term                    FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.classification_job               FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.bug_daily_rollup                 FORCE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.installation_daily_rollup        FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.bug_report                          FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.bug_report_signal                   FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.bug_report_taxonomy_assignment      FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation                        FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation_event                  FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation_taxonomy_assignment    FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation_reliability_snapshot   FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.taxonomy_term                       FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.classification_job                  FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.bug_daily_rollup                    FORCE ROW LEVEL SECURITY;
+ALTER TABLE telemetry.installation_daily_rollup           FORCE ROW LEVEL SECURITY;
 
 -- ============================================================================
 -- Sequences used by SERIAL/BIGSERIAL columns
