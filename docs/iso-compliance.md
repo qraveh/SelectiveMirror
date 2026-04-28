@@ -534,7 +534,7 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-GOV-01 | **DECIDED 2026-04-29**: SELF-ASSESSMENT label retained permanently. Third-party / independent compliance review is not planned and not claimed. The disclosure throughout this document and SRS is "compliance is self-asserted by the project authors; users should treat it as such." | Raveh | — | — | **Closed (decision: self-assessment is final)** |
+| A-GOV-01 | **DECIDED 2026-04-29**: SELF-ASSESSMENT label retained permanently. Third-party / independent compliance review is not planned and not claimed. **v0.6 reframe (2026-04-29)**: the iso-compliance-review report (`docs/iso-compliance-review-2026-04-29.md`) flagged that "Closed by decision" understates the structural consequence — 29148:2018 §6.5 (stakeholder validation) and §5.2.4 (peer review of requirements) become unfulfillable, not deferred. The honest classification is **Non-Conformity by Choice**: the project deliberately does not pursue this clause. No pretense of compliance is made on those clauses. | Raveh | — | — | **Non-Conformity by Choice (decision logged 2026-04-29; document records the deliberate non-pursuit)** |
 | A-GOV-02 | Assign calendar dates to all P0 / P1 actions in this register | Raveh | P1 | 2026-05-15 | Open |
 | ~~A-GOV-03~~ | ~~Reconcile SRS §11.9 and VV-Plan §11 risk registers~~ — **withdrawn 2026-04-27 v0.3**: VV-Plan has no §11 risk register; only SRS §11.9 exists. The audit doc invented a phantom reference. No action needed. | — | — | — | **Closed (invalid)** |
 | A-GOV-04 | Track closure status of every `docs/security-audit-2026-04-18.md` finding with linked issue ID and date. **v0.4 update**: 0.9.9-dev (commit a0c5b3e "P1 security/correctness fixes from adversarial review") closed multiple findings: SEC-H6 (file-mode 0600→0644 invariant + ACL DACL walk), config.SetField column-0 match, path-traversal hardening on `deleteRemote*`, allowLoopbackWebhooks unexported, report-bug CWD, state.Open meta-write idempotency, emergency crash logs to safe paths. Need: enumerate every finding from 2026-04-18 audit, mark closed/open/deferred with commit reference. | Winston | P1 | 2026-Q2 (TBD) | **Partially closed; enumeration pending** |
@@ -624,3 +624,37 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 | 0.3 | 2026-04-27 | Raveh / Claude | Decisions baselined: (β) ship v1.0 on 2026-05-01 with partial-compliance disclosure; (A-GOV-01) SELF-ASSESSMENT label retained for v1.0, external review committed for v1.0.1; (A-25010-01) Version B (deviation note) chosen — SRS §4.0 added; full restructure deferred to v1.1 as new action `A-25010-01b`; (X-04) deferred to v1.0.1 with NFR-TE-01 status disclosure; SM-153 fixed via per-NFR decisions for NFR-TB-01 / TB-02 / RU-01 / RU-03; SM-152 + SM-154 filed in BugTracker. Withdrew phantom A-GOV-03 / X-09 (VV-Plan has no §11). Added §10.5 external-reviewer reading list. |
 | 0.4 | 2026-04-27 | Raveh / Claude | Parallel-session integration. Five commits (0.9.8..0.9.12-dev) landed after v0.3 baseline. Re-measured coverage: total internal/ is **66.6%** (was 35.8% baseline; ~65% claimed in VV-Plan); watcher is **59.3%** (NOT 16.6% as VV-Plan §5.2 still says). X-04 reclassified from P0 to P2; ~~deferred to v1.0.1~~ → mostly closed. Test Monitoring & Control (29119-2) improved from ⚠️ → ✅ via release.yml hardening. A-25010-04 Faultlessness has substantive evidence shipped (`internal/sync/liveness.go` multi-signal stall detection with measurable thresholds). A-25010-08 Analysability strengthened by new anomaly kinds (Sync:Stalled, Sync:LsJsonSlow). A-GOV-04 now records partial closure of security-audit findings. New action `A-29119-12` added (per-release VV-Plan §5.2 re-measurement ritual). New bugs SM-155 (VV-Plan stale per-package coverage) and SM-156 (CHANGELOG SEC-C2 / SM-152 misattribution) filed. Methodology validation: parallel session used multi-role BMad design review (architect / senior dev / adversarial / edge-case hunter) on production design `docs/rclone-stall-design-for-review.md` — same pattern as this audit. |
 | 0.5 | 2026-04-29 | Raveh / Claude | **A-GOV-01 closed by decision**: external/independent ISO compliance review is not planned. The SELF-ASSESSMENT label is retained permanently as the project's compliance posture. §10.5 (external-reviewer reading list) removed; A-GOV-01 status changed from "in progress (deferred path)" to "closed (decision: self-assessment is final)". §1 wording updated to remove "external review required" framing. Panel-review work (commits 0.9.19..0.9.22-dev) closed BUG-1 case-only mirror name dedup; GAP-1..5 config-validation hardening (rclone_extra_flags denylist, rclone_config validation, overlap rejection, drive-root rejection, traversal-remote rejection); PF-A3 (SEC-H5) service-mode default-rejects symlink-to-file; GAP-7 state DB refuses forward-version; GAP-6 --config last-wins; PF-A8 async OnRecord callback. |
+| 0.6 | 2026-04-29 | Raveh / Claude | **Multi-role compliance delta review** (`docs/iso-compliance-review-2026-04-29.md`) integrated. Recommendations α + β + θ accepted: (α) **A-GOV-01 reframed** from "Closed (decision)" to **"Non-Conformity by Choice"** — the honest classification given 29148:2018 §6.5 / §5.2.4 are structurally unfulfillable; (β) **§10.5 restored as reference** (with a clear "not a commitment" header) — the reading list documents what compliance evidence looks like, useful even when external review isn't planned; (θ) this v0.6 entry. Recommendation ζ executed: VV-Plan §5.2 re-measured against HEAD `1e8eae9` (project version 0.9.39-dev) — total internal/ is **66.4%** (was stale-baselined as 35.8%); per-package table revised. Recommendation ε executed: A-29119-12 promoted from "ritual" to CI gate — `.github/workflows/ci.yml` coverage gate raised 35% → 60% (v1.0 target floor) and a per-package coverage report step added. Recommendation γ partially executed: SEC-H6 regression (panel R4 finding "fresh config.yaml created with mode 0644") closed at commit `93273d1` (cmdaddmirror.go + heartbeat.txt mode 0644 → 0600). Recommendation η executed: 11 panel-review docs (Rounds 2-11) and 10 panel_findings_round*_test.go files committed at `1e8eae9` — previously untracked compliance evidence now under document control. Recommendation δ (NFR-AU-* / NFR-RS-* / NFR-PR-* authoring in SRS §4.6) **deferred to v1.0.1** as too-large for a single turn — engineering evidence acknowledged in CHANGELOG and audit row remains ⚠️ in §3.1 until SRS catches up. |
+
+### 10.5 ISO compliance evidence reading list (reference — not a commitment)
+
+External / independent ISO compliance review is **NOT planned** for SelectiveMirror (A-GOV-01 closed as Non-Conformity by Choice). This list is preserved as a reference for what compliance evidence *looks like* — useful when explaining the project's compliance posture to a customer doing vendor due-diligence, or when authoring contributions that could later be cited as evidence.
+
+**Primary documents** (~3 hours to read in full):
+1. `docs/iso-compliance.md` — this document
+2. `docs/SRS.md` (~950 lines)
+3. `docs/VV-Plan.md` (~720 lines)
+
+**Supporting documents** (~1 hour to skim):
+4. `CHANGELOG.md` — per-version traceability, finding closure references
+5. `CLAUDE.md` — codebase orientation
+6. `docs/security-audit-2026-04-18.md` — security findings register
+7. `docs/iso-compliance-review-2026-04-29.md` — most-recent multi-role compliance delta
+8. `docs/validation-report-2026-04-16.md` — historical validation artifact
+9. `docs/user-manual.md`, `docs/installation-manual.md`, `docs/developer-manual.md`
+10. `.github/workflows/ci.yml` and `release.yml` — Test Monitoring & Control evidence
+
+**Sample artifacts** (~1 hour to spot-check):
+11. ~5 source files from `internal/` (e.g., `watcher/watcher.go`, `sync/sync.go`, `state/state.go`)
+12. ~5 test files (`*_test.go`) — verify SM-NNN markers link to BugTracker entries
+13. `system-validation/PANEL-REVIEW-ROUND{2..11}-2026-04-{28,29}.md` — multi-role review evidence
+14. `test/sla_smoke.ps1` — performance smoke harness
+15. SRS §11.9 risk register
+
+**ISO standards** (paywalled — reader must have access):
+16. ISO/IEC/IEEE 29148:2018 — focus §5.2, §6.2, §6.4, §9.5.5, Annex A
+17. ISO/IEC 25010:2023 — §5.3, §6
+18. ISO/IEC 25023:2016 — §5.2, §6
+19. ISO/IEC/IEEE 29119-1:2022 (vocabulary), -2:2022 (processes), -3:2021 (documentation), -4:2022 (techniques)
+
+**Note on auditability**: per A-GOV-01, this project is a **first-party self-assessment**. None of the above is a substitute for an actual third-party audit. The list is published only so that someone reading the compliance documentation has clear pointers to the underlying evidence.

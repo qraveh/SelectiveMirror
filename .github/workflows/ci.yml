@@ -54,7 +54,12 @@ jobs:
             exit 1
           }
 
-      - name: Coverage gate (fail if below 35%)
+      - name: Coverage gate (fail if below 60%)
+        # A-29119-12: per-release re-measurement of VV-Plan §5.2.
+        # Floor raised from 35% (v0.5.0 baseline) to 60% (v1.0 target).
+        # The gate value here MUST stay aligned with the v1.0 target the
+        # iso-compliance.md document records — when the doc target moves,
+        # this number moves with it.
         shell: pwsh
         run: |
           $output = & go tool cover "-func=$env:GITHUB_WORKSPACE\coverage.out"
@@ -63,14 +68,42 @@ jobs:
           if ($line -match '(\d+\.\d+)%') {
             $pct = [double]$Matches[1]
             Write-Host "Coverage: ${pct}%"
-            if ($pct -lt 35.0) {
-              Write-Error "Coverage ${pct}% is below 35% threshold"
+            if ($pct -lt 60.0) {
+              Write-Error "Coverage ${pct}% is below 60% threshold (v1.0 target per iso-compliance.md X-04)"
               exit 1
             }
           } else {
             Write-Error "Could not parse coverage from: $output"
             exit 1
           }
+
+      - name: Per-package coverage report (A-29119-12 evidence)
+        # A-29119-12: produce a per-package coverage table on every CI run
+        # so it can be compared release-over-release. The artifact is
+        # uploaded for the most-recent run; reviewers find drift here
+        # rather than re-measuring each time.
+        shell: pwsh
+        run: |
+          $covOut = & go tool cover "-func=$env:GITHUB_WORKSPACE\coverage.out"
+          # Group by package, compute per-package average from the
+          # function-level lines emitted by `go tool cover -func`.
+          $lines = $covOut -split "`n"
+          $byPkg = @{}
+          foreach ($line in $lines) {
+            if ($line -match '^github.com/qraveh/SelectiveMirror/(internal/[^/]+)/[^\s]+\s+([^\s]+)\s+(\d+\.\d+)%') {
+              $pkg = $Matches[1]
+              $pct = [double]$Matches[3]
+              if (-not $byPkg.ContainsKey($pkg)) { $byPkg[$pkg] = @{ sum=0.0; n=0 } }
+              $byPkg[$pkg].sum += $pct
+              $byPkg[$pkg].n += 1
+            }
+          }
+          Write-Host "=== Per-package coverage (A-29119-12) ==="
+          foreach ($pkg in ($byPkg.Keys | Sort-Object)) {
+            $avg = [math]::Round($byPkg[$pkg].sum / $byPkg[$pkg].n, 1)
+            Write-Host ("{0,-30} {1,5}%" -f $pkg, $avg)
+          }
+          Write-Host "=== End ==="
 
       # Race detector. The previous comment said "CGO-free packages" but
       # CGO_ENABLED=1 is set on this very step (required by mattn/go-sqlite3).

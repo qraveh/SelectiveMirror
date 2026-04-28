@@ -241,82 +241,67 @@ For each package, identify:
 
 | Metric | Value (baseline v0.5.0 → current v0.9.x) |
 |--------|------------------------------------------|
-| Total statement coverage (internal/) | 35.8% → ~65% |
-| Total functions | 184 → grown with anomaly/hooks/telemetry packages |
-| Functions at 0% | 137 (74.5%) at baseline; reduced materially by anomaly/hooks/watcher refactors |
-| Unit test count | 530+ → 600+ |
+| Total statement coverage (internal/) | 35.8% → **66.4%** (re-measured 2026-04-29 against v0.9.39-dev) |
+| Total functions | 184 → grown with anomaly/hooks/telemetry/fsutil packages |
+| Functions at 0% | 137 (74.5%) at baseline; reduced materially but watcher still has 8 of 27 functions at 0% (NewManager, Start, Stop, eventLoop, healthMonitor, isLinkToDir, removeRecursive, WatchCount) |
+| Unit test count | 530+ → **640+** |
+| System-validation tests (panel review rounds 2-11) | new artifact class; ~120 tests across 10 round files |
 | Integration tests | 66 + 11 stress → 123 integration cases |
 | Fuzz tests | 2 targets (filter, config); 30s × 2 targets, 18M+ execs clean |
-| Test code lines | 6,798 (Go) + 1,150 (PowerShell) at baseline; grown with anomaly/hooks test files |
+| Test code lines | 6,798 (Go) + 1,150 (PowerShell) at baseline; grown with panel-review tests |
 
 ### 5.2 Per-Package Analysis
 
-#### config (86.9%)
-**Covered well**: Load(), Validate(), defaults, YAML parsing, global excludes, delete policy parsing.
-**Gaps**: ReconcileInterval edge case (66.7%), expandHome alternate paths (83.3%).
-**Missing tests**: Config with all optional fields present simultaneously. Config with unknown YAML keys (should it warn?). Config file permissions (readable by SYSTEM account?).
+**Last re-measured**: 2026-04-29 against `master` HEAD `1e8eae9` (project version 0.9.39-dev). Action `A-29119-12` (per-release re-measurement) executed; release.yml will gate on this going forward.
 
-#### filter (89.4%)
-**Covered well**: New(), IsExcluded(), loadProjectIgnore(), Reload(), negation patterns, directory markers.
-**Gaps**: GenerateRcloneFilterFile (78.9%) — error paths in temp file creation.
-**Missing tests**: Gitignore conformance suite (FR-FILTER-01 gap). `.syncignore` with syntax errors (FR-FILTER-11 — not implemented). Filter with 10,000+ rules (performance). Unicode patterns. Character class patterns `[abc]`.
+| Package | Coverage | Δ vs prior baseline | Notes |
+|---|---|---|---|
+| anomaly | 72.8% | -0.3 | rotation paths exercised; FileWriter test gaps |
+| config | **78.0%** | -8.9 from stale 86.9% | Test count grew faster than coverage; new validators (denylist, overlap, traversal-remote) added with their own tests but Validate's combinatoric paths are larger |
+| filter | **78.7%** | -10.7 from stale 89.4% | Same drift — GenerateRcloneFilterFile error paths still untested |
+| fsutil | 0.0% | new package | IsReparsePoint helper; trivial; Windows-only |
+| hooks | 76.6% | -8.6 from 85.2% | **Regression**: PF-A5 Job Object code is Windows-only and not exercised on dev box; the Run path was also restructured (Start+Wait instead of CombinedOutput) |
+| lock | 54.2% | -30.8 from stale 85.0% | New code paths (GAP-9 stale-PID detection, isProcessAlive) untested; need a multi-process integration test |
+| logging | 81.8% | 0.0 | unchanged |
+| metrics | 73.6% | -5.6 from 79.2% | New comment-only changes (RecordError SEC-L4 documentation) didn't add tests |
+| notify | 63.2% | not previously measured | webhook code well-covered; notifier.New paths thinner |
+| rclone | **34.1%** | -18.2 from stale 52.3% | Detect() paths still need mocks; this is the lowest-coverage real package |
+| state | 75.5% | -9.7 from stale 85.2% | New GAP-7 forward-version refusal + GAP-8 fresh-open hint paths exercised; older meta paths thinner |
+| sync | 70.1% | -2.8 from 72.9% | Stall supervisor + isUnsafeRelPath + RcloneInvocation added with tests; bytes-trimming for lsjson PF-E3 not yet directly tested |
+| task | 72.7% | not previously measured | Per-user Scheduled Task install/uninstall happy path |
+| telemetry | 76.8% | +1.4 from 75.4% | SanitizeReport + tier work raised coverage |
+| watcher | **59.5%** | +42.9 from stale 16.6% | The "critical gap" was based on a stale baseline (SM-155); actual coverage was already ~59%. 8 of 27 functions still at 0% (NewManager, Start, Stop, eventLoop, healthMonitor, isLinkToDir, removeRecursive, WatchCount); these need dependency-injection refactor (X-04, P2). |
+| **Total internal/** | **66.4%** | +30.6 from stale 35.8% | v1.0 target was 60% — exceeded. |
+| cmd/smirror | (not aggregated) | — | Glue code; coverage comes from system-validation suite + panel-review rounds, not unit tests. |
 
-#### lock (85.0%)
-**Covered well**: Acquire(), Release(), stale lock detection.
-**Gaps**: Platform-specific error paths (locked by another process, permission denied).
-**Missing tests**: Lock file on network drive. Lock file on read-only filesystem. Race between two processes acquiring lock.
+#### Per-package narratives (updated)
 
-#### logging (81.8%)
-**Covered well**: Setup(), Write(), rotate().
-**Gaps**: newRotatingWriter error paths (71.4%), openShared Windows-specific errors (63.6%).
-**Missing tests**: Rotation under concurrent writes. Disk full during rotation. Log file on network share.
+- **config (78.0%)**: BUG-1 case-only dedup + GAP-1..5 validators added with tests. Validate's combinatoric paths (e.g., overlap × multiple-mirrors × symlink × admin-owner) grow faster than test count.
+- **filter (78.7%)**: PF-E1 cross-layer negation pinned (no assertion). GenerateRcloneFilterFile error paths still the dominant gap.
+- **hooks (76.6%, regressed)**: Job Object code is Windows-only. Skipped on dev-box test run. Real run on a Windows CI runner would lift this back to ~85%.
+- **lock (54.2%)**: GAP-9 stale-PID code (proc_windows.go / proc_other.go) is untested; it requires a fake-process harness or a multi-process integration test.
+- **rclone (34.1%, the worst)**: Detect() paths still require either a real rclone or an interface mock. Lowest-leverage to improve via unit tests; system-validation rounds 2/3/6 cover the runtime behavior.
+- **sync (70.1%)**: Stall supervisor (Layer 2) added with a substantial test suite; isUnsafeRelPath table-tested; Live ListRemote PF-E3 truncation guard not yet directly unit-tested.
+- **watcher (59.5%, formerly "critical")**: Reclassified P0→P2 in iso-compliance v0.4 because the original "16.6%" baseline was stale. Currently above v1.0 60% target floor for total internal/. 8 functions remain at 0%; X-04 (fsnotifier interface refactor) is the only path to >75%.
 
-#### metrics (79.2%)
-**Covered well**: Atomic counters, Snapshot(), RecordSync().
-**Gaps**: WriteStatusFile error paths (64.3%), FormatHuman edge cases (78.6%).
-**Missing tests**: Status.json written during high-frequency updates. Concurrent metric recording from multiple goroutines.
+#### Newly-introduced 0% functions worth mentioning
 
-#### rclone (52.3%)
-**Covered well**: Version parsing, comparison.
-**Gaps**: Detect() — finding rclone binary on PATH (requires mock or real rclone).
-**Missing tests**: rclone not found. rclone too old. rclone in non-standard location. Version string parsing for pre-release rclone builds.
-
-#### state (85.2%)
-**Covered well**: CRUD operations, migrations, WAL mode, metadata store.
-**Gaps**: Error paths in SQL queries.
-**Missing tests**: DB corruption recovery. Schema version mismatch (FR-STATE-06). Concurrent read while write in progress. Very large state DB (100K+ rows) performance.
-
-#### sync (72.9%)
-**Covered well**: Task processing, ghost detection, ghost cleanup, delete handling, quiescence, FairQueue, circuit breaker.
-**Gaps**: ListRemote (0%), Validate (0%), Run (100% but only happy path).
-**Missing tests**: Sync retry on transient failure (FR-SYNC-16 — not implemented). Adaptive cooldown (FR-SYNC-13 — not implemented). rclone timeout handling. Partial file upload recovery. Concurrent ghost cleanup during active sync.
-
-#### telemetry (75.4%)
-**Covered well**: SendReport(), CompareVersions(), ExtractBackendTypes().
-**Gaps**: CheckForUpdate (0% — requires HTTP mock), GenerateInstallID edge cases.
-**Missing tests**: Network timeout during send. Malformed server response. Rate limiting enforcement.
-
-#### watcher (16.6%) — **CRITICAL GAP**
-**Covered**: safeGo, HealthErrors, findProject, isRelSubPath, trackDeleteBurst, init.
-**Not covered (0%)**: Start(), eventLoop(), handleEvent(), handleRemove(), handleRename(), addRecursive(), removeRecursive(), reloadFilter(), healthMonitor(), queueFilesInDir(), isSyncIgnoreFile(), isLinkToDir(), WatchCount(), Stop(), timerCleanupLoop() — **15 of 20 functions at 0%**.
-**Why**: Core watcher functions require a running filesystem event loop, which is tested via integration tests (PowerShell), not unit tests. The Go unit tests cover helper functions only.
-**Recommendation**: Extract pure logic from event handlers into testable functions. Use dependency injection for fsnotify.Watcher to enable mock-based unit testing. This is the highest-priority coverage gap.
-
-#### cmd/smirror (2.1%) — **Expected**
-**Covered**: preflight() and preflightPath() only.
-**Not covered**: All CLI command implementations (main is a CLI entry point; commands are tested via integration).
-**Recommendation**: This is the glue layer. Coverage comes from T3+ integration tests, not unit tests. The 2.1% is acceptable if integration test coverage is measured separately. Add `-coverpkg=./...` to integration test runs to capture this.
+- `internal/sync/proc_windows.go::readProcessIoCounters` — exercised by stall supervisor integration tests but not directly unit-tested. Falls under PF-E2-like "exercised at higher level".
+- `internal/lock/proc_windows.go::isProcessAlive` — see lock package note.
+- `internal/fsutil/IsReparsePoint` — trivial Windows attr check; tested transitively via watcher tests that exercise reparse-point rejection.
 
 ### 5.3 Critical Gaps Summary
 
 | Priority | Gap | Impact | Effort |
 |----------|-----|--------|--------|
-| **P0** | watcher package at 16.6% | Core functionality barely unit-tested | Large (refactoring needed) |
-| **P0** | 137 functions at 0% coverage | 74.5% of functions never exercised by unit tests | Large |
-| **P1** | No gitignore conformance suite | Filter correctness is a differentiator; not validated | Medium |
+| ~~**P0**~~ | ~~watcher package at 16.6%~~ | **Closed by re-measurement**: actual coverage was 59.3% at v0.4 baseline (stale data), 59.5% now. Reclassified P2 (X-04). | ~~Large~~ |
+| ~~**P0**~~ | ~~137 functions at 0%~~ | **Substantially reduced**: anomaly + hooks + state + sync + watcher refactors brought 0%-functions count down meaningfully. Re-counting deferred until next re-measurement. | Medium |
+| **P1** | No gitignore conformance suite | Filter correctness is a differentiator; PF-E1 cross-layer behavior pinned but full conformance not tested | Medium |
 | **P1** | No fuzz testing for config/filter/filenames | Edge cases discovered by SM-036/041/046 suggest more lurk | Medium |
 | **P1** | No performance benchmarks | SLA targets exist but aren't measured | Medium |
-| **P2** | Integration test coverage not aggregated | cmd/smirror shows 2.1% but integration tests cover it | Small |
+| **P2** | rclone package at 34.1% | Detect() paths require interface mocks | Medium |
+| **P2** | watcher 8 functions at 0% (NewManager, Start, eventLoop, etc.) | Requires X-04 fsnotifier-interface refactor | Large |
+| **P2** | Integration test coverage not aggregated | cmd/smirror coverage comes from system-validation, not unit tests | Small |
 | ~~**P2**~~ | ~~No coverage gate in CI~~ | **Resolved**: CI has 35% coverage gate since v0.5.0 (ci.yml) | ~~Small~~ |
 | **P3** | No mutation testing | High coverage doesn't guarantee test quality | Large |
 
