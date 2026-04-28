@@ -1028,7 +1028,12 @@ func (e *Engine) defaultRunRclone(ctx context.Context, args []string, inv Rclone
 	// Prepend global rclone flags (--config for service/SYSTEM account, etc.)
 	args = append(e.cfg.RcloneArgs(), args...)
 
-	e.log.Debug("rclone", "cmd", rclonePath, "args", strings.Join(args, " "))
+	// SEC-H9: don't log raw rclone args at DEBUG. Args contain remote paths
+	// (which may include path-style credentials), --config values, and
+	// signed-URL remote arguments. Run through the shared sanitizer so any
+	// `token=…`, `signature=…`, `Authorization:`, or `gdrive:secret-path`
+	// substring is redacted before hitting the log.
+	e.log.Debug("rclone", "cmd", rclonePath, "args", redactRcloneArgs(args))
 
 	if os.Getenv("SMIRROR_DISABLE_LIVENESS") == "1" {
 		return e.runWithLegacyTimeout(ctx, rclonePath, args)
@@ -1044,7 +1049,10 @@ func (e *Engine) defaultRunRclone(ctx context.Context, args []string, inv Rclone
 	cmd := exec.Command(rclonePath, args...)
 	exitCode, stderr := runWithSupervisor(ctx, cmd, inv, realLivenessProbe, nil, e.Anomaly, e.supervisorLogFn(args))
 	if exitCode != 0 && stderr != "" {
-		e.log.Warn("rclone failed", "exit", exitCode, "stderr", strings.TrimSpace(stderr), "verb", inv.Verb)
+		// SEC-H10: rclone stderr can carry OAuth tokens, signed-URL params,
+		// and Authorization headers from upstream HTTP errors. Redact via
+		// the shared credential regex set before the line lands in the log.
+		e.log.Warn("rclone failed", "exit", exitCode, "stderr", redactRcloneStderr(strings.TrimSpace(stderr)), "verb", inv.Verb)
 	}
 	return exitCode
 }
@@ -1083,19 +1091,22 @@ func (e *Engine) runWithLegacyTimeout(ctx context.Context, rclonePath string, ar
 
 	err := cmd.Run()
 	if err != nil {
-		stderrMsg := strings.TrimSpace(stderrBuf.String())
+		// SEC-H9 / H10: redact args + stderr before logging on the legacy
+		// path too. Same rationale as the supervised path.
+		stderrMsg := redactRcloneStderr(strings.TrimSpace(stderrBuf.String()))
+		argsRedacted := redactRcloneArgs(args)
 		if rcloneCtx.Err() == context.DeadlineExceeded {
-			e.log.Error("rclone timed out after 5 minutes (legacy path; SMIRROR_DISABLE_LIVENESS=1)", "args", strings.Join(args, " "), "stderr", stderrMsg)
+			e.log.Error("rclone timed out after 5 minutes (legacy path; SMIRROR_DISABLE_LIVENESS=1)", "args", argsRedacted, "stderr", stderrMsg)
 			return -2
 		}
 		if ctx.Err() == context.Canceled {
-			e.log.Debug("rclone cancelled (shutdown)", "args", strings.Join(args[:min(3, len(args))], " "))
+			e.log.Debug("rclone cancelled (shutdown)", "verb", argsHead(args))
 			return -3
 		}
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode := exitErr.ExitCode()
 			if stderrMsg != "" {
-				e.log.Warn("rclone failed", "exit", exitCode, "stderr", stderrMsg, "args", strings.Join(args[:min(3, len(args))], " "))
+				e.log.Warn("rclone failed", "exit", exitCode, "stderr", stderrMsg, "verb", argsHead(args))
 			}
 			return exitCode
 		}
@@ -1103,6 +1114,15 @@ func (e *Engine) runWithLegacyTimeout(ctx context.Context, rclonePath string, ar
 		return -1
 	}
 	return 0
+}
+
+// argsHead returns the rclone verb (args[0]) for logging without leaking
+// the full argv. Empty if args is empty.
+func argsHead(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	return args[0]
 }
 
 // isTransferVerb reports whether a verb is one of the data-moving rclone

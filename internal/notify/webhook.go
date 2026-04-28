@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -315,16 +316,32 @@ func (w *WebhookSender) deliver(payload WebhookPayload) {
 
 	resp, err := w.client.Do(req)
 	if err != nil {
-		w.log.Warn("webhook delivery failed", "url", w.url, "error", err)
+		// SEC-L5: don't log the full webhook URL — it may contain a
+		// path-style secret (e.g., Slack/Discord webhook URLs include a
+		// long opaque token in the path: hooks.slack.com/services/T0/B0/<token>).
+		// Log scheme+host only so the operator knows WHICH endpoint
+		// failed without the credential leaking into the log.
+		w.log.Warn("webhook delivery failed", "endpoint", redactURL(w.url), "error", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		w.log.Warn("webhook endpoint error", "url", w.url, "status", resp.StatusCode)
+		w.log.Warn("webhook endpoint error", "endpoint", redactURL(w.url), "status", resp.StatusCode)
 	} else {
 		w.log.Debug("webhook delivered", "event", payload.Event, "kind", payload.Kind, "status", resp.StatusCode)
 	}
+}
+
+// redactURL returns scheme+host (no path, no query) for a URL string.
+// Used by webhook failure logs (SEC-L5) so a path-token like Slack's
+// /services/T0/B0/<secret> doesn't leak.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "<malformed-url>"
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // FormatSlackMessage returns a simple Slack-compatible message string.

@@ -143,6 +143,15 @@ func (c *Collector) LatencyP99() int64 {
 }
 
 // RecordError records a sync error.
+//
+// SEC-L4: errMsg is included in status.json verbatim. Sync-engine
+// callers compose strings like `rclone exit 2 for path/to/file`,
+// putting raw relPath into the JSON. Any caller that has potentially-
+// sensitive content (relPath under a watched mirror) must sanitize
+// before calling this. The Collector itself does not redact — that
+// would obscure useful triage detail in logs that DON'T leave the
+// machine. Callers concerned with status.json export should use
+// telemetry.SanitizeReport on the message.
 func (c *Collector) RecordError(project string, errMsg string) {
 	c.syncErrors.Add(1)
 
