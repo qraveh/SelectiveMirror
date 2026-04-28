@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.37-dev"
+var version = "0.9.38-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -2911,9 +2911,12 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 			ts := time.Now().UTC().Format(time.RFC3339)
 			st.SetMeta("last_heartbeat", ts)
 
-			// Write heartbeat file
+			// Write heartbeat file. SEC-H6 baseline: files under the
+			// user data dir are 0600 (owner-only). Heartbeat content
+			// is just a timestamp — not sensitive — but consistency
+			// with the SECURITY.md baseline matters for the audit.
 			hbPath := filepath.Join(dd, "heartbeat.txt")
-			os.WriteFile(hbPath, []byte(ts+"\n"), 0644)
+			os.WriteFile(hbPath, []byte(ts+"\n"), 0600)
 
 			// Write metrics status.json
 			if m != nil {

@@ -314,7 +314,13 @@ global_excludes:
   - ".~lock.*"
   - "*~"
 `, baseRemote)
-		if err := os.WriteFile(configPath, []byte(initial), 0644); err != nil {
+		// SEC-H6 regression closure (panel R4): fresh config.yaml MUST be
+		// 0600 to match SECURITY.md baseline. The 0644 here was a creation-
+		// path leak that survived the 0.9.9-dev fix because that change
+		// only addressed the EDIT path (config.SetField + writePreservingMode).
+		// Owner-only mode prevents another local user from reading rclone
+		// remote URIs, webhook URLs, and pre/post-sync hook commands.
+		if err := os.WriteFile(configPath, []byte(initial), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating config: %v\n", err)
 			os.Exit(ExitError)
 		}
