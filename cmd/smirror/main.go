@@ -35,12 +35,13 @@ import (
 	"github.com/qraveh/SelectiveMirror/internal/service"
 	"github.com/qraveh/SelectiveMirror/internal/state"
 	msync "github.com/qraveh/SelectiveMirror/internal/sync"
+	"github.com/qraveh/SelectiveMirror/internal/telemetry"
 	"github.com/qraveh/SelectiveMirror/internal/watcher"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.14-dev"
+var version = "0.9.15-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -210,6 +211,11 @@ func cliMain() {
 	case "version":
 		fmt.Printf("smirror %s\n", version)
 		fmt.Println("Copyright (c) 2026 Raveh Neeman")
+		// Telemetry build-key fingerprint: confirms whether this binary
+		// was built with the production HMAC derived key (CI release with
+		// SMIRROR_TELEMETRY_MASTER_KEY) or is a -dev/local build that
+		// cannot submit to the production endpoint. Never reveals the key.
+		fmt.Printf("telemetry build-key: %s\n", telemetry.BuildKeyFingerprint())
 	case "help", "--help", "-h":
 		printUsage()
 	default:

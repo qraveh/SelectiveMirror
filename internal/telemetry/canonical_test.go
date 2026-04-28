@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -102,6 +103,26 @@ func TestCanonicalJSON_NestedObject(t *testing.T) {
 	want := `{"outer": {"z": 2, "abc": 1}}`
 	if got != want {
 		t.Errorf("got %q want %q", got, want)
+	}
+}
+
+// TestCanonicalJSON_RejectsStruct guards against the silent-misordering
+// bug: passing a struct (rather than map[string]any) used to fall through
+// to encoding/json with alphabetical sort. That would HMAC-mismatch with
+// the PG length-first canonicalization and fail RLS silently. The
+// updated implementation returns a descriptive error instead.
+func TestCanonicalJSON_RejectsStruct(t *testing.T) {
+	type bugReport struct {
+		Hello       string `json:"hello"`
+		ReportedAt  string `json:"reported_at"`
+		Test        string `json:"test"`
+	}
+	_, err := CanonicalJSON(bugReport{Hello: "world", ReportedAt: "2026-04-26T10:00:00Z", Test: "valid"})
+	if err == nil {
+		t.Fatal("expected error for struct input; got nil (would silently mis-canonicalize and HMAC-fail in production)")
+	}
+	if !strings.Contains(err.Error(), "unsupported value type") {
+		t.Errorf("error message should mention unsupported type; got: %v", err)
 	}
 }
 

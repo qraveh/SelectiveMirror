@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+"""
+SelectiveMirror telemetry weekly digest generator.
+
+Produces a single Markdown file summarizing the week's telemetry data:
+install events, bug reports, version distribution, action items.
+
+Designed for a single-maintainer project at low volume — the report
+gracefully degrades to "n is too small for analysis; pipeline is alive"
+when there's not enough data to draw conclusions.
+
+Form factor and design: see panel review (Mary the Analyst, 2026-04-28)
+and docs/telemetry-microserver-architecture.md.
+
+Usage:
+    # Set DATABASE_URL to your Supabase connection string:
+    #   PowerShell:
+    #     $env:DATABASE_URL = "postgresql://postgres.<ref>:<pwd>@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
+    #   Bash:
+    #     export DATABASE_URL="postgresql://..."
+    #
+    # Then:
+    python3 scripts/telemetry-report.py > docs/telemetry/weekly-2026-W17.md
+
+    # For Sunday-night automation, see .github/workflows/telemetry-digest.yml.
+
+Dependencies: psycopg2-binary OR psycopg (v3). The script tries v3 first.
+
+Output: Markdown to stdout. Exit code 0 on success, 1 on database error,
+2 on missing DATABASE_URL.
+
+Privacy note: the script connects with the service_role key (or the
+postgres user) so it sees all rows. It writes only aggregated counts and
+sanitized signatures to the report — never raw report_text or install_id.
+"""
+
+import os
+import sys
+from datetime import date, datetime, timedelta, timezone
+
+try:
+    import psycopg as pg
+    from psycopg import sql as pg_sql  # noqa: F401
+    PSYCOPG_VERSION = 3
+except ImportError:
+    try:
+        import psycopg2 as pg
+        PSYCOPG_VERSION = 2
+    except ImportError:
+        sys.stderr.write(
+            "ERROR: psycopg (v3) or psycopg2-binary required.\n"
+            "Install with: pip install psycopg2-binary\n"
+        )
+        sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# SQL queries — keep in lockstep with docs/telemetry-views.sql when possible
+# ---------------------------------------------------------------------------
+
+Q_HEADLINE = """
+WITH wk AS (
+  SELECT date_trunc('week', now() AT TIME ZONE 'UTC')::date AS this_wk
+)
+SELECT
+  (SELECT COUNT(*) FROM telemetry.bug_report
+   WHERE reported_at >= wk.this_wk
+     AND reported_at <  wk.this_wk + INTERVAL '7 days') AS bugs_this_wk,
+  (SELECT COUNT(*) FROM telemetry.bug_report
+   WHERE reported_at >= wk.this_wk - INTERVAL '7 days'
+     AND reported_at <  wk.this_wk) AS bugs_prev_wk,
+  (SELECT COUNT(*) FROM telemetry.bug_report
+   WHERE reported_at >= wk.this_wk - INTERVAL '28 days'
+     AND reported_at <  wk.this_wk) AS bugs_4wk,
+  (SELECT COUNT(*) FROM telemetry.installation_event
+   WHERE event_name = 'first_seen'
+     AND reported_at >= wk.this_wk
+     AND reported_at <  wk.this_wk + INTERVAL '7 days') AS new_installs_this_wk,
+  (SELECT COUNT(*) FROM telemetry.installation_event
+   WHERE event_name = 'upgrade'
+     AND reported_at >= wk.this_wk
+     AND reported_at <  wk.this_wk + INTERVAL '7 days') AS upgrades_this_wk,
+  (SELECT COUNT(DISTINCT install_id) FROM telemetry.installation_event
+   WHERE reported_at >= now() - INTERVAL '30 days') AS active_30d,
+  (SELECT COUNT(DISTINCT install_id) FROM telemetry.installation) AS installs_total,
+  wk.this_wk AS week_start
+FROM wk;
+"""
+
+Q_BUGS_THIS_WEEK = """
+WITH wk AS (
+  SELECT date_trunc('week', now() AT TIME ZONE 'UTC')::date AS this_wk
+)
+SELECT
+  br.reported_at::date          AS day,
+  COALESCE(t_kind.slug,    'unknown') AS bug_kind,
+  COALESCE(t_surface.slug, 'unknown') AS bug_surface,
+  COALESCE(br.client_version, 'unknown') AS client_version,
+  COALESCE(br.signature, '<no signature>') AS signature,
+  LEFT(COALESCE(br.install_id, ''), 4) AS install_id_4
+FROM telemetry.bug_report br, wk
+LEFT JOIN telemetry.bug_report_taxonomy_assignment a_kind
+       ON a_kind.bug_report_id = br.id
+LEFT JOIN telemetry.taxonomy_term t_kind
+       ON t_kind.id = a_kind.term_id AND t_kind.namespace = 'bug.kind'
+LEFT JOIN telemetry.bug_report_taxonomy_assignment a_surf
+       ON a_surf.bug_report_id = br.id
+LEFT JOIN telemetry.taxonomy_term t_surface
+       ON t_surface.id = a_surf.term_id AND t_surface.namespace = 'bug.surface'
+WHERE br.reported_at >= wk.this_wk
+  AND br.reported_at <  wk.this_wk + INTERVAL '7 days'
+ORDER BY br.reported_at ASC;
+"""
+
+Q_SIGNATURE_RECURRENCE = """
+SELECT
+  signature,
+  COUNT(DISTINCT install_id) AS distinct_installs,
+  COUNT(*)                   AS total_reports,
+  MIN(reported_at)::date     AS first_seen,
+  MAX(reported_at)::date     AS last_seen,
+  ARRAY_AGG(DISTINCT client_version ORDER BY client_version) AS versions
+FROM telemetry.bug_report
+WHERE signature IS NOT NULL
+  AND reported_at >= now() - INTERVAL '90 days'
+GROUP BY signature
+HAVING COUNT(*) >= 2
+ORDER BY distinct_installs DESC, total_reports DESC
+LIMIT 10;
+"""
+
+Q_BUG_SPARKLINE = """
+SELECT
+  date_trunc('week', reported_at)::date AS wk,
+  COUNT(*)                              AS bugs
+FROM telemetry.bug_report
+WHERE reported_at >= now() - INTERVAL '12 weeks'
+GROUP BY 1 ORDER BY 1;
+"""
+
+Q_VERSION_DIST = """
+WITH active AS (
+  SELECT DISTINCT ON (install_id) install_id, client_version
+  FROM telemetry.installation_event
+  WHERE reported_at >= now() - INTERVAL '30 days'
+  ORDER BY install_id, reported_at DESC
+)
+SELECT
+  client_version,
+  COUNT(*)                                                     AS installs,
+  ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0), 1) AS pct
+FROM active
+GROUP BY client_version
+ORDER BY installs DESC, client_version DESC;
+"""
+
+Q_INSTALL_CHANNEL = """
+SELECT
+  COALESCE(current_install_method, 'unknown') AS channel,
+  COUNT(*)                                    AS installs
+FROM telemetry.installation
+GROUP BY current_install_method
+ORDER BY installs DESC;
+"""
+
+Q_BACKEND_MIX = """
+SELECT
+  bt              AS backend,
+  COUNT(DISTINCT i.install_id) AS installs
+FROM telemetry.installation i,
+     UNNEST(i.current_backend_types) AS bt
+WHERE i.current_backend_types IS NOT NULL
+  AND array_length(i.current_backend_types, 1) > 0
+GROUP BY bt
+ORDER BY installs DESC;
+"""
+
+Q_HYGIENE = """
+SELECT
+  (SELECT COUNT(*) FROM telemetry.bug_report
+   WHERE taxonomy_state IN ('pending','needs_review')) AS unclassified_pending,
+  (SELECT MAX(EXTRACT(epoch FROM (now() - br.reported_at))/3600)::int
+   FROM telemetry.bug_report br
+   WHERE taxonomy_state IN ('pending','needs_review')) AS oldest_pending_hours,
+  pg_size_pretty(pg_database_size(current_database())) AS db_size,
+  (SELECT MAX(received_at) FROM telemetry.ingest_envelope) AS last_ingest;
+"""
+
+Q_QUIET_KINDS = """
+WITH wk AS (
+  SELECT date_trunc('week', now() AT TIME ZONE 'UTC')::date AS this_wk
+)
+SELECT t.display_name AS bug_kind
+FROM telemetry.taxonomy_term t, wk
+WHERE t.target = 'bug_report'
+  AND t.namespace = 'bug.kind'
+  AND t.active
+  AND NOT EXISTS (
+    SELECT 1
+    FROM telemetry.bug_report_taxonomy_assignment a
+    JOIN telemetry.bug_report br ON br.id = a.bug_report_id
+    WHERE a.term_id = t.id
+      AND br.reported_at >= wk.this_wk
+      AND br.reported_at <  wk.this_wk + INTERVAL '7 days'
+  )
+ORDER BY t.ordinal;
+"""
+
+# ---------------------------------------------------------------------------
+# Render helpers
+# ---------------------------------------------------------------------------
+
+SPARK_BARS = " ▁▂▃▄▅▆▇█"
+
+
+def sparkline(values: list) -> str:
+    """Return a unicode sparkline. Empty list returns empty string."""
+    if not values:
+        return ""
+    mx = max(values) or 1
+    return "".join(SPARK_BARS[min(int(v / mx * 8), 8)] for v in values)
+
+
+def md_table(rows, headers, aligns=None):
+    """Render a list of dict rows as a Markdown table."""
+    if not rows:
+        return "_(no rows)_"
+    aligns = aligns or ["left"] * len(headers)
+    lines = ["| " + " | ".join(headers) + " |"]
+    sep = []
+    for a in aligns:
+        if a == "right":
+            sep.append("---:")
+        elif a == "center":
+            sep.append(":---:")
+        else:
+            sep.append(":---")
+    lines.append("| " + " | ".join(sep) + " |")
+    for r in rows:
+        if isinstance(r, dict):
+            cells = [str(r.get(h, "")) for h in headers]
+        else:
+            cells = [str(c) for c in r]
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def fetch_all(conn, query):
+    """Run a query, return list of dict rows."""
+    cur = conn.cursor()
+    try:
+        cur.execute(query)
+        cols = [d[0] if isinstance(d, tuple) else d.name for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        cur.close()
+
+
+# ---------------------------------------------------------------------------
+# Report sections
+# ---------------------------------------------------------------------------
+
+def render_header(headline, week_start):
+    end = week_start + timedelta(days=6)
+    iso_year, iso_wk, _ = week_start.isocalendar()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    n_total = headline["installs_total"]
+    return (
+        f"# SelectiveMirror Telemetry Digest — Week {iso_year}-W{iso_wk:02d}\n\n"
+        f"**Window**: {week_start} to {end} UTC. Generated {now}.\n\n"
+        f"> Total opted-in installs ever: **{n_total}**. "
+        f"Trends are anecdote until n>20.\n"
+    )
+
+
+def render_pipeline_alive_only(headline, hygiene, sparkline_values):
+    """Degenerate (low-n) week — output is intentionally short."""
+    n_total = headline["installs_total"]
+    bugs_ever = sum(sparkline_values) if sparkline_values else 0
+    last_ingest = hygiene[0]["last_ingest"] or "(never)"
+    db_size = hygiene[0]["db_size"]
+    return (
+        "## State of telemetry\n\n"
+        f"- Total opted-in installs ever: **{n_total}**\n"
+        f"- Active in last 30 days: **{headline['active_30d']}**\n"
+        f"- Bug reports this week: **{headline['bugs_this_wk']}**\n"
+        f"- Bug reports last 12 weeks: **{bugs_ever}**\n\n"
+        "> Sample size is too small for analysis. This file confirms the "
+        "pipeline is running and the database is alive. Come back when n>10.\n\n"
+        "## Hygiene\n\n"
+        f"- Free-tier DB usage: **{db_size}** (cap: 500 MB)\n"
+        f"- Last successful ingest: **{last_ingest}**\n"
+        f"- Unclassified backlog: {hygiene[0]['unclassified_pending']}\n"
+    )
+
+
+def render_headline(headline, sparkline_values):
+    rows = [
+        {
+            "Metric": "Bug reports submitted",
+            "This week": headline["bugs_this_wk"],
+            "Prev week": headline["bugs_prev_wk"],
+            "4-wk avg": round(headline["bugs_4wk"] / 4.0, 1) if headline["bugs_4wk"] else 0,
+        },
+        {
+            "Metric": "New installs (first_seen)",
+            "This week": headline["new_installs_this_wk"],
+            "Prev week": "—",
+            "4-wk avg": "—",
+        },
+        {
+            "Metric": "Upgrades",
+            "This week": headline["upgrades_this_wk"],
+            "Prev week": "—",
+            "4-wk avg": "—",
+        },
+        {
+            "Metric": "Installs emitting any event/30d",
+            "This week": headline["active_30d"],
+            "Prev week": "—",
+            "4-wk avg": "—",
+        },
+    ]
+    spark = sparkline(sparkline_values) or "_(no data)_"
+    return (
+        "## Headline numbers\n\n"
+        + md_table(
+            rows,
+            ["Metric", "This week", "Prev week", "4-wk avg"],
+            aligns=["left", "right", "right", "right"],
+        )
+        + f"\n\nSparkline of bug-reports/week (12 wk): `{spark}`\n"
+    )
+
+
+def render_bugs_section(bugs, recurrence, quiet_kinds):
+    out = ["## Bug reports — this week\n"]
+    if not bugs:
+        out.append("_No bug reports this week._\n")
+    else:
+        out.append(
+            md_table(
+                [
+                    {
+                        "Kind": b["bug_kind"],
+                        "Surface": b["bug_surface"],
+                        "Version": b["client_version"],
+                        "Signature": b["signature"][:60],
+                        "Install (4)": b["install_id_4"] or "—",
+                    }
+                    for b in bugs
+                ],
+                ["Kind", "Surface", "Version", "Signature", "Install (4)"],
+            )
+        )
+        out.append("")
+
+    out.append("\n### Recurring signatures (last 90 days, n≥2)\n")
+    if not recurrence:
+        out.append("_No signature recurrences. Either everything's unique, or "
+                   "we don't have enough data yet._\n")
+    else:
+        out.append(
+            md_table(
+                [
+                    {
+                        "Signature": r["signature"][:48],
+                        "Distinct installs": r["distinct_installs"],
+                        "Total reports": r["total_reports"],
+                        "First seen": r["first_seen"],
+                        "Last seen": r["last_seen"],
+                        "Versions": ", ".join(r["versions"][:4]),
+                    }
+                    for r in recurrence
+                ],
+                ["Signature", "Distinct installs", "Total reports",
+                 "First seen", "Last seen", "Versions"],
+                aligns=["left", "right", "right", "left", "left", "left"],
+            )
+        )
+
+    out.append("\n### What nobody hit this week\n")
+    if not quiet_kinds:
+        out.append("_All bug.kind categories saw at least one report._\n")
+    else:
+        names = ", ".join(q["bug_kind"] for q in quiet_kinds)
+        out.append(f"No reports for: {names}\n")
+    return "\n".join(out)
+
+
+def render_versions(version_dist, install_channels, backend_mix):
+    out = ["## Version distribution (active installs / 30d)\n"]
+    if not version_dist:
+        out.append("_No active installs._\n")
+    else:
+        out.append(
+            md_table(
+                [
+                    {
+                        "Version": v["client_version"],
+                        "Installs": v["installs"],
+                        "% of base": f"{v['pct']}%" if v["pct"] is not None else "—",
+                    }
+                    for v in version_dist
+                ],
+                ["Version", "Installs", "% of base"],
+                aligns=["left", "right", "right"],
+            )
+        )
+
+    out.append("\n## Install channel mix (cumulative)\n")
+    if not install_channels:
+        out.append("_No install-method data._\n")
+    else:
+        out.append(
+            md_table(
+                [{"Channel": c["channel"], "Installs": c["installs"]} for c in install_channels],
+                ["Channel", "Installs"],
+                aligns=["left", "right"],
+            )
+        )
+
+    out.append("\n## Backend mix (current installation snapshot)\n")
+    if not backend_mix:
+        out.append("_No backends recorded yet. (Note: `backend_types` is "
+                   "captured on `upgrade` events; `first_seen` typically has "
+                   "an empty array.)_\n")
+    else:
+        out.append(
+            md_table(
+                [{"Backend": b["backend"], "Installs reporting": b["installs"]} for b in backend_mix],
+                ["Backend", "Installs reporting"],
+                aligns=["left", "right"],
+            )
+        )
+    return "\n".join(out)
+
+
+def render_hygiene(hygiene):
+    h = hygiene[0]
+    last = h["last_ingest"] or "(never)"
+    pending = h["unclassified_pending"]
+    oldest_h = h["oldest_pending_hours"]
+    if pending and oldest_h:
+        pending_str = f"{pending} (oldest: {oldest_h}h)"
+    else:
+        pending_str = str(pending or 0)
+    return (
+        "## Hygiene\n\n"
+        f"- Free-tier DB usage: **{h['db_size']}** (cap: 500 MB)\n"
+        f"- Unclassified backlog: **{pending_str}**\n"
+        f"- Last successful ingest: **{last}**\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    db_url = os.environ.get("DATABASE_URL", "")
+    if not db_url:
+        sys.stderr.write(
+            "ERROR: DATABASE_URL environment variable not set.\n"
+            "Set it to your Supabase connection string and re-run.\n"
+        )
+        sys.exit(2)
+
+    try:
+        conn = pg.connect(db_url) if PSYCOPG_VERSION == 3 else pg.connect(db_url)
+    except Exception as e:
+        sys.stderr.write(f"ERROR: cannot connect to database: {e}\n")
+        sys.exit(1)
+
+    try:
+        headline = fetch_all(conn, Q_HEADLINE)[0]
+        bugs = fetch_all(conn, Q_BUGS_THIS_WEEK)
+        recurrence = fetch_all(conn, Q_SIGNATURE_RECURRENCE)
+        sparkline_rows = fetch_all(conn, Q_BUG_SPARKLINE)
+        version_dist = fetch_all(conn, Q_VERSION_DIST)
+        install_channels = fetch_all(conn, Q_INSTALL_CHANNEL)
+        backend_mix = fetch_all(conn, Q_BACKEND_MIX)
+        hygiene = fetch_all(conn, Q_HYGIENE)
+        quiet_kinds = fetch_all(conn, Q_QUIET_KINDS)
+    except Exception as e:
+        sys.stderr.write(f"ERROR: query failed: {e}\n")
+        sys.exit(1)
+    finally:
+        conn.close()
+
+    sparkline_values = [int(r["bugs"]) for r in sparkline_rows]
+    week_start = headline["week_start"]
+
+    # Degenerate-week heuristic: if all of (a) total installs, (b) bugs this
+    # week, (c) bugs in last 12 weeks are tiny, render the short version.
+    n_total = headline["installs_total"] or 0
+    bugs_ever = sum(sparkline_values)
+    if n_total < 5 and headline["bugs_this_wk"] == 0 and bugs_ever < 3:
+        print(render_header(headline, week_start))
+        print(render_pipeline_alive_only(headline, hygiene, sparkline_values))
+        return
+
+    # Full report
+    print(render_header(headline, week_start))
+    print(render_headline(headline, sparkline_values))
+    print()
+    print(render_bugs_section(bugs, recurrence, quiet_kinds))
+    print()
+    print(render_versions(version_dist, install_channels, backend_mix))
+    print()
+    print(render_hygiene(hygiene))
+
+
+if __name__ == "__main__":
+    main()

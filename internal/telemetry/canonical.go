@@ -20,6 +20,7 @@ package telemetry
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -86,16 +87,29 @@ func writeCanonical(b *strings.Builder, v any) error {
 		}
 		b.WriteByte(']')
 		return nil
-	default:
-		// Primitives: string, number, bool, null. Standard JSON encoding
-		// matches PG JSONB normalization for these in the cases SM
-		// telemetry sends (no NaN, no extreme floats, no high-precision
-		// numerics outside what PG round-trips identically).
+	case nil, bool, string, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64, float32, float64,
+		json.Number:
+		// Allowed primitives: standard JSON encoding matches PG JSONB
+		// normalization for these in the cases SM telemetry sends (no
+		// NaN, no extreme floats, no high-precision numerics outside
+		// what PG round-trips identically).
 		bs, err := json.Marshal(v)
 		if err != nil {
 			return err
 		}
 		b.Write(bs)
 		return nil
+	default:
+		// IMPORTANT: do NOT silently json.Marshal arbitrary types here.
+		// A struct passed in would marshal via reflection with
+		// encoding/json's default alphabetical key ordering, NOT the
+		// PG length-first ordering CanonicalJSON guarantees. The
+		// resulting HMAC would silently fail server-side verification.
+		// Force the caller to convert to map[string]any first.
+		return fmt.Errorf(
+			"telemetry.CanonicalJSON: unsupported value type %T; convert to map[string]any first (cannot rely on encoding/json key order, which differs from PG JSONB length-first ordering)",
+			v,
+		)
 	}
 }
