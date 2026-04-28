@@ -84,6 +84,36 @@ try {
     Invoke-WebRequest -Uri $downloadUrl -OutFile $tempZip -UseBasicParsing
     Write-Log "Downloaded $(((Get-Item $tempZip).Length / 1MB).ToString('N1')) MB"
 
+    # SEC-H11: verify the SHA-256 of the downloaded zip against the
+    # checksum file rclone.org publishes alongside it. Without this,
+    # an attacker who can MITM the TLS connection (private CA, captive
+    # portal, compromised intermediate) or rclone.org itself can swap
+    # in a malicious binary that smirror then runs as LocalSystem
+    # (when the MSI installs from an elevated context) or as the user.
+    $checksumUrl = "https://downloads.rclone.org/rclone-current-windows-amd64.zip.sha256"
+    $tempSha = Join-Path $env:TEMP "rclone-download.zip.sha256"
+    Write-Log "Downloading checksum from $checksumUrl"
+    Invoke-WebRequest -Uri $checksumUrl -OutFile $tempSha -UseBasicParsing
+    # The checksum file's first whitespace-separated token is the hex
+    # digest. The second token is the filename — we don't validate
+    # filename against ours because the published file uses the
+    # versioned name (e.g. "rclone-v1.73.0-windows-amd64.zip") while
+    # we downloaded "rclone-current-windows-amd64.zip" which redirects
+    # to that versioned URL.
+    $expectedHash = ((Get-Content $tempSha -Raw).Trim() -split '\s+', 2)[0].ToLowerInvariant()
+    if ($expectedHash -notmatch '^[0-9a-f]{64}$') {
+        Write-Log "ERROR: published checksum is not a 64-char hex SHA-256: $expectedHash"
+        exit 1
+    }
+    $actualHash = (Get-FileHash -Algorithm SHA256 -Path $tempZip).Hash.ToLowerInvariant()
+    if ($actualHash -ne $expectedHash) {
+        Write-Log "ERROR: SHA-256 mismatch — downloaded zip is corrupt or tampered"
+        Write-Log "  expected: $expectedHash"
+        Write-Log "  actual:   $actualHash"
+        exit 1
+    }
+    Write-Log "SHA-256 verified: $actualHash"
+
     # Clean up previous extraction
     if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
 
@@ -122,7 +152,8 @@ try {
     Write-Log "ERROR: Direct download failed: $_"
     exit 1
 } finally {
-    # Clean up temp files
+    # Clean up temp files (including the checksum companion if it was fetched).
     Remove-Item $tempZip -Force -ErrorAction SilentlyContinue
+    Remove-Item $tempSha -Force -ErrorAction SilentlyContinue
     Remove-Item $tempExtract -Recurse -Force -ErrorAction SilentlyContinue
 }

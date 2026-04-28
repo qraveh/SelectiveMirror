@@ -119,6 +119,13 @@ Flags:
 
 	latestVer := strings.TrimPrefix(release.TagName, "v")
 	cmp := telemetry.CompareVersions(version, latestVer)
+
+	// SEC-M10: refuse downgrades. cmp > 0 means current is NEWER than the
+	// remote "latest" — that's either a network-level downgrade attack
+	// (someone served us a stale release pointer) or someone testing
+	// against an old branch. We never replace a newer binary with an
+	// older one. cmp == 0 means we're already at latest. Both cases are
+	// "already up to date" — no binary replace happens.
 	if cmp >= 0 {
 		fmt.Printf("Already up to date (v%s).\n", latestVer)
 		return
