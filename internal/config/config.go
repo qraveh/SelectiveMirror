@@ -389,6 +389,62 @@ func (g *Global) Validate() error {
 		if p.MaxFileSizeMB <= 0 {
 			g.Projects[i].MaxFileSizeMB = 100
 		}
+
+		// GAP-4 (panel review 2026-04-28): reject drive-root and other
+		// system-wide local_path values. Watching `C:\` (or %SystemRoot%,
+		// %ProgramFiles%, etc.) recurses across millions of entries,
+		// exhausts ReadDirectoryChangesW handle buffers, and is almost
+		// always a typo or misconfiguration. Reject with a friendly hint.
+		if reason := isUnsafeLocalPath(p.LocalPath); reason != "" {
+			return fmt.Errorf("mirror %q: local_path %q rejected: %s", p.Name, p.LocalPath, reason)
+		}
+
+		// GAP-5: reject traversal-shaped remote paths (e.g. `local:../../etc`).
+		// rclone-remote syntax is `remote:path`. After the colon, `..`
+		// segments are almost always either a typo or a deliberate escape
+		// attempt. Cheap defense-in-depth — failure is otherwise deferred
+		// to first sync, leaving status output saying "OK" until then.
+		if reason := isUnsafeRemote(p.Remote); reason != "" {
+			return fmt.Errorf("mirror %q: remote %q rejected: %s", p.Name, p.Remote, reason)
+		}
+	}
+
+	// GAP-3: detect overlapping mirror local_paths. If parent and child
+	// are both mirrored, every event under the child fires on both
+	// watchers, FairQueue gets two tasks, two rclone processes burn API
+	// quota, and the remote diverges based on which finishes first.
+	if err := validateNoLocalPathOverlap(g.Projects); err != nil {
+		return err
+	}
+
+	// GAP-2: validate rclone_config path if set. rclone treats this as
+	// the credentials store; pointing it at a missing/non-regular file
+	// silently degrades sync, and combined with GAP-1 it's a pivot
+	// vector if the file is later created by an attacker who can write
+	// the path.
+	if g.RcloneConfig != "" {
+		info, err := os.Stat(g.RcloneConfig)
+		if err != nil {
+			return fmt.Errorf("rclone_config %q: %w", g.RcloneConfig, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("rclone_config %q is not a regular file", g.RcloneConfig)
+		}
+	}
+
+	// GAP-1 (CRITICAL): reject dangerous rclone_extra_flags. The list is
+	// appended verbatim into every rclone invocation; flags like --rc
+	// expose an unauthenticated control plane on localhost (full
+	// filesystem access as the smirror principal — LocalSystem in service
+	// mode), and flags like --log-file / --config let anyone with config
+	// write access pivot to arbitrary file overwrite or backend swap.
+	if err := validateRcloneExtraFlags("global", g.RcloneExtraFlags); err != nil {
+		return err
+	}
+	for _, p := range g.Projects {
+		if err := validateRcloneExtraFlags(fmt.Sprintf("mirror %q", p.Name), p.RcloneExtraFlags); err != nil {
+			return err
+		}
 	}
 
 	// SM-089: Validate rclone_path if explicitly set to an absolute or relative path.
@@ -450,6 +506,177 @@ func isBlockedIP(ip net.IP) bool {
 		ip.IsMulticast() ||
 		ip.IsUnspecified() ||
 		ip.IsInterfaceLocalMulticast()
+}
+
+// isUnsafeLocalPath returns a human-readable reason if the given path is
+// system-wide (drive root, SystemRoot, ProgramFiles, ProgramData) and
+// should not be a mirror source. Empty string means OK to use.
+//
+// GAP-4 (panel review 2026-04-28). On Windows these paths recurse over
+// millions of entries, blow past ReadDirectoryChangesW buffer caps, and
+// are almost always misconfigurations. On other platforms `/` is
+// similarly never a valid mirror source. Volumes (`E:\`, etc.) are also
+// rejected — those are entire physical/logical drives.
+func isUnsafeLocalPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "" // let downstream Stat surface the real problem
+	}
+	cleaned := filepath.Clean(abs)
+
+	// Drive-root: `C:\`, `D:\`, etc. on Windows; `/` on POSIX.
+	vol := filepath.VolumeName(cleaned)
+	if vol != "" && cleaned == vol+string(filepath.Separator) {
+		return "drive roots are not valid mirror sources (recurses over the entire volume; choose a sub-directory)"
+	}
+	if cleaned == "/" {
+		return "filesystem root '/' is not a valid mirror source (choose a sub-directory)"
+	}
+
+	// Windows system directories. Compare case-insensitively.
+	envVars := []string{"SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "windir"}
+	cleanedLower := strings.ToLower(cleaned)
+	for _, ev := range envVars {
+		if val := os.Getenv(ev); val != "" {
+			if cleanedLower == strings.ToLower(filepath.Clean(val)) {
+				return "system directory %" + ev + "% is not a valid mirror source"
+			}
+		}
+	}
+
+	return ""
+}
+
+// isUnsafeRemote returns a non-empty reason if the rclone remote spec
+// contains traversal segments after the colon. rclone remote syntax is
+// `remote-name:relative/path`; `..` segments are either typos or
+// attempts to escape the remote root. GAP-5 (panel review 2026-04-28).
+func isUnsafeRemote(r string) string {
+	colon := strings.IndexByte(r, ':')
+	if colon < 0 {
+		// No colon — likely a local-fs path. Fall through to existing
+		// validators (we don't second-guess unprefixed forms here).
+		return ""
+	}
+	tail := r[colon+1:]
+	if tail == "" {
+		return ""
+	}
+	// Walk segments separated by `/` or `\`. Reject any literal `..`.
+	for _, sep := range []string{"/", "\\"} {
+		for _, seg := range strings.Split(tail, sep) {
+			if seg == ".." {
+				return "remote path contains a '..' traversal segment after the ':'"
+			}
+		}
+	}
+	return ""
+}
+
+// validateNoLocalPathOverlap rejects configurations where one mirror's
+// local_path is a strict prefix of another's (parent/child overlap).
+// GAP-3 (panel review 2026-04-28).
+func validateNoLocalPathOverlap(projects []Project) error {
+	type entry struct {
+		name string
+		abs  string
+	}
+	resolved := make([]entry, 0, len(projects))
+	for _, p := range projects {
+		abs, err := filepath.Abs(p.LocalPath)
+		if err != nil {
+			continue
+		}
+		resolved = append(resolved, entry{name: p.Name, abs: filepath.Clean(abs)})
+	}
+	sep := string(filepath.Separator)
+	for i, a := range resolved {
+		for j, b := range resolved {
+			if i == j {
+				continue
+			}
+			// strings.HasPrefix is case-sensitive; on Windows local paths
+			// are case-insensitive. Compare lowercase to catch typo'd cases.
+			al, bl := strings.ToLower(a.abs), strings.ToLower(b.abs)
+			if al == bl {
+				// Same path; the BUG-1 path covers same-name dup, but two
+				// mirrors with different names AND same path is also wrong.
+				return fmt.Errorf("mirrors %q and %q resolve to the same local_path %q", a.name, b.name, a.abs)
+			}
+			if strings.HasPrefix(bl, al+sep) {
+				return fmt.Errorf("mirror %q local_path %q is a parent of mirror %q local_path %q (overlapping mirrors double-sync every file under the child)", a.name, a.abs, b.name, b.abs)
+			}
+		}
+	}
+	return nil
+}
+
+// rcloneExtraFlagDenylist is the set of rclone flag names that smirror
+// refuses to accept in `rclone_extra_flags` (global or per-mirror).
+// Each is rejected because it changes WHAT rclone executes vs HOW a
+// transfer behaves — see GAP-1 (panel review 2026-04-28).
+//
+// Categories:
+//   - --rc, --rc-*       : exposes a control-plane HTTP listener
+//   - --log-file         : redirects log output to an arbitrary file
+//                          (under service mode this is arbitrary-file-write
+//                          as LocalSystem)
+//   - --log-format       : same vector via formatted log lines
+//   - --config           : swaps out the rclone config; combined with the
+//                          ability to write a malicious rclone.conf this
+//                          pivots the entire backend
+//   - --password-command : invokes a shell command rclone trusts to
+//                          produce a password; arbitrary command exec
+//   - --ask-password     : prompts on stderr; broken in service mode
+//                          and a UI-injection vector in foreground
+//
+// We intentionally use prefix matching for `--rc` so `--rc-addr`,
+// `--rc-no-auth`, etc. are all caught.
+var rcloneExtraFlagDenylist = struct {
+	exact   map[string]bool
+	prefix  []string
+}{
+	exact: map[string]bool{
+		"--log-file":         true,
+		"--log-format":       true,
+		"--config":           true,
+		"--password-command": true,
+		"--ask-password":     true,
+	},
+	prefix: []string{"--rc"}, // matches --rc, --rc-addr, --rc-no-auth, --rcfile, etc.
+}
+
+// validateRcloneExtraFlags rejects any flag in the denylist. `where` is
+// a human-readable origin label ("global" or `mirror "name"`) included in
+// the error message. Both separate-form (`--flag value`) and `=`-form
+// (`--flag=value`) are caught.
+func validateRcloneExtraFlags(where string, flags []string) error {
+	for _, raw := range flags {
+		if !strings.HasPrefix(raw, "--") {
+			continue
+		}
+		name := raw
+		if eq := strings.Index(raw, "="); eq > 0 {
+			name = raw[:eq]
+		}
+		if rcloneExtraFlagDenylist.exact[name] {
+			return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; this flag changes what rclone executes — see docs/SECURITY.md GAP-1)", where, name)
+		}
+		for _, p := range rcloneExtraFlagDenylist.prefix {
+			// Any flag whose name starts with `--rc` is rejected. This
+			// catches `--rc`, `--rc-addr`, `--rc-no-auth`, `--rcfile`,
+			// `--rcjob-expire-duration`, etc. The rclone CLI namespace
+			// reserves the `--rc*` prefix for the remote-control plane,
+			// so there are no false positives among rclone's other flags.
+			if strings.HasPrefix(name, p) {
+				return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; --rc* flags expose an unauthenticated control plane — see docs/SECURITY.md GAP-1)", where, name)
+			}
+		}
+	}
+	return nil
 }
 
 // FindProject returns the project config for the given name, or nil.

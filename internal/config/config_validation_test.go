@@ -319,3 +319,212 @@ func TestLoad_FileNotFound(t *testing.T) {
 		t.Fatal("expected error for nonexistent file")
 	}
 }
+
+// =========================================================================
+// Panel-review 2026-04-28 — config validation hardening
+// =========================================================================
+
+// GAP-1: rclone_extra_flags denylist. Network-listener flags, log-file
+// redirection, and config-swap flags must be rejected.
+func TestValidate_RcloneExtraFlags_DenylistGlobal(t *testing.T) {
+	cases := []struct {
+		name  string
+		flags []string
+		want  string
+	}{
+		{"--rc switch", []string{"--rc"}, "--rc"},
+		{"--rc-addr", []string{"--rc-addr", "127.0.0.1:5572"}, "--rc-addr"},
+		{"--rc-no-auth", []string{"--rc-no-auth"}, "--rc-no-auth"},
+		{"--rcfile", []string{"--rcfile", "x.json"}, "--rcfile"},
+		{"--log-file separate", []string{"--log-file", "x.log"}, "--log-file"},
+		{"--log-file equals", []string{"--log-file=x.log"}, "--log-file"},
+		{"--config", []string{"--config", "x.conf"}, "--config"},
+		{"--password-command", []string{"--password-command", "echo hi"}, "--password-command"},
+		{"--ask-password", []string{"--ask-password"}, "--ask-password"},
+		{"--log-format", []string{"--log-format", "json"}, "--log-format"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRcloneExtraFlags("global", tc.flags)
+			if err == nil {
+				t.Fatalf("expected denylist rejection for %v", tc.flags)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %v does not name the rejected flag %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidate_RcloneExtraFlags_AllowsBenign(t *testing.T) {
+	for _, flag := range [][]string{
+		{"--bwlimit", "10M"},
+		{"--transfers", "4"},
+		{"--checkers", "8"},
+		{"--max-age", "30d"},
+		{"--user-agent", "smirror/0.9"},
+		{},
+		nil,
+	} {
+		if err := validateRcloneExtraFlags("global", flag); err != nil {
+			t.Errorf("benign flag set %v rejected: %v", flag, err)
+		}
+	}
+}
+
+// GAP-1: per-mirror flag list is also validated.
+func TestLoad_RcloneExtraFlags_PerMirrorRejected(t *testing.T) {
+	p := writeConfig(t, `mirrors:
+  - name: a
+    local_path: LDIR_0
+    remote: "x:y"
+    rclone_extra_flags:
+      - --rc
+      - --rc-no-auth
+`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected per-mirror rclone_extra_flags rejection")
+	}
+	if !strings.Contains(err.Error(), "--rc") {
+		t.Errorf("error did not mention the rejected flag: %v", err)
+	}
+}
+
+// GAP-2: rclone_config must point to a regular file. Bogus paths are
+// rejected at config load (not deferred to first sync).
+func TestLoad_RcloneConfig_MissingPathRejected(t *testing.T) {
+	p := writeConfig(t, `mirrors:
+  - name: a
+    local_path: LDIR_0
+    remote: "x:y"
+rclone_config: /does/not/exist/rclone.conf
+`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected rclone_config missing-path rejection")
+	}
+	if !strings.Contains(err.Error(), "rclone_config") {
+		t.Errorf("error did not mention rclone_config: %v", err)
+	}
+}
+
+func TestLoad_RcloneConfig_DirectoryRejected(t *testing.T) {
+	dir := t.TempDir()
+	p := writeConfig(t, fmt.Sprintf(`mirrors:
+  - name: a
+    local_path: LDIR_0
+    remote: "x:y"
+rclone_config: %q
+`, dir))
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected directory rclone_config rejection")
+	}
+	if !strings.Contains(err.Error(), "regular file") {
+		t.Errorf("error did not mention regular file: %v", err)
+	}
+}
+
+// GAP-3: overlapping local_paths (parent / child) rejected.
+func TestLoad_OverlappingLocalPaths_Rejected(t *testing.T) {
+	parent := t.TempDir()
+	child := filepath.Join(parent, "sub")
+	if err := os.MkdirAll(child, 0755); err != nil {
+		t.Fatal(err)
+	}
+	p := writeConfig(t, fmt.Sprintf(`mirrors:
+  - name: outer
+    local_path: %q
+    remote: "x:y"
+  - name: inner
+    local_path: %q
+    remote: "x:z"
+`, parent, child))
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected overlap rejection")
+	}
+	if !strings.Contains(err.Error(), "parent") && !strings.Contains(err.Error(), "overlap") {
+		t.Errorf("error did not mention overlap: %v", err)
+	}
+}
+
+// Two mirrors with the same path resolved differently still gets caught.
+func TestLoad_SameLocalPath_DifferentNames_Rejected(t *testing.T) {
+	dir := t.TempDir()
+	p := writeConfig(t, fmt.Sprintf(`mirrors:
+  - name: alpha
+    local_path: %q
+    remote: "x:y"
+  - name: beta
+    local_path: %q
+    remote: "x:z"
+`, dir, dir))
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected same-path rejection")
+	}
+}
+
+// GAP-4: drive-root local_path rejected.
+func TestValidate_LocalPath_DriveRootRejected(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("drive-root semantics are Windows-specific")
+	}
+	if reason := isUnsafeLocalPath(`C:\`); reason == "" {
+		t.Error("expected `C:\\` to be rejected as drive root")
+	}
+	if reason := isUnsafeLocalPath(`D:\`); reason == "" {
+		t.Error("expected `D:\\` to be rejected as drive root")
+	}
+}
+
+func TestValidate_LocalPath_SystemDirsRejected(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("system-dir env vars are Windows-specific")
+	}
+	if sr := os.Getenv("SystemRoot"); sr != "" {
+		if reason := isUnsafeLocalPath(sr); reason == "" {
+			t.Errorf("expected %%SystemRoot%% (%s) to be rejected", sr)
+		}
+	}
+}
+
+func TestValidate_LocalPath_NormalDirAllowed(t *testing.T) {
+	dir := t.TempDir()
+	if reason := isUnsafeLocalPath(dir); reason != "" {
+		t.Errorf("normal temp dir rejected unexpectedly: %s", reason)
+	}
+}
+
+// GAP-5: traversal-shaped remote rejected.
+func TestValidate_Remote_TraversalRejected(t *testing.T) {
+	cases := []string{
+		"local:../../etc",
+		"gdrive:foo/../bar",
+		`local:..\\..\\windows`,
+	}
+	for _, r := range cases {
+		t.Run(r, func(t *testing.T) {
+			if reason := isUnsafeRemote(r); reason == "" {
+				t.Errorf("expected traversal rejection for %q", r)
+			}
+		})
+	}
+}
+
+func TestValidate_Remote_NormalAllowed(t *testing.T) {
+	cases := []string{
+		"gdrive:smirror/foo",
+		"s3:bucket/path",
+		"local:foo/bar",
+		"plain-no-colon-path", // unprefixed (treated as local-fs path)
+		"",
+	}
+	for _, r := range cases {
+		if reason := isUnsafeRemote(r); reason != "" {
+			t.Errorf("normal remote %q rejected: %s", r, reason)
+		}
+	}
+}
