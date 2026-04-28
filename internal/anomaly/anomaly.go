@@ -77,7 +77,24 @@ type Recorder struct {
 
 	// OnRecord is called after each anomaly is recorded. Set before use; not thread-safe to change.
 	// Intended for alerting integration (webhook, notification).
+	//
+	// PF-A8 (panel review 2026-04-28): the callback runs in a dedicated
+	// goroutine, NOT in Record's calling goroutine, so a slow webhook
+	// never blocks the sync engine. Anomalies overflow a bounded channel
+	// rather than back-pressuring; overflow is counted in droppedCallbacks
+	// and a Queue:DepthWarning is recorded once per overflow.
 	OnRecord func(a *Anomaly)
+
+	// callbackQueue is a bounded channel feeding the OnRecord goroutine.
+	// Buffer is sized for short bursts (~30s of typical anomaly rate at
+	// load). Overflow drops the anomaly's callback (the writer.Write
+	// path still ran, so the on-disk record is preserved — only the
+	// alerting hook is dropped).
+	callbackQueue       chan *Anomaly
+	droppedCallbacks    atomic.Int64
+	overflowAnnounced   atomic.Bool
+	callbackGoroutineWg sync.WaitGroup
+	closed              atomic.Bool
 }
 
 // Writer is the interface for anomaly persistence.
@@ -87,10 +104,40 @@ type Writer interface {
 }
 
 // NewRecorder creates an anomaly recorder with the given writer.
+//
+// PF-A8: starts a background goroutine that consumes the OnRecord
+// callback queue. The queue is bounded so a slow webhook can't accumulate
+// unbounded memory; overflow drops the callback for that anomaly and is
+// counted (see droppedCallbacks).
 func NewRecorder(w Writer) *Recorder {
-	return &Recorder{
-		writer: w,
-		counts: make(map[Kind]int64),
+	r := &Recorder{
+		writer:        w,
+		counts:        make(map[Kind]int64),
+		callbackQueue: make(chan *Anomaly, 64),
+	}
+	r.callbackGoroutineWg.Add(1)
+	go r.runCallbackLoop()
+	return r
+}
+
+// runCallbackLoop drains callbackQueue and invokes OnRecord. Single-
+// goroutine consumer guarantees ordered callback delivery; the channel
+// is closed by Close which then drains pending entries before exit.
+func (r *Recorder) runCallbackLoop() {
+	defer r.callbackGoroutineWg.Done()
+	for a := range r.callbackQueue {
+		// Snapshot OnRecord under no lock — the field is documented as
+		// "set before use" so a torn read is not a concern in practice.
+		fn := r.OnRecord
+		if fn != nil {
+			func() {
+				defer func() {
+					// Don't let a panicking callback crash the recorder.
+					_ = recover()
+				}()
+				fn(a)
+			}()
+		}
 	}
 }
 
@@ -136,8 +183,34 @@ func (r *Recorder) Record(kind Kind, project, path, message, detail string) *Ano
 		_ = r.writer.Write(a) // best-effort; anomaly recording should not block sync
 	}
 
-	if r.OnRecord != nil {
-		r.OnRecord(a)
+	// PF-A8: hand off to the callback goroutine via a bounded channel.
+	// Non-blocking send: if the consumer is slow (e.g., webhook is wedged
+	// against a 5-second HTTP timeout), drop the callback and increment
+	// the counter. The on-disk record from writer.Write above is intact —
+	// only the alerting hook is dropped.
+	if r.OnRecord != nil && !r.closed.Load() {
+		select {
+		case r.callbackQueue <- a:
+		default:
+			r.droppedCallbacks.Add(1)
+			// Announce the overflow once so an operator knows the alerting
+			// stream is degraded. Subsequent drops are silent (counter only).
+			if r.overflowAnnounced.CompareAndSwap(false, true) {
+				// Best-effort; if Close was called between the load and
+				// here, this is a no-op.
+				select {
+				case r.callbackQueue <- &Anomaly{
+					ID:       fmt.Sprintf("A-overflow-%d", time.Now().UnixNano()),
+					Time:     time.Now().UTC().Format(time.RFC3339),
+					Kind:     KindQueueDepthWarning,
+					Severity: SeverityWarning,
+					Message:  "anomaly callback queue overflow — webhook downstream is slow",
+					Detail:   "subsequent dropped callbacks counted in droppedCallbacks (see Recorder)",
+				}:
+				default:
+				}
+			}
+		}
 	}
 
 	return a
@@ -179,10 +252,33 @@ func (r *Recorder) Total() int64 {
 	return r.counter.Load()
 }
 
-// Close closes the underlying writer.
+// Close closes the underlying writer and stops the callback goroutine.
+// Subsequent Record calls do not block; pending callbacks already in
+// the queue at Close time are drained before the goroutine exits.
 func (r *Recorder) Close() error {
-	if r == nil || r.writer == nil {
+	if r == nil {
+		return nil
+	}
+	// Mark closed BEFORE closing the channel so Record's non-blocking
+	// send doesn't race with the channel close (sending to a closed
+	// channel panics). closed.Load() is checked in Record above.
+	if r.closed.CompareAndSwap(false, true) {
+		close(r.callbackQueue)
+		r.callbackGoroutineWg.Wait()
+	}
+	if r.writer == nil {
 		return nil
 	}
 	return r.writer.Close()
+}
+
+// DroppedCallbacks returns the number of OnRecord callbacks dropped due
+// to queue overflow since process start. Useful for status output:
+// non-zero indicates the webhook downstream is slower than the sync
+// engine's anomaly rate.
+func (r *Recorder) DroppedCallbacks() int64 {
+	if r == nil {
+		return 0
+	}
+	return r.droppedCallbacks.Load()
 }

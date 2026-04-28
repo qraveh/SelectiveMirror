@@ -3,6 +3,7 @@ package anomaly
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 // memWriter is a test writer that stores anomalies in memory.
@@ -161,13 +162,26 @@ func TestOnRecord_CalledAfterWrite(t *testing.T) {
 	w := &memWriter{}
 	r := NewRecorder(w)
 
-	var received []*Anomaly
-	r.OnRecord = func(a *Anomaly) {
-		received = append(received, a)
-	}
+	// PF-A8: OnRecord fires from a dedicated goroutine, not the Record
+	// caller. Use a channel to coordinate test assertions instead of
+	// scanning a slice that may not be populated yet.
+	got := make(chan *Anomaly, 4)
+	r.OnRecord = func(a *Anomaly) { got <- a }
 
 	r.Record(KindSyncFailure, "proj", "file.go", "rclone exit 1", "elapsed: 500ms")
 	r.Record(KindCircuitBreaker, "proj", "", "tripped", "")
+
+	// Drain via Close — guarantees the callback goroutine has processed
+	// every queued entry before we assert.
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	close(got)
+
+	var received []*Anomaly
+	for a := range got {
+		received = append(received, a)
+	}
 
 	if len(received) != 2 {
 		t.Fatalf("OnRecord called %d times, want 2", len(received))
@@ -179,7 +193,7 @@ func TestOnRecord_CalledAfterWrite(t *testing.T) {
 		t.Errorf("second callback kind: %s, want CircuitBreaker", received[1].Kind)
 	}
 
-	// Writer also got both
+	// Writer also got both (synchronous path — no goroutine needed)
 	if len(w.anomalies) != 2 {
 		t.Errorf("writer got %d anomalies, want 2", len(w.anomalies))
 	}
@@ -207,12 +221,64 @@ func TestSetOnRecord_NilReceiverDoesNotPanic(t *testing.T) {
 	}
 }
 
+// PF-A8 (panel review 2026-04-28): a slow OnRecord callback must not
+// block Record(). Previously the callback ran in the calling goroutine,
+// so a webhook with a 5-second HTTP timeout blocked the sync engine for
+// the full timeout. Now the callback runs in a dedicated goroutine fed
+// by a bounded channel; Record returns immediately.
+func TestRecord_DoesNotBlockOnSlowCallback(t *testing.T) {
+	w := &memWriter{}
+	r := NewRecorder(w)
+	defer r.Close()
+
+	// Block the callback goroutine until we explicitly release it.
+	release := make(chan struct{})
+	r.OnRecord = func(*Anomaly) { <-release }
+
+	// Record N anomalies. The callback queue is buffered (size 64); the
+	// first will pin the consumer goroutine, subsequent ones queue. After
+	// N=64 entries, the buffer is full and the next Record drops the
+	// callback (counter increments) — but Record still returns promptly.
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 70; i++ {
+			r.Record(KindSyncFailure, "p", "f", "msg", "")
+		}
+		close(done)
+	}()
+
+	// If Record is blocking on the callback, this select hits the
+	// default and we fail. Buffered channel of 64 + one in-flight
+	// callback = ~65 quick records before any drops; the loop of 70
+	// must complete in well under the timeout.
+	select {
+	case <-done:
+		// good — record loop completed quickly
+	case <-time.After(2 * time.Second):
+		t.Fatal("Record blocked on slow callback (PF-A8 regression)")
+	}
+
+	// Some callbacks must have been dropped (we sent 70, queue holds 64).
+	close(release)
+	if r.DroppedCallbacks() == 0 {
+		t.Error("expected non-zero DroppedCallbacks after overflow")
+	}
+}
+
 func TestSetOnRecord_InstallsCallback(t *testing.T) {
 	w := &memWriter{}
 	r := NewRecorder(w)
-	var fired int
-	r.SetOnRecord(func(*Anomaly) { fired++ })
+	// PF-A8: callback is async; use a channel to confirm fire-once
+	// without depending on goroutine scheduling.
+	got := make(chan struct{}, 1)
+	r.SetOnRecord(func(*Anomaly) { got <- struct{}{} })
 	r.Record(KindPanic, "", "", "msg", "")
+
+	// Drain via Close so we know the callback goroutine processed the entry.
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	fired := len(got)
 	if fired != 1 {
 		t.Errorf("callback fired %d times, want 1", fired)
 	}

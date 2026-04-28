@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.21-dev"
+var version = "0.9.22-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -101,6 +101,34 @@ func main() {
 	runWithCrashReport(cliMain)
 }
 
+// extractConfigPath scans args for --config and --config=<value> flags and
+// removes ALL of them from the result. The last `--config` occurrence wins
+// (assigns to *out); earlier occurrences are silently dropped. Args that
+// are not --config are preserved in original order.
+//
+// GAP-6 (panel review 2026-04-28): last-wins for --config matches kubectl/
+// docker/gh conventions and avoids the first-wins-but-stops-iterating
+// behavior that left subsequent --config args in the slice.
+func extractConfigPath(args []string, out *string) []string {
+	result := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--config" {
+			if i+1 < len(args) {
+				*out = args[i+1]
+				i++ // consume the value
+			}
+			continue
+		}
+		if strings.HasPrefix(a, "--config=") {
+			*out = strings.TrimPrefix(a, "--config=")
+			continue
+		}
+		result = append(result, a)
+	}
+	return result
+}
+
 // earlyLogTarget returns the path for the very-early diagnostic log written
 // before any normal logging is set up.
 func earlyLogTarget(isService bool) string {
@@ -135,23 +163,15 @@ func cliMain() {
 		os.Exit(1)
 	}
 
-	// Find config file
+	// Find config file. GAP-6 (panel review 2026-04-28): last-wins
+	// semantics if --config is given multiple times. Previously the first
+	// occurrence was kept and subsequent ones were left in args, which
+	// confused downstream parsers and made the "winner" depend on an
+	// undocumented break point. Last-wins matches most CLI conventions
+	// (kubectl, docker, gh) and gives an obvious result for typo'd
+	// `smirror --config bogus --config good version`.
 	configPath := config.DefaultConfigPath()
-	args := os.Args[1:]
-
-	// Check for --config flag
-	for i, arg := range args {
-		if arg == "--config" && i+1 < len(args) {
-			configPath = args[i+1]
-			args = append(args[:i], args[i+2:]...)
-			break
-		}
-		if strings.HasPrefix(arg, "--config=") {
-			configPath = strings.TrimPrefix(arg, "--config=")
-			args = append(args[:i], args[i+1:]...)
-			break
-		}
-	}
+	args := extractConfigPath(os.Args[1:], &configPath)
 
 	if len(args) == 0 {
 		printUsage()
@@ -2932,18 +2952,10 @@ func serviceMain() {
 	}
 
 	// When the SCM starts the service, args come from the service config.
-	// Parse --config from os.Args (the SCM passes the configured arguments).
+	// Parse --config with the same last-wins semantics as cliMain
+	// (GAP-6, panel review 2026-04-28).
 	configPath := config.DefaultConfigPath()
-	for i, arg := range os.Args {
-		if arg == "--config" && i+1 < len(os.Args) {
-			configPath = os.Args[i+1]
-			break
-		}
-		if strings.HasPrefix(arg, "--config=") {
-			configPath = strings.TrimPrefix(arg, "--config=")
-			break
-		}
-	}
+	_ = extractConfigPath(os.Args[1:], &configPath)
 
 	var cancel context.CancelFunc
 	var liveSyncEngine *msync.Engine // shared with syncNowFunc

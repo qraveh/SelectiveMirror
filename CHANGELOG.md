@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Robustness / polish (panel review 2026-04-28 — last batch)
+
+- **GAP-6 — `--config` last-wins.** `cmd/smirror/main.go::extractConfigPath`. Previous parsing broke out of the loop on the FIRST `--config` it saw and left subsequent `--config` args in the stripped slice — so `smirror --config bogus.yaml --config good.yaml version` used the bogus path and confused downstream parsers. Now extracted to a helper used by both cliMain and serviceMain: scans all args, last `--config` wins, ALL occurrences removed from the result. Mixed separate-form (`--config X`) and `=`-form (`--config=X`) handled. 8 sub-cases in `cmd/smirror/config_args_test.go`.
+- **PF-A8 — async `OnRecord` callback (anomaly recorder).** `internal/anomaly/anomaly.go::Recorder`. Previously OnRecord ran synchronously inside `Record()`, so a slow webhook (HTTP timeout up to 5s) blocked the sync engine for the full timeout per anomaly. Now Record enqueues to a bounded channel (size 64) drained by a dedicated goroutine that calls OnRecord with panic recovery. Overflow drops the callback (writer.Write path is unchanged — on-disk record is preserved); first overflow records a `Queue:DepthWarning` anomaly so the operator sees the alerting stream is degraded; subsequent drops are counted in `DroppedCallbacks()`. `Close()` closes the channel and waits for the goroutine to drain. Regression test `TestRecord_DoesNotBlockOnSlowCallback` enqueues 70 anomalies against a blocked callback and asserts the loop completes in < 2s with non-zero drops.
+
 ### Security / robustness (panel review 2026-04-28 — service-mode hardening)
 
 - **PF-A3 / audit SEC-H5 — service-mode default-rejects symlinks-to-files.** `internal/sync/sync.go::quiesceFile`. Service mode (LocalSystem) running with the previous follow-symlink behavior would happily sync a symlink in a watched directory targeting `C:\Windows\System32\config\SAM` — exfiltrating the SAM hive to the configured remote. Foreground / per-user-task mode is unchanged (legitimate monorepo / dotfiles use). New `Engine.RejectSymlinkedFiles` field; serviceMain sets it to true unconditionally. POSIX test added (Windows symlink creation requires elevated privilege; skip on CI runners that lack it).
