@@ -84,6 +84,17 @@ var migrations = []func(db *sql.DB) error{
 // Store wraps a SQLite database for sync state management.
 type Store struct {
 	db *sql.DB
+
+	// WasFreshOpen is true if state.db did not exist before Open created
+	// it. Callers (daemon entry points) should warn-log when this is true
+	// AND the surrounding user data dir already existed — could mean the
+	// user accidentally wiped state.db and is about to lose sync history.
+	// GAP-8.
+	WasFreshOpen bool
+
+	// WasZeroByteOpen is true if state.db existed but was empty. Same
+	// caller treatment as WasFreshOpen. GAP-8.
+	WasZeroByteOpen bool
 }
 
 // FileState represents the last known state of a synced file.
@@ -105,6 +116,12 @@ type FileState struct {
 }
 
 // Open creates or opens the state database.
+//
+// GAP-8: callers can detect "fresh / re-created DB" via the WasFreshOpen
+// hint set on the returned Store. Daemon-mode commands (smirror start,
+// sync-now) should warn-log when WasFreshOpen is true if the user data
+// dir already existed — silent re-creation could mean "user accidentally
+// wiped state.db" and the user is about to lose all sync history.
 func Open(dbPath string) (*Store, error) {
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -118,6 +135,18 @@ func Open(dbPath string) (*Store, error) {
 	// the SQLite WAL/journal writes. Lstat first; reject if symlink.
 	if linfo, lerr := os.Lstat(dbPath); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
 		return nil, fmt.Errorf("state DB path %q is a symlink; refused (SEC-H7)", dbPath)
+	}
+
+	// GAP-8: classify the open as fresh/zero-byte/normal so callers can
+	// surface a warning. Stat before SQLite touches the file.
+	wasFresh := false
+	wasZero := false
+	if st, lerr := os.Stat(dbPath); lerr == nil {
+		if st.Size() == 0 {
+			wasZero = true
+		}
+	} else if os.IsNotExist(lerr) {
+		wasFresh = true
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=ON&_busy_timeout=5000")
@@ -164,7 +193,7 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("migration: %w", err)
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, WasFreshOpen: wasFresh, WasZeroByteOpen: wasZero}
 
 	// schema_version: never downgrade. An older binary running a read-only
 	// command (smirror status / dry-run / explain) used to overwrite the

@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.30-dev"
+var version = "0.9.31-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -531,6 +531,18 @@ Press Ctrl+C to stop.`) {
 		os.Exit(1)
 	}
 	defer st.Close()
+
+	// GAP-8: surface a one-line warning if state.db was missing or
+	// zero-byte at open time. A user who accidentally rm'd the DB is
+	// about to lose all sync history (everything will be re-uploaded
+	// on the next reconciliation). The daemon path proceeds anyway —
+	// "starting fresh" is acceptable behavior — but the user should
+	// see the message.
+	if st.WasFreshOpen {
+		slog.Warn("state DB was created fresh — no sync history exists; first reconciliation will re-upload all included files", "path", cfg.StateDB)
+	} else if st.WasZeroByteOpen {
+		slog.Warn("state DB was zero-byte at open — possibly truncated by a crash; treated as fresh", "path", cfg.StateDB)
+	}
 
 	// SM-083: Clean up orphaned project state entries on startup
 	if pruned, err := st.PruneOrphanedProjects(cfg.ProjectNames()); err == nil && pruned > 0 {

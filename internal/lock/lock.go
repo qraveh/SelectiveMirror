@@ -10,11 +10,40 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
 // ErrAlreadyRunning is returned when another instance holds the lock.
 var ErrAlreadyRunning = errors.New("another smirror instance is already running")
+
+// ErrStaleLockHeld is returned when the lock file's recorded PID is not
+// alive — typically a crashed previous instance whose handle the OS
+// has not yet released. Callers can wrap this and surface a clearer
+// remedy (delete the file, retry, etc.). GAP-9.
+var ErrStaleLockHeld = errors.New("lock file held but recorded PID is dead")
+
+// readLockPID parses the `pid=N` line from a lock file written by
+// Acquire. Returns the PID and ok=true on success.
+func readLockPID(lockPath string) (int, bool) {
+	data, err := os.ReadFile(lockPath)
+	if err != nil {
+		return 0, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "pid=") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(line, "pid="))
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
 
 // Lock represents a single-instance file lock.
 type Lock struct {
@@ -24,6 +53,13 @@ type Lock struct {
 
 // Acquire creates or opens the lock file with exclusive access.
 // Returns ErrAlreadyRunning if another instance holds the lock.
+//
+// GAP-9: if Acquire fails because another process appears to hold the
+// file lock, the recorded PID is checked against the OS process list.
+// If the PID is no longer alive (the previous instance crashed without
+// cleaning up), we surface ErrStaleLockHeld with the dead PID — the
+// caller can decide whether to force-clean. The most common case
+// (normal another-instance) still returns ErrAlreadyRunning.
 func Acquire(dataDir string) (*Lock, error) {
 	lockPath := filepath.Join(dataDir, "smirror.lock")
 
@@ -43,6 +79,15 @@ func Acquire(dataDir string) (*Lock, error) {
 	// Try to acquire an exclusive lock (platform-specific)
 	if err := lockFile(f); err != nil {
 		f.Close()
+		// GAP-9: classify before returning. Read PID from the locked
+		// file (we can't read while it's locked by us, but we can read
+		// the file we failed to lock — opening a separate handle for
+		// reading is allowed; lockFile is advisory).
+		if pid, ok := readLockPID(lockPath); ok {
+			if !isProcessAlive(pid) {
+				return nil, fmt.Errorf("%w (recorded PID %d is no longer alive — likely a crashed previous instance; manual remedy: delete %s and retry)", ErrStaleLockHeld, pid, lockPath)
+			}
+		}
 		return nil, ErrAlreadyRunning
 	}
 
