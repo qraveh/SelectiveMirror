@@ -773,6 +773,17 @@ func TestCLI_ReportBug_FailureScenario(t *testing.T) {
 	f.Close()
 
 	// --- Subtest: verify report content via --stdout ---
+	//
+	// SM-164 (privacy round) deliberately changed report-bug behavior:
+	//   - Mirror entries are placeholder-labelled `mirror_0:`, `mirror_1:`
+	//     (NOT user-chosen names) because the report is destined for a
+	//     public GitHub issue when --open is used.
+	//   - The "Live Metrics" block (uptime, files_synced, sync_errors,
+	//     queue_depth, etc.) was removed because accumulated counters in
+	//     a public issue can be cross-correlated with project identity.
+	// This test was originally written against the pre-SM-164 behavior
+	// and asserted real mirror names + metric values; those expectations
+	// are now incorrect. Test updated to match the privacy-honest output.
 	t.Run("VerifyContent", func(t *testing.T) {
 		r := runSmirror(t, cfgPath, "report-bug", "--stdout")
 		assertExitCode(t, r, 0)
@@ -784,21 +795,30 @@ func TestCLI_ReportBug_FailureScenario(t *testing.T) {
 		assertStdoutContains(t, r, "smirror version:")
 		assertStdoutContains(t, r, "platform:")
 
-		// Must contain both mirror names.
-		assertStdoutContains(t, r, "working-mirror")
-		assertStdoutContains(t, r, "broken-mirror")
+		// Must contain placeholder-labelled mirror entries (one per mirror).
+		assertStdoutContains(t, r, "mirror_0:")
+		assertStdoutContains(t, r, "mirror_1:")
 
-		// Must contain live metrics from status.json.
-		assertStdoutContains(t, r, "sync_errors: 17")
-		assertStdoutContains(t, r, "queue_depth: 3")
-		assertStdoutContains(t, r, "files_synced: 142")
+		// Must NOT contain user-chosen mirror names (privacy: SM-164).
+		for _, redacted := range []string{"working-mirror", "broken-mirror"} {
+			if strings.Contains(report, redacted) {
+				t.Errorf("report leaked user-chosen mirror name %q (SM-164 requires placeholder labels)", redacted)
+			}
+		}
+
+		// Must NOT contain accumulated counters (privacy: SM-164).
+		for _, redacted := range []string{"sync_errors:", "queue_depth:", "files_synced:", "bytes_uploaded:"} {
+			if strings.Contains(report, redacted) {
+				t.Errorf("report leaked accumulated counter %q (SM-164 forbids in public-issue path)", redacted)
+			}
+		}
 
 		// Must contain the log section as a separate block.
 		if !strings.Contains(report, "--- Recent Logs") {
 			t.Error("report missing '--- Recent Logs' section header")
 		}
 
-		// Must contain error log lines we injected.
+		// Must contain error log lines we injected (those are still in scope).
 		assertStdoutContains(t, r, "sync failed")
 		assertStdoutContains(t, r, "directory not found")
 
@@ -873,13 +893,21 @@ func TestCLI_ReportBug_FailureScenario(t *testing.T) {
 		}
 
 		// Environment must contain diagnostics.
+		// SM-164: placeholder labels + no accumulated counters; user-chosen
+		// names and metric values must NOT appear in the URL-bound env
+		// because --open posts to a public GitHub issue.
 		gotEnv := q.Get("environment")
 		if gotEnv == "" {
 			t.Fatal("URL missing 'environment' query param")
 		}
-		for _, want := range []string{"smirror version:", "platform:", "rclone", "working-mirror", "broken-mirror", "sync_errors: 17"} {
+		for _, want := range []string{"smirror version:", "platform:", "rclone", "mirror_0:", "mirror_1:"} {
 			if !strings.Contains(gotEnv, want) {
 				t.Errorf("environment field missing %q", want)
+			}
+		}
+		for _, redacted := range []string{"working-mirror", "broken-mirror", "sync_errors:", "files_synced:"} {
+			if strings.Contains(gotEnv, redacted) {
+				t.Errorf("environment field leaked %q (SM-164 redaction requirement)", redacted)
 			}
 		}
 

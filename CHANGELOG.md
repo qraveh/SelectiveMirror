@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Fixed (panel review 2026-04-28 — quick wins)
+
+- **BUG-1: `Validate()` now rejects case-only duplicate mirror names** (`internal/config/config.go:343`). On Windows (case-insensitive NTFS), `WorkProject` and `workproject` resolve to the same on-disk path and the same `state.sync_state` lookup key — accepting both as separate mirrors meant two watchers triggered on the same files and two FairQueue workers raced on the same DB rows. The dedup map is now keyed on `strings.ToLower(name)` and the error message identifies both the new and the conflicting name. Unit test `TestLoad_CaseOnlyDuplicateNames` added.
+- **BUG-2: `cli_test.go` `TestCLI_ReportBug_FailureScenario/{VerifyContent,VerifyURLPrefill}` updated to match SM-164's privacy-honest output**. The tests asserted presence of user-chosen mirror names (`working-mirror`, `broken-mirror`) and accumulated counters (`sync_errors: 17`, `queue_depth: 3`, `files_synced: 142`) in the `report-bug --stdout` env section — but SM-164 deliberately replaced those with placeholder labels (`mirror_0:`, `mirror_1:`) and removed the Live Metrics block entirely (because `report-bug --open` posts the report to a public GitHub issue). Tests now assert the placeholder labels present AND user names + counters absent.
+
 ### Changed (P2 — rclone stall detection: replaces 5-minute wall-clock timeout)
 
 The single hard `context.WithTimeout(ctx, 5*time.Minute)` wrapping every rclone subprocess is gone. It was wrong in both directions: too short for legitimate large-file transfers (a 4 GB file at 5 MB/s = 13 min, killed at 5 min) and too long for hung metadata operations. Replaced with a layered defense:

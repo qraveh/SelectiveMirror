@@ -340,15 +340,24 @@ func (g *Global) Validate() error {
 		return fmt.Errorf("no mirrors defined in config")
 	}
 
-	names := make(map[string]bool)
+	// BUG-1 fix: dedup case-insensitively. On Windows (case-insensitive
+	// NTFS) `WorkProject` and `workproject` resolve to the same on-disk
+	// path and the same state-DB lookup key. Even on case-sensitive file
+	// systems, mirror names are user-facing labels and a case-only
+	// collision is almost always a typo the user wants flagged.
+	names := make(map[string]string) // lower-name -> original-name (for diag)
 	for i, p := range g.Projects {
 		if p.Name == "" {
 			return fmt.Errorf("mirror[%d]: name is required", i)
 		}
-		if names[p.Name] {
-			return fmt.Errorf("mirror[%d]: duplicate name %q", i, p.Name)
+		key := strings.ToLower(p.Name)
+		if existing, dup := names[key]; dup {
+			if existing == p.Name {
+				return fmt.Errorf("mirror[%d]: duplicate name %q", i, p.Name)
+			}
+			return fmt.Errorf("mirror[%d]: name %q collides with earlier %q (case-only difference; mirror names must be unique case-insensitively to avoid state-DB races on Windows NTFS)", i, p.Name, existing)
 		}
-		names[p.Name] = true
+		names[key] = p.Name
 
 		if p.LocalPath == "" {
 			return fmt.Errorf("mirror %q: local_path is required", p.Name)

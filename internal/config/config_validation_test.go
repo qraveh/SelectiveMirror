@@ -133,6 +133,28 @@ func TestLoad_DuplicateNames(t *testing.T) {
 	}
 }
 
+// BUG-1 (panel review 2026-04-28): case-only collisions like "WorkProject"
+// vs "workproject" must also be rejected. On case-insensitive Windows NTFS
+// they resolve to the same on-disk path and the same state-DB key, so two
+// watchers would race on the same files.
+func TestLoad_CaseOnlyDuplicateNames(t *testing.T) {
+	p := writeConfig(t, `mirrors:
+  - name: WorkProject
+    local_path: LDIR_0
+    remote: "x:y"
+  - name: workproject
+    local_path: LDIR_1
+    remote: "x:z"
+`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("expected error for case-only duplicate names")
+	}
+	if !strings.Contains(err.Error(), "case-only difference") {
+		t.Errorf("expected 'case-only difference' diagnostic, got: %v", err)
+	}
+}
+
 func TestLoad_LocalPathDoesNotExist(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
