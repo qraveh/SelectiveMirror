@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 	"strings"
 	gosync "sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/qraveh/SelectiveMirror/internal/anomaly"
@@ -119,8 +120,34 @@ type Engine struct {
 
 	// Per-file locks prevent two workers from syncing the same file simultaneously.
 	// Key: "project:relPath". Full-project syncs (relPath="") use project name as key.
-	fileLocks gosync.Map // map[string]*gosync.Mutex
+	//
+	// Adversarial review #16: this map used to grow without bound because keys
+	// were never deleted (deleting a mutex after unlock caused a race where
+	// two goroutines could hold *different* mutexes for the same key, breaking
+	// mutual exclusion). Now bounded via refcount + GC: each mutex tracks how
+	// many goroutines hold or are waiting on it; when the refcount returns to
+	// zero AND the map is over fileLocksHighWater entries, the entry is GC'd.
+	fileLocks   gosync.Map // map[string]*lockEntry
+	fileLocksMu gosync.Mutex
+	fileLocksN  atomic.Int64 // approximate count for high-water decision
 }
+
+// lockEntry is a refcounted per-file mutex, used by acquireFileLock and
+// releaseFileLock to bound the size of Engine.fileLocks. The refcount must
+// be incremented BEFORE the goroutine waits on .mu (so a concurrent GC
+// pass can't evict an entry mid-wait); see acquireFileLock.
+type lockEntry struct {
+	mu       gosync.Mutex
+	refcount atomic.Int64
+}
+
+const (
+	// fileLocksHighWater is the lock-map size at which idle entries become
+	// candidates for eviction. Sized for typical projects (~1k–10k unique
+	// files in flight); above this we trim aggressively. The bound is soft
+	// because many goroutines may hold locks at once.
+	fileLocksHighWater = 10000
+)
 
 // NewEngine creates a sync engine.
 func NewEngine(cfg *config.Global, st *state.Store, filters map[string]*filter.Engine, m *metrics.Collector) *Engine {
@@ -177,23 +204,45 @@ func (e *Engine) lockKey(task Task) string {
 	return task.Project.Name + ":" + task.RelPath
 }
 
-// acquireFileLock gets or creates a mutex for the given task and locks it.
-// Mutexes are kept in the map permanently (not deleted after unlock) to prevent
-// a race where Delete-after-Unlock causes two goroutines to hold different
-// mutexes for the same key, breaking mutual exclusion.
+// acquireFileLock gets or creates a refcounted mutex for the given task and
+// locks it. The refcount is incremented BEFORE waiting on the mutex, so a
+// concurrent GC pass can't evict an entry that some goroutine is about to
+// wait on.
 func (e *Engine) acquireFileLock(task Task) {
 	key := e.lockKey(task)
-	val, _ := e.fileLocks.LoadOrStore(key, &gosync.Mutex{})
-	mu := val.(*gosync.Mutex)
-	mu.Lock()
+	val, loaded := e.fileLocks.LoadOrStore(key, &lockEntry{})
+	entry := val.(*lockEntry)
+	entry.refcount.Add(1)
+	if !loaded {
+		e.fileLocksN.Add(1)
+	}
+	entry.mu.Lock()
 }
 
-// releaseFileLock unlocks the per-file mutex.
+// releaseFileLock unlocks the per-file mutex and decrements its refcount.
+// When the refcount returns to zero AND the lock map is over the high-water
+// mark, the entry is GC'd. The two-step (decrement, recheck-zero, attempt-
+// delete) is safe because LoadAndDelete-then-Store from another goroutine
+// would atomically replace the entry; we never delete an entry held by
+// another goroutine because refcount > 0 in that case.
 func (e *Engine) releaseFileLock(task Task) {
 	key := e.lockKey(task)
 	val, ok := e.fileLocks.Load(key)
-	if ok {
-		val.(*gosync.Mutex).Unlock()
+	if !ok {
+		return
+	}
+	entry := val.(*lockEntry)
+	entry.mu.Unlock()
+	if entry.refcount.Add(-1) == 0 && e.fileLocksN.Load() > fileLocksHighWater {
+		// Compare-and-delete: only delete if no one acquired between our
+		// refcount==0 observation and the Delete. If another acquireFileLock
+		// snuck in, refcount is now > 0; we leave the entry alone and the
+		// next release will re-evaluate.
+		if entry.refcount.Load() == 0 {
+			if e.fileLocks.CompareAndDelete(key, entry) {
+				e.fileLocksN.Add(-1)
+			}
+		}
 	}
 }
 
@@ -524,8 +573,11 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 func (e *Engine) syncMtime(ctx context.Context, proj config.Project, relPath string, mtime time.Time, hash string, size, mtimeNs int64) {
 	remotePath := proj.Remote + "/" + filepath.ToSlash(relPath)
 
-	// rclone touch accepts ISO 8601 timestamp (UTC, second precision is sufficient for all backends)
-	ts := mtime.UTC().Format("2006-01-02T15:04:05")
+	// rclone touch accepts ISO 8601 UTC timestamp. The trailing `Z` is REQUIRED:
+	// without it, some backends (Drive, S3) interpret the value in the rclone
+	// process's local time zone rather than UTC, producing an off-by-N-hours
+	// mtime on the remote. Adversarial review 2026-04-27 finding #14.
+	ts := mtime.UTC().Format("2006-01-02T15:04:05Z")
 	args := []string{"touch", "--timestamp", ts, "--no-create", remotePath}
 	args = append(args, e.commonFlags(proj)...)
 
@@ -551,12 +603,22 @@ func (e *Engine) syncMtime(ctx context.Context, proj config.Project, relPath str
 			e.metrics.RecordMetadataSync(proj.Name)
 		}
 	} else {
-		// Exit code 3 = "directory not found", others may mean "not supported"
+		// Exit code 3 = "directory not found", others may mean "not supported".
+		// Adversarial review #15 + panel #24: the SM-048 invariant
+		// (rclone_exit=0 in state to avoid full re-upload) is preserved
+		// above, but a silent metadata-sync failure now also surfaces as
+		// an info-severity anomaly so an operator monitoring backends with
+		// mtime issues sees them.
 		e.log.Warn("metadata sync failed (backend may not support mtime updates)",
 			"project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
 		e.state.LogAction(proj.Name, relPath, "mtime_sync_error",
 			fmt.Sprintf("rclone exit %d (backend may not support mtime updates)", exitCode),
 			elapsed.Milliseconds())
+		if e.Anomaly != nil {
+			e.Anomaly.Record(anomaly.KindSyncFailure, proj.Name, relPath,
+				"metadata sync failed (backend may not support mtime updates)",
+				fmt.Sprintf("rclone touch exit=%d, elapsed=%dms (state DB invariant SM-048 preserved: rclone_exit=0 written so the next event won't trigger full re-upload)", exitCode, elapsed.Milliseconds()))
+		}
 	}
 }
 

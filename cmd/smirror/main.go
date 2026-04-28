@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.23-dev"
+var version = "0.9.24-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -1179,32 +1179,29 @@ Examples:
 	}
 }
 
-// countFilteredFiles walks a directory and counts total files vs excluded files.
-// Returns (total, excluded). Directories themselves are not counted.
+// countFilteredFiles walks a directory and counts total files vs excluded
+// files. Returns (total, excluded). Directories themselves are not counted.
+//
+// Adversarial review #17: previously every excluded directory triggered a
+// SECOND full walk to count files inside. For a 50k-file .git/ that's 50k
+// extra os.DirEntry traversals per `smirror status`. Now we walk excluded
+// subtrees in the same pass, just attributing every file we see to
+// `excluded`. SkipDir is no longer used; one pass total. Net effect: same
+// (total, excluded) numbers, half the syscalls when the project has large
+// excluded subtrees.
 func countFilteredFiles(root string, fe *filter.Engine) (total, excluded int) {
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip inaccessible entries
 		}
-		if path == root {
-			return nil
+		if path == root || d.IsDir() {
+			return nil // directories are not counted; we walk into them
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		if d.IsDir() {
-			// Check if entire directory is excluded (e.g., .git/)
-			if fe.IsExcluded(rel + "/") {
-				// Count files inside the excluded directory
-				n := countFilesInDir(path)
-				total += n
-				excluded += n
-				return filepath.SkipDir
-			}
-			return nil
-		}
 		total++
 		if fe.IsExcluded(rel) {
 			excluded++
@@ -1212,18 +1209,6 @@ func countFilteredFiles(root string, fe *filter.Engine) (total, excluded int) {
 		return nil
 	})
 	return total, excluded
-}
-
-// countFilesInDir counts regular files recursively inside a directory.
-func countFilesInDir(dir string) int {
-	n := 0
-	_ = filepath.WalkDir(dir, func(_ string, d os.DirEntry, _ error) error {
-		if d != nil && !d.IsDir() {
-			n++
-		}
-		return nil
-	})
-	return n
 }
 
 // cmdTestMirrors runs all diagnostics (local + remote) and verifies sync state.
@@ -3018,6 +3003,31 @@ func serviceMain() {
 			}
 		}
 
+		// SEC-H2: in service mode the rclone binary runs as LocalSystem, so a
+		// user-writable rclone.exe is a privilege-escalation path. The
+		// admin-owned-config gate above prevents non-admins from changing
+		// rclone_path itself, but a binary swap on disk after install would
+		// still bypass it. Re-check at startup (defense in depth).
+		if cfg.RclonePath != "" {
+			rclonePathToCheck := cfg.RclonePath
+			if !filepath.IsAbs(rclonePathToCheck) {
+				if info, err := rclone.Detect(rclonePathToCheck); err == nil {
+					rclonePathToCheck = info.Path
+				}
+			}
+			if filepath.IsAbs(rclonePathToCheck) {
+				if owned, err := config.IsAdminOwnedPath(rclonePathToCheck); err == nil && !owned {
+					slog.Error("refusing to start: service-mode rclone binary must be admin-owned (SEC-H2)",
+						"rclone_path", rclonePathToCheck,
+						"remedy", "move rclone.exe to an admin-only directory (e.g. %ProgramFiles%\\rclone\\) and update rclone_path in config")
+					if crashLog != nil {
+						fmt.Fprintf(crashLog, "%s startFunc: SEC-H2 refuse: rclone binary not admin-owned\n", time.Now().Format(time.RFC3339))
+					}
+					return
+				}
+			}
+		}
+
 		lk, err := lock.Acquire(dataDir(cfg))
 		if err != nil {
 			slog.Error("lock acquire failed", "error", err)
@@ -3450,6 +3460,26 @@ func serviceDoInstall(configPath string, compound bool) {
 				} else {
 					fmt.Printf("Resolved rclone_path: %s\n", info.Path)
 				}
+				// SEC-H2: in service mode the rclone binary runs as LocalSystem,
+				// so the resolved path MUST be admin-owned. A user-writable
+				// rclone.exe lets any non-admin who can write that path execute
+				// arbitrary code as SYSTEM via the next sync. Refuse install if
+				// the resolution landed on a user-writable binary.
+				if ownedByAdmin, ownErr := config.IsAdminOwnedPath(info.Path); ownErr != nil {
+					fmt.Fprintf(os.Stderr, "Warning: cannot verify admin ownership of rclone at %q: %v\n", info.Path, ownErr)
+				} else if !ownedByAdmin {
+					fmt.Fprintf(os.Stderr, "Error: rclone binary at %q is not admin-owned. Service mode runs as LocalSystem; a user-writable rclone is a privilege escalation path. Move rclone to an admin-only directory (e.g. %%ProgramFiles%%\\rclone\\) and update rclone_path in config.\n", info.Path)
+					os.Exit(ExitConfigError)
+				}
+			}
+		} else {
+			// User-supplied absolute path — same admin-ownership check applies
+			// (same threat model: rclone runs as SYSTEM in service mode).
+			if ownedByAdmin, ownErr := config.IsAdminOwnedPath(cfg.RclonePath); ownErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: cannot verify admin ownership of rclone at %q: %v\n", cfg.RclonePath, ownErr)
+			} else if !ownedByAdmin {
+				fmt.Fprintf(os.Stderr, "Error: rclone binary at %q is not admin-owned. Service mode runs as LocalSystem; a user-writable rclone is a privilege escalation path. Move rclone to an admin-only directory and update rclone_path in config.\n", cfg.RclonePath)
+				os.Exit(ExitConfigError)
 			}
 		}
 		// Resolve rclone config (SYSTEM has its own %APPDATA%, no remotes there)

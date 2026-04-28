@@ -277,6 +277,7 @@
 - **Issue**: `GetFileState` returns stored hash. Sync engine compares to `HashFile()` output — if match, skip upload. Attacker who can write `state.db` directly (same-user filesystem ACL) sets `local_hash = HashFile(malicious_file)` → smirror believes the file is "already synced" → never uploads, leaving stale-but-different remote copy.
 - **Inverse**: Mark all rows `synced_at=<future>, rclone_exit=0` to suppress reconciliation indefinitely.
 - **Fix**: HMAC-sign rows with a key in DPAPI/keystore. Or document threat model: "state.db trust = user-account trust". Add forced-rehash mode for `test-mirrors`.
+- **Status (2026-04-29)**: **DEFERRED to dedicated security session.** The threat model is unclear without a deliberate decision — defending against an offline attacker with disk write access is a different problem from cross-binary trust (already partially covered by GAP-7 schema-version refusal in 0.9.21-dev). The fix space (HMAC-key-storage choice, schema migration, performance impact of per-row HMAC) is too large for a drive-by patch. Tracking deferral in CHANGELOG; will be revisited in a focused security review with an articulated threat model.
 
 ## SEC-M8 — Quarantine timestamp is second-resolution → collision overwrites
 
@@ -332,7 +333,11 @@
 
 - **File**: `internal/telemetry/telemetry.go:208`
 - **Issue**: `exec.CommandContext(ctx, "gh", "auth", "token")` resolves via PATH. If attacker plants `gh.exe` in a directory earlier in PATH (e.g., the SelectiveMirror INSTALLFOLDER, see SEC-C2), they capture the user's GitHub token (often repo-write scope).
-- **Fix**: `exec.LookPath("gh")` + verify resolved path is in a trusted directory; or skip gh entirely.
+- **Fix candidates**:
+  - (a) Drop `gh` integration entirely — use unauthenticated GitHub API calls (60 req/hr per IP is enough for our few selfupdate calls).
+  - (b) Refuse to use `gh` unless its absolute path is configured in `config.yaml` (admin-owned in service mode). UX-bad: users would have to set this.
+  - (c) Verify `gh.exe` Authenticode signature is GitHub's before invoking.
+- **Status (2026-04-29)**: **DEFERRED to dedicated security session.** No clearly-best fix without a UX/security trade-off conversation. (a) is simplest but loses dupsearch's authenticated rate limit; (b) is most secure but breaks zero-config UX; (c) is most expensive to maintain. Tracking deferral in CHANGELOG.
 
 ---
 

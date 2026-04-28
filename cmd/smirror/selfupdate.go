@@ -496,30 +496,50 @@ func extractFromZip(zipPath, fileName, destPath string) error {
 	for _, f := range r.File {
 		// Match by base name (GoReleaser puts files at root or in a subdirectory)
 		if filepath.Base(f.Name) == fileName && !f.FileInfo().IsDir() {
-			rc, err := f.Open()
-			if err != nil {
-				return err
-			}
-			defer rc.Close()
-
-			out, err := os.Create(destPath)
-			if err != nil {
-				return err
-			}
-			defer out.Close()
-
-			written, err := io.Copy(out, io.LimitReader(rc, maxExtractSize+1))
-			if err != nil {
-				return err
-			}
-			if written > maxExtractSize {
-				return fmt.Errorf("archive entry %q exceeds %d bytes (potential decompression bomb)", fileName, maxExtractSize)
-			}
-			return nil
+			// Adversarial review #19 / panel #29: defers used to be in this
+			// loop body. With a single match we always returned before a
+			// second iteration, but lint correctly flagged the pattern. The
+			// hot path is now in a helper function so each handle is closed
+			// exactly when its scope exits, not when the outer function
+			// returns. Also: the size guard is checked AGAINST the writer
+			// position so we never write maxExtractSize+1 bytes — the
+			// previous code wrote one over before erroring.
+			return extractZipEntry(f, destPath, maxExtractSize, fileName)
 		}
 	}
 
 	return fmt.Errorf("%s not found in zip archive", fileName)
+}
+
+// extractZipEntry copies a single zip entry to destPath, capped at
+// maxBytes. Closes both handles deterministically via per-call defers
+// (no defer-in-loop). On size overflow returns a "decompression bomb"
+// error AND truncates the output file so we don't leave maxBytes+1 of
+// untrusted data on disk.
+func extractZipEntry(f *zip.File, destPath string, maxBytes int64, fileName string) error {
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	written, err := io.Copy(out, io.LimitReader(rc, maxBytes+1))
+	if err != nil {
+		return err
+	}
+	if written > maxBytes {
+		// Truncate the partial write — don't leave maxBytes+1 untrusted
+		// bytes accessible if the caller doesn't immediately delete destPath.
+		_ = out.Truncate(0)
+		return fmt.Errorf("archive entry %q exceeds %d bytes (potential decompression bomb)", fileName, maxBytes)
+	}
+	return nil
 }
 
 // swapBinary replaces the current binary with the staged one.

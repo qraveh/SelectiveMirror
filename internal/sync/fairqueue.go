@@ -224,6 +224,17 @@ const (
 // at circuitBreakerMaxBackoff.
 // RecordFailure increments the failure counter for a mirror.
 // Returns true if this failure caused the circuit breaker to trip (threshold crossed).
+//
+// Design note (PF-E4): breaker state is keyed on the mirror NAME, not a
+// stable ID. There is no `addmirror --rename` flag today — the only way to
+// rename is to edit config.yaml manually, which from the engine's
+// perspective is a delete + add. Breaker state under the old name then
+// becomes inaccessible (it lives in `q.circuits` for the process lifetime
+// and is GC'd when the daemon restarts). For a renamed mirror this is
+// arguably the correct behavior: a renamed mirror is conceptually a new
+// mirror and its failure history shouldn't carry forward. If a stable
+// mirror UUID is ever introduced (state-DB schema change), this map's
+// key should migrate to that UUID at the same time.
 func (q *FairQueue) RecordFailure(mirrorName string) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -397,13 +408,28 @@ func (q *FairQueue) Len() int {
 
 // removeByKey removes the first item matching the given key.
 // Caller must hold q.mu.
+//
+// Adversarial review #18 / PF-D1: previously the older task's Done
+// callback was silently dropped on the assumption that "the replacement
+// task will call it when processed." That's only true when the replacing
+// caller carries forward the same Done — which today's only Done-using
+// caller (reconcileAll with RelPath="") doesn't dedup against. A future
+// caller that sets Done on a per-file task would deadlock its WaitGroup.
+// Fix: invoke the displaced task's Done callback before discarding it.
+// The replacement task may still install its own Done; both are honored.
 func (q *FairQueue) removeByKey(key string) {
 	for i, t := range q.items {
 		if queueKey(t) == key {
-			// Call Done callback if present (task is being replaced, not executed)
-			// Don't call Done — the replacement task will call it when processed.
+			displaced := t
 			q.items = append(q.items[:i], q.items[i+1:]...)
 			delete(q.pending, key)
+			// Fire the displaced Done OUTSIDE the mutex if non-nil. We can't
+			// release q.mu here (caller holds it), so we capture and defer
+			// via a goroutine — Done is a one-shot signal; ordering relative
+			// to the replacement task doesn't matter.
+			if displaced.Done != nil {
+				go displaced.Done()
+			}
 			return
 		}
 	}
