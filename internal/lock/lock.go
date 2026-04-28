@@ -71,7 +71,11 @@ func Acquire(dataDir string) (*Lock, error) {
 	// Try to open the file with exclusive access.
 	// On Windows, os.OpenFile with O_CREATE|O_WRONLY will fail if another
 	// process has the file open. We use platform-specific locking below.
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0644)
+	//
+	// SEC-L2: 0600 owner-only. The lock file content is "pid=N\ntime=..."
+	// — the PID isn't a secret, but the SECURITY.md baseline is 0600
+	// for files under the user data dir; consistency matters.
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("opening lock file: %w", err)
 	}
@@ -118,7 +122,8 @@ func IsLocked(dataDir string) (bool, int) {
 	lockPath := filepath.Join(dataDir, "smirror.lock")
 
 	// Try to open and lock the file. If we can lock it, no one else holds it.
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	// SEC-L2: 0600 to match Acquire().
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return false, 0
 	}

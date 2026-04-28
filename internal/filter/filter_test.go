@@ -1063,3 +1063,40 @@ func TestIsStrictSubset(t *testing.T) {
 		})
 	}
 }
+
+// PF-E1 (panel review 2026-04-28): regression-document the actual
+// behavior of negation patterns under excluded directories. The panel
+// system-validation harness logged this without asserting; we log the
+// same pattern here so a future contributor "fixing" the perceived
+// inconsistency triggers a visible Logf rather than silently flipping
+// behavior.
+//
+// What the test CAPTURES:
+//   - .git/ is excluded by global_excludes.
+//   - A per-mirror .syncignore contains `!.git/special-keep`.
+//   - Whether .git/special-keep is excluded or re-included depends on
+//     the underlying gitignore library's cross-layer negation behavior.
+//
+// Strict gitignore would say "once the parent dir is excluded, the
+// negation has no effect" → IsExcluded should be true. The current
+// library lets the negation re-include → IsExcluded is false. We don't
+// classify either as a bug; the panel left it as documented divergence.
+// If you change this code path, expect this test's Logf line to flip.
+func TestFilter_PF_E1_NegationUnderExcludedDir_BehaviorPin(t *testing.T) {
+	dir := t.TempDir()
+	syncIgnorePath := filepath.Join(dir, ".syncignore")
+	if err := os.WriteFile(syncIgnorePath, []byte("!.git/special-keep\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fe, err := New([]string{".git/"}, syncIgnorePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fe.IsExcluded(".git/") {
+		t.Error(".git/ should be excluded by global_excludes")
+	}
+	excluded := fe.IsExcluded(".git/special-keep")
+	t.Logf("PF-E1 pin: .git/special-keep IsExcluded=%v under global_excludes=[.git/] + per-mirror !.git/special-keep. "+
+		"Strict gitignore says true; current behavior matches whatever the gitignore library returns. "+
+		"If you change this, document the rationale in the panel-review note in CHANGELOG.", excluded)
+}

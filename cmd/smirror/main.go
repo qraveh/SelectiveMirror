@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.35-dev"
+var version = "0.9.36-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -591,6 +591,19 @@ Press Ctrl+C to stop.`) {
 		defer anomalyRecorder.Close()
 		m.AnomalySummaryFunc = anomalyRecorder.SummaryStrings
 		slog.Info("anomaly detection enabled", "dir", anomalyDir)
+	}
+
+	// SEC-M5: register all per-mirror local_path prefixes so
+	// anomaly.SanitizePath redacts them in addition to the user home
+	// dir. Without this, in service mode (LocalSystem, home =
+	// C:\Windows\System32) project paths like C:\Orch and C:\HPL leak
+	// into anomaly logs and webhook payloads unredacted.
+	{
+		paths := make([]string, 0, len(cfg.Projects))
+		for _, p := range cfg.Projects {
+			paths = append(paths, p.LocalPath)
+		}
+		anomaly.SetExtraSanitizePrefixes(paths)
 	}
 
 	// Create sync engine (with metrics, anomaly recorder, and hooks)
@@ -3141,6 +3154,16 @@ func serviceMain() {
 			anomalyRecorder = anomaly.NewRecorder(anomalyWriter)
 			defer anomalyRecorder.Close()
 			m.AnomalySummaryFunc = anomalyRecorder.SummaryStrings
+		}
+
+		// SEC-M5: register per-mirror prefixes for anomaly sanitization
+		// (service-mode equivalent of the cmdStart wiring above).
+		{
+			paths := make([]string, 0, len(cfg.Projects))
+			for _, p := range cfg.Projects {
+				paths = append(paths, p.LocalPath)
+			}
+			anomaly.SetExtraSanitizePrefixes(paths)
 		}
 
 		syncEngine := msync.NewEngine(cfg, st, filters, m)

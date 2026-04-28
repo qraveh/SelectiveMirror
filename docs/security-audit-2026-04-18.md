@@ -297,7 +297,14 @@
 - **Issue**: Compares versions but doesn't store "highest installed version". Compromised owner publishes old vulnerable v0.8.5 as "latest" → `CompareVersions(latest, current) > 0` ⇒ install proceeds.
 - **Fix**: Persist `last_installed_version` in state DB. Reject any update where `CompareVersions(latest, last_installed_max) < 0` unless `--allow-downgrade`.
 
-## SEC-M11 — Webhook redirect-following cap missing
+## SEC-M11 — Webhook redirect-following cap missing — CLOSED 2026-04-29
+
+**Status**: CLOSED — verified that `webhook.go::NewWebhookSender` sets
+`http.Client.CheckRedirect` to return `http.ErrUseLastResponse`,
+meaning **no redirects are followed at any depth**. The audit's "cap"
+concern is satisfied by the stricter "no redirects at all" policy.
+
+The original section text:
 
 - **File**: `internal/notify/webhook.go:71-81`
 - **Issue**: `&http.Client{Timeout: 5*time.Second}` — no `CheckRedirect`. Default 10 redirects across hosts/schemes → SSRF defenses bypassed via attacker-controlled bouncer.
