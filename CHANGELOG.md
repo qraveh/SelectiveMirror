@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [0.9.26] — 2026-04-29
+
+The first successfully-tagged release in the 0.9.x line since v0.9.0 (2026-04-18). Two earlier tag attempts (v0.9.22 in this cycle) were deleted before publish because the MSI job failed in CI on a WiX 6 schema regression in `installer/TelemetryConsent.wxi` — `Property` and `ComponentGroup` need a `<Fragment>` parent, not direct `<Include>` children. Fixed in commit `bbb0d3c`.
+
+This release bundles 26 dev-version patches: telemetry privacy work (three-tier consent, Cloudflare Worker), the full adversarial-review remediation (P0 / P1 / P2 / P3 / P4 / P6), the 2026-04-28 multi-role panel review (BUG-1, BUG-2, GAP-1..7, PF-A3, PF-A8, PF-E4), an autonomous SEC-H/M/PF batch (SEC-H2, H3, H4, H7, M1, M8, M9, PF-A7, PF-D2), the SignPath Foundation code-signing plan, and the MSI build fix.
+
+### MSI build fix
+
+- **`installer/TelemetryConsent.wxi`** body wrapped in `<Fragment>`. WiX 6 (the toolchain pinned in `release.yml`) enforces strict v4 schema validation; `<Property>` and `<ComponentGroup>` cannot be direct children of `<Wix>`. The .wxi is included at the top of `Package.wxs` (before `<Package>`), so before this fix its body landed under `<Wix>`. After the fix, the Fragment is auto-pulled by `<ComponentGroupRef Id="TelemetryConsentComponents" />` from inside `<Package>`, and the `INSTALL_TELEMETRY_TIER` Property comes along.
+
 ### Security / robustness (audit + panel autonomous fixes — 0.9.25-dev cycle)
 
 **Audit SEC-H batch (high-severity findings closed)**:
