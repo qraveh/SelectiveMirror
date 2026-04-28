@@ -2,6 +2,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1723,6 +1724,20 @@ func ListRemote(cfg *config.Global, proj config.Project) ([]RemoteFile, error) {
 		return nil, fmt.Errorf("rclone lsjson: %w", err)
 	}
 
+	// PF-E3: detect truncated lsjson output. rclone emits a single JSON
+	// array; a mid-stream TLS reset or stream-buffer flush could land us
+	// with bytes that happen to parse as valid JSON for the prefix
+	// (between two complete entries) but represent only PART of the
+	// actual remote listing. Ghost cleanup then deletes the "missing"
+	// suffix from state — a silent data-loss path. Defense: require
+	// the trimmed output to start with '[' and end with ']' before we
+	// trust the parse.
+	trimmed := bytes.TrimSpace(out)
+	if len(trimmed) < 2 || trimmed[0] != '[' || trimmed[len(trimmed)-1] != ']' {
+		return nil, fmt.Errorf("lsjson output appears truncated (size=%d, starts=%q, ends=%q); refusing to use partial listing for ghost cleanup",
+			len(trimmed), shortByte(trimmed, 0), shortByte(trimmed, len(trimmed)-1))
+	}
+
 	var raw []RemoteFile
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, fmt.Errorf("parsing lsjson: %w", err)
@@ -1731,6 +1746,15 @@ func ListRemote(cfg *config.Global, proj config.Project) ([]RemoteFile, error) {
 	files := deduplicateRemoteFiles(raw, proj.Name)
 	slog.Debug("ListRemote", "project", proj.Name, "files", len(files), "ms", time.Since(start).Milliseconds())
 	return files, nil
+}
+
+// shortByte returns the byte at idx as a printable single-rune string,
+// or "?" if idx is out of range. Used for diagnostic error messages.
+func shortByte(b []byte, idx int) string {
+	if idx < 0 || idx >= len(b) {
+		return "?"
+	}
+	return string(b[idx])
 }
 
 // deduplicateRemoteFiles resolves same-path duplicates by keeping the newest

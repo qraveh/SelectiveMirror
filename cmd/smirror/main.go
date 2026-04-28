@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.33-dev"
+var version = "0.9.34-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -2005,6 +2005,7 @@ func readReportBugTier(configPath string) telemetry.Tier {
 func cmdReportBug(configPath string, args []string) {
 	toStdout := false
 	openBrowser := false
+	clipboardFlag := false
 	submitFlag := false
 	oneShot := false
 	for _, a := range args {
@@ -2020,6 +2021,11 @@ Flags:
                 generating the report
   --open        Deprecated alias for --browser; will be removed in a
                 future release
+  --clipboard   Copy the sanitized report to the OS clipboard. You
+                paste manually into a fresh issue — the diagnostic
+                content never goes through a URL query string and so
+                doesn't end up in browser history. Recommended when
+                privacy matters more than convenience.
   --submit      Submit the sanitized report through the telemetry
                 bug-report endpoint (per-event approval; requires
                 Standard or Reliability tier — or pair with --one-shot)
@@ -2043,6 +2049,11 @@ covering each submit / browser / one-shot path.`)
 			// continue to honor it but the help text marks it
 			// deprecated. New code/docs should use --browser.
 			openBrowser = true
+		case "--clipboard":
+			// PF-E5: avoid the URL-history leak from --browser by
+			// piping the report to the OS clipboard instead. User
+			// pastes manually into a fresh issue.
+			clipboardFlag = true
 		case "--submit":
 			submitFlag = true
 		case "--one-shot":
@@ -2224,6 +2235,24 @@ covering each submit / browser / one-shot path.`)
 
 	if toStdout {
 		fmt.Print(report)
+		return
+	}
+
+	// PF-E5: --clipboard alternative to --browser. Browser-based submit
+	// puts the diagnostic in a URL query string; URL is then retained in
+	// browser history (which sync's to other devices, can be exfiltrated
+	// by extensions, etc.). --clipboard pipes the sanitized report into
+	// the OS clipboard (clip.exe on Windows, pbcopy on macOS, xclip /
+	// wl-copy on Linux). The user pastes manually into a fresh issue —
+	// the diagnostic never touches the URL bar.
+	if clipboardFlag {
+		if err := copyToClipboard(report); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not copy to clipboard: %v\nReport content follows; paste manually:\n\n%s\n", err, report)
+			fmt.Fprintf(os.Stderr, "Open a new issue at: %s\n", issueNewURL)
+			os.Exit(ExitError)
+		}
+		fmt.Printf("Sanitized bug report copied to clipboard (%d bytes).\n", len(report))
+		fmt.Printf("Open a new issue and paste into the body: %s\n", issueNewURL)
 		return
 	}
 
