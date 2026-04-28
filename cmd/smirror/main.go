@@ -18,6 +18,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	gosync "sync"
 	"syscall"
@@ -41,7 +42,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.16-dev"
+var version = "0.9.17-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -2039,9 +2040,23 @@ sanitized and remote paths are redacted.`)
 		b.WriteString(fmt.Sprintf("delete_policy: %s\n", cfg.DeletePolicy()))
 		b.WriteString(fmt.Sprintf("sync_workers: %d\n", cfg.Workers()))
 		b.WriteString(fmt.Sprintf("reconcile_interval: %s\n", cfg.ReconcileInterval()))
-		b.WriteString(fmt.Sprintf("bandwidth_limit: %s\n", cfg.BandwidthLimit))
-		for _, p := range cfg.Projects {
-			b.WriteString(fmt.Sprintf("  mirror: %s (%s)\n", p.Name, p.LocalPath))
+		// SM-164: bandwidth_limit value omitted (the limit STRING itself
+		// is config the user might consider sensitive: revealing exact
+		// upload caps in a public bug report. Show only whether one is
+		// set; the policy gate flag in PRIVACY.md ("has_bandwidth_limit
+		// (boolean — never the value)") aligns this with the structural
+		// install-event field).
+		hasBW := strings.TrimSpace(cfg.BandwidthLimit) != ""
+		b.WriteString(fmt.Sprintf("bandwidth_limit_set: %v\n", hasBW))
+		// SM-164: mirror names are user-chosen and may identify the
+		// user's context ("Acme_Internal", "ClientNameProject"). Index-
+		// based labels keep the report useful for cross-referencing
+		// without leaking the names. The local path is omitted entirely
+		// — even with home-dir sanitization, absolute Windows paths
+		// outside the home directory bypass redaction.
+		for i, p := range cfg.Projects {
+			b.WriteString(fmt.Sprintf("  mirror_%d:\n", i))
+			b.WriteString(fmt.Sprintf("    delete_policy: %s\n", p.DeletePolicy(cfg)))
 			// Redact remote path — only show remote name
 			parts := strings.SplitN(p.Remote, ":", 2)
 			if len(parts) >= 2 {
@@ -2056,32 +2071,25 @@ sanitized and remote paths are redacted.`)
 			b.WriteString(fmt.Sprintf("state db error: %v\n", stErr))
 		} else {
 			defer st.Close()
-			for _, p := range cfg.Projects {
+			for i, p := range cfg.Projects {
 				count := st.CountFiles(p.Name)
-				b.WriteString(fmt.Sprintf("  %s: %d synced files\n", p.Name, count))
+				b.WriteString(fmt.Sprintf("  mirror_%d: %d synced files\n", i, count))
 			}
 			if hb, err := st.GetMeta("last_heartbeat"); err == nil && hb != "" {
 				b.WriteString(fmt.Sprintf("  last heartbeat: %s\n", hb))
 			}
 		}
 
-		// SM-127: Include status.json live metrics in report
-		b.WriteString("\n--- Live Metrics ---\n")
-		statusPath := filepath.Join(filepath.Dir(cfg.StateDB), "status.json")
-		if statusData, stErr := os.ReadFile(statusPath); stErr == nil {
-			var s metrics.Status
-			if json.Unmarshal(statusData, &s) == nil {
-				b.WriteString(fmt.Sprintf("  uptime: %s\n", s.Uptime))
-				b.WriteString(fmt.Sprintf("  files_synced: %d\n", s.FilesSynced))
-				b.WriteString(fmt.Sprintf("  bytes_uploaded: %d\n", s.BytesUploaded))
-				b.WriteString(fmt.Sprintf("  sync_errors: %d\n", s.SyncErrors))
-				b.WriteString(fmt.Sprintf("  avg_latency_ms: %d\n", s.AvgLatencyMs))
-				b.WriteString(fmt.Sprintf("  queue_depth: %d\n", s.QueueDepth))
-				b.WriteString(fmt.Sprintf("  generated_at: %s\n", s.GeneratedAt))
-			}
-		} else {
-			b.WriteString("  (no status.json found)\n")
-		}
+		// SM-164: the previous "--- Live Metrics ---" section
+		// (uptime, files_synced, bytes_uploaded, sync_errors,
+		// avg_latency_ms, queue_depth, generated_at) was removed. Those
+		// numerics overlap exactly with the "no accumulated counts"
+		// forbidden-list in docs/PRIVACY.md. report-bug --open posts
+		// the report to GitHub, where it's then public, so even with
+		// per-event consent these counters become part of the public
+		// record. If a maintainer needs them to triage a specific bug,
+		// the user can attach `smirror status` output manually after
+		// reviewing it.
 
 		// Recent log lines (sanitized)
 		b.WriteString("\n--- Recent Logs (last 30 lines) ---\n")
@@ -2100,9 +2108,13 @@ sanitized and remote paths are redacted.`)
 		}
 	}
 
-	// SM-103: Sanitize all paths in the report.
-	// Replace home directory with ~ and config directory with <configdir>.
-	// Case-insensitive because Windows paths are case-insensitive.
+	// SM-103 + SM-164: Sanitize all paths AND mirror local paths AND
+	// mirror names in the report. Replace:
+	//   home directory     → ~
+	//   config directory   → <configdir>
+	//   mirror local paths → <mirror_N_path>
+	//   mirror names       → mirror_N
+	// Done case-insensitively because Windows paths are case-insensitive.
 	report := b.String()
 	sanitizePaths := []struct{ pattern, replacement string }{}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
@@ -2118,6 +2130,32 @@ sanitized and remote paths are redacted.`)
 			struct{ pattern, replacement string }{filepath.ToSlash(configDir), "<configdir>"},
 		)
 	}
+	// SM-164: redact each mirror's local path (handles absolute Windows
+	// paths like C:\Code\MyProject that aren't under the home dir, plus
+	// the slash-flipped form). Longest patterns first so a parent path
+	// doesn't shadow a more specific child.
+	if cfg != nil {
+		// Sort indices by descending local-path length to ensure longest
+		// substring matches first. Rare edge case but cheap to be safe.
+		order := make([]int, len(cfg.Projects))
+		for i := range cfg.Projects {
+			order[i] = i
+		}
+		sort.SliceStable(order, func(a, b int) bool {
+			return len(cfg.Projects[order[a]].LocalPath) > len(cfg.Projects[order[b]].LocalPath)
+		})
+		for _, i := range order {
+			lp := cfg.Projects[i].LocalPath
+			if lp == "" {
+				continue
+			}
+			repl := fmt.Sprintf("<mirror_%d_path>", i)
+			sanitizePaths = append(sanitizePaths,
+				struct{ pattern, replacement string }{lp, repl},
+				struct{ pattern, replacement string }{filepath.ToSlash(lp), repl},
+			)
+		}
+	}
 	for _, sp := range sanitizePaths {
 		patLower := strings.ToLower(sp.pattern)
 		for {
@@ -2126,6 +2164,28 @@ sanitized and remote paths are redacted.`)
 				break
 			}
 			report = report[:idx] + sp.replacement + report[idx+len(sp.pattern):]
+		}
+	}
+	// SM-164: substitute mirror names AFTER paths (so a name appearing
+	// inside a path is already covered by the path substitution). Names
+	// are user-chosen identifiers; substring replacement is correct for
+	// these because they're typically distinctive (e.g., "ClientAcme",
+	// not English words). Sort by descending length to avoid replacing
+	// a name that's a prefix of another.
+	if cfg != nil {
+		type nameSub struct{ name, replacement string }
+		subs := make([]nameSub, 0, len(cfg.Projects))
+		for i, p := range cfg.Projects {
+			if p.Name == "" {
+				continue
+			}
+			subs = append(subs, nameSub{p.Name, fmt.Sprintf("mirror_%d", i)})
+		}
+		sort.SliceStable(subs, func(a, b int) bool {
+			return len(subs[a].name) > len(subs[b].name)
+		})
+		for _, s := range subs {
+			report = strings.ReplaceAll(report, s.name, s.replacement)
 		}
 	}
 

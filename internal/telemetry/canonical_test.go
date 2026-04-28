@@ -126,6 +126,119 @@ func TestCanonicalJSON_RejectsStruct(t *testing.T) {
 	}
 }
 
+// TestCanonicalJSON_NoHTMLEscape asserts that the canonical form does
+// NOT escape '<', '>', '&' to their \uXXXX forms. Go's encoding/json
+// HTML-escapes those by default; PostgreSQL JSONB::text does not.
+// Diverging on this would silently break HMAC verification for any
+// payload whose strings contain those characters (sanitized log lines
+// with shell pipes, HTML snippets, "X & Y", etc.).
+//
+// This is SM-167. The expected output below matches what
+//
+//	SELECT '{"k":"<a> & <b>"}'::jsonb::text
+//
+// returns from PostgreSQL.
+func TestCanonicalJSON_NoHTMLEscape(t *testing.T) {
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{
+			name: "lt-gt-amp in string",
+			in:   map[string]any{"k": "<a> & <b>"},
+			want: `{"k": "<a> & <b>"}`,
+		},
+		{
+			name: "ampersand only",
+			in:   map[string]any{"x": "A & B"},
+			want: `{"x": "A & B"}`,
+		},
+		{
+			name: "lt only",
+			in:   map[string]any{"x": "< then more"},
+			want: `{"x": "< then more"}`,
+		},
+		{
+			name: "gt only",
+			in:   map[string]any{"x": "more then >"},
+			want: `{"x": "more then >"}`,
+		},
+		{
+			name: "log-line-with-pipes-and-redirects",
+			in: map[string]any{
+				"line": "rclone copy src:foo dst:bar 2>&1 | grep ERROR",
+			},
+			want: `{"line": "rclone copy src:foo dst:bar 2>&1 | grep ERROR"}`,
+		},
+		{
+			name: "bare primitive string with HTML chars",
+			in:   "<html>&copy;</html>",
+			want: `"<html>&copy;</html>"`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := CanonicalJSON(c.in)
+			if err != nil {
+				t.Fatalf("CanonicalJSON: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("got\n  %s\nwant\n  %s", got, c.want)
+			}
+			// Defense-in-depth: explicitly assert that the FORBIDDEN
+			// \u-escaped forms (which Go's default json.Marshal emits)
+			// are absent. The literal characters '<', '>', '&' are
+			// the correct, expected output — what we don't want is the
+			// 6-byte escape sequences PG JSONB never produces.
+			//
+			// We construct the forbidden patterns with string
+			// concatenation so the file's source bytes can't get
+			// auto-decoded by editors / Edit tools and silently turn
+			// the test into a no-op.
+			bs := string([]byte{'\\'})
+			forbidden := []string{
+				bs + "u003c", // '<'
+				bs + "u003C", // alternate-case hex
+				bs + "u003e", // '>'
+				bs + "u003E",
+				bs + "u0026", // '&'
+			}
+			for _, esc := range forbidden {
+				if strings.Contains(got, esc) {
+					t.Errorf("output contains forbidden \\u escape %q (Go default; PG JSONB does not produce this): %s", esc, got)
+				}
+			}
+		})
+	}
+}
+
+func TestCanonicalJSON_KeysWithHTMLChars(t *testing.T) {
+	// We don't expect these in practice (snake_case schema), but the
+	// encoder must NOT HTML-escape them for keys either, so a future
+	// schema can't silently break verification.
+	in := map[string]any{
+		"a<b": float64(1),
+		"a&b": float64(2),
+	}
+	got, err := CanonicalJSON(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// length-first equal (both 3); codepoint: '&' (0x26) < '<' (0x3C),
+	// so "a&b" sorts first.
+	want := `{"a&b": 2, "a<b": 1}`
+	if got != want {
+		t.Errorf("got %q want %q", got, want)
+	}
+	bs := string([]byte{'\\'})
+	for _, esc := range []string{bs + "u003c", bs + "u003C", bs + "u0026"} {
+		if strings.Contains(got, esc) {
+			t.Errorf("key contains forbidden \\u escape %q (Go default; PG does not produce): %s", esc, got)
+		}
+	}
+}
+
 func TestCanonicalJSON_EmptyObjectAndArray(t *testing.T) {
 	got1, _ := CanonicalJSON(map[string]any{})
 	if got1 != `{}` {

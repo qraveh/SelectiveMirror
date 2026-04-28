@@ -251,11 +251,86 @@ def sparkline(values: list) -> str:
     return "".join(SPARK_BARS[min(int(v / mx * 8), 8)] for v in values)
 
 
+# SM-166: Server-side fields inserted into the published Markdown
+# digest (signature, client_version, bug_kind, bug_surface, install_id_4)
+# originate from opt-in submissions. Despite schema validation at
+# ingest, an unforeseen string containing pipes, backticks, link syntax,
+# or line breaks could corrupt the rendered table or inject formatting
+# / clickable content into the public docs. md_cell_escape neutralizes
+# Markdown structural characters and collapses whitespace so a single
+# cell stays a single cell. Truncation keeps wide tables readable.
+_MD_ESCAPE_PAIRS = (
+    ("\\", "\\\\"),
+    ("|", "\\|"),
+    ("`", "\\`"),
+    ("*", "\\*"),
+    ("_", "\\_"),
+    ("[", "\\["),
+    ("]", "\\]"),
+    ("<", "\\<"),
+    (">", "\\>"),
+    ("{", "\\{"),
+    ("}", "\\}"),
+)
+
+
+def md_cell_escape(s, max_len: int = 120) -> str:
+    """Sanitize a value for safe inclusion in a Markdown table cell.
+
+    - Replaces None/missing with the em-dash placeholder we use elsewhere.
+    - Strips ASCII control characters and collapses CR/LF/TAB to spaces
+      (a Markdown table cell must be one line).
+    - Escapes the table separator (|), backticks, asterisks, brackets,
+      angle brackets, and braces — anything that could either break
+      rendering or be interpreted as Markdown link / formatting.
+    - Truncates to max_len with an ellipsis. 120 chars is long enough
+      to keep error signatures useful while preventing pathological
+      blow-up of the digest file.
+
+    Numerics (int/float) are coerced to their str() form first, which
+    contains only safe characters — passing them through is harmless.
+    """
+    if s is None:
+        return "—"
+    s = str(s)
+    # Drop ASCII controls (0x00–0x1F except already-handled below) and
+    # convert any remaining whitespace control chars to plain space.
+    cleaned = []
+    for ch in s:
+        cp = ord(ch)
+        if ch in ("\r", "\n", "\t"):
+            cleaned.append(" ")
+        elif cp < 0x20 or cp == 0x7F:
+            # Other ASCII controls: drop entirely.
+            continue
+        else:
+            cleaned.append(ch)
+    s = "".join(cleaned)
+    # Markdown structural escapes. Order matters: backslash first, so
+    # the escapes added below aren't double-escaped.
+    for ch, esc in _MD_ESCAPE_PAIRS:
+        s = s.replace(ch, esc)
+    # Collapse runs of whitespace.
+    s = " ".join(s.split())
+    if len(s) > max_len:
+        s = s[: max_len - 1] + "…"
+    return s
+
+
 def md_table(rows, headers, aligns=None):
-    """Render a list of dict rows as a Markdown table."""
+    """Render a list of dict rows as a Markdown table.
+
+    SM-166: every cell value is run through md_cell_escape so that
+    user-supplied fields cannot break or inject formatting into the
+    published digest. Pre-escaped values (which our renderers do not
+    produce) would suffer one extra layer of backslash escaping —
+    visible but harmless. Numeric values are unaffected by the escape
+    (they contain only safe characters).
+    """
     if not rows:
         return "_(no rows)_"
     aligns = aligns or ["left"] * len(headers)
+    # Headers go in unescaped: they're hard-coded in this script.
     lines = ["| " + " | ".join(headers) + " |"]
     sep = []
     for a in aligns:
@@ -268,9 +343,9 @@ def md_table(rows, headers, aligns=None):
     lines.append("| " + " | ".join(sep) + " |")
     for r in rows:
         if isinstance(r, dict):
-            cells = [str(r.get(h, "")) for h in headers]
+            cells = [md_cell_escape(r.get(h, "")) for h in headers]
         else:
-            cells = [str(c) for c in r]
+            cells = [md_cell_escape(c) for c in r]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
 
@@ -290,16 +365,47 @@ def fetch_all(conn, query):
 # Report sections
 # ---------------------------------------------------------------------------
 
+def render_honesty_banner():
+    """SM-165: doc honesty banner.
+
+    Every published digest committed to docs/telemetry/weekly-*.md gets
+    this prefix so a reader landing on the file directly (e.g. via
+    GitHub search) immediately sees:
+
+    1. What the data is (aggregated, opt-in)
+    2. What it is NOT (raw payloads, install IDs, paths)
+    3. What protects it (k-anonymity floor)
+    4. Where the contract lives (PRIVACY.md)
+
+    Wording is locked to PRIVACY.md's tier matrix. Changes here that
+    soften the promise must be cross-checked against PRIVACY.md and
+    the re-consent triggers documented in
+    reference_telemetry_tier_model.md.
+    """
+    return (
+        "> 📊 **About this report.** Aggregated counts derived from "
+        "opt-in SelectiveMirror users at Standard or Reliability tier. "
+        f"Cells with fewer than {K_ANONYMITY_FLOOR} contributors are "
+        "suppressed (k-anonymity floor). No raw bug-report payloads, "
+        "file paths, install IDs, IP addresses, or geography appear in "
+        "this file.\n>\n"
+        "> See [`docs/PRIVACY.md`](../PRIVACY.md) for the full data "
+        "contract, the tier matrix, and the forward-commitment list of "
+        "things SelectiveMirror has bound itself never to collect.\n\n"
+    )
+
+
 def render_header(headline, week_start):
     end = week_start + timedelta(days=6)
     iso_year, iso_wk, _ = week_start.isocalendar()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     n_total = headline["installs_total"]
     return (
-        f"# SelectiveMirror Telemetry Digest — Week {iso_year}-W{iso_wk:02d}\n\n"
-        f"**Window**: {week_start} to {end} UTC. Generated {now}.\n\n"
-        f"> Total opted-in installs ever: **{n_total}**. "
-        f"Trends are anecdote until n>20.\n"
+        render_honesty_banner()
+        + f"# SelectiveMirror Telemetry Digest — Week {iso_year}-W{iso_wk:02d}\n\n"
+        + f"**Window**: {week_start} to {end} UTC. Generated {now}.\n\n"
+        + f"> Total opted-in installs ever: **{n_total}**. "
+        + f"Trends are anecdote until n>20.\n"
     )
 
 

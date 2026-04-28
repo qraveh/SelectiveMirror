@@ -480,6 +480,17 @@ This raises the bar against opportunistic bots — which would have to reverse-e
 
 `-dev` builds are not issued production keys and cannot submit to the production endpoint.
 
+> **Known gap (SM-162, deferred)**: the current HMAC scope covers
+> only the payload JSON, not the envelope columns the Worker proxy
+> attaches (`ingest_kind`, source IP, User-Agent, etc.). A captured
+> valid signature can therefore be replayed through a different
+> proxy or with forged envelope provenance. The fix requires
+> coordinated changes across schema, Go client, Python validator,
+> and Worker — see [`SM-162-hmac-envelope-binding-plan.md`](./SM-162-hmac-envelope-binding-plan.md)
+> for the proposed designs (Option A: extra verify-function param;
+> Option B: fold envelope claims into payload). Tracked as a
+> medium-severity architectural debt item, not a current data leak.
+
 ### Canonical JSON for HMAC (critical implementation detail)
 
 The HMAC is computed over the JSON-serialized payload (excluding the `version_hmac` field itself). For client-side HMAC computation to match server-side verification, **client and server MUST serialize JSON identically, byte-for-byte**.

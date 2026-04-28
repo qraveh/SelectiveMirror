@@ -1,22 +1,32 @@
-// Package telemetry provides opt-in anonymous usage analytics and update checking.
+// Package telemetry provides the building blocks for SelectiveMirror's
+// opt-in three-tier consent model and the always-allowed update check
+// (post-tier-gate; see selfupdate.go).
 //
-// Privacy guarantees:
-//   - No PII (no usernames, machine names, IP addresses stored)
+// THIS FILE'S SCOPE has shrunk substantially since v0.9.4: the old
+// always-on aggregated telemetry payload (Report struct, SendReport
+// method, accumulated counters like FilesSynced/BytesUploaded/UptimeSeconds)
+// has been REMOVED. Those fields are explicitly forbidden by
+// docs/PRIVACY.md's forward-commitment ("no accumulated counts, no
+// heartbeats"). They were never wired to a live endpoint, but their
+// presence in the codebase contradicted the privacy contract and risked
+// future re-enablement. SM-160 deletes them.
+//
+// What remains in THIS file is the GitHub-release polling client used
+// by selfupdate. It has no overlap with consent-tier telemetry; selfupdate
+// itself enforces the tier gate before calling CheckForUpdate (see
+// cmd/smirror/selfupdate.go::checkForUpdateOnStartup).
+//
+// Privacy guarantees that survive the cleanup:
+//   - No PII (no usernames, machine names, IP addresses)
 //   - No file names, paths, or remote URLs
-//   - Opt-in only: telemetry is disabled by default (telemetry: false)
-//   - ZERO outbound network traffic when disabled — no pings, no checks, nothing
-//   - All data is anonymous and aggregated
-//   - Users can disable at any time via config
-//
-// Data collected (when enabled):
-//   - smirror version, OS version, architecture
-//   - mirror count, backend types (e.g. "gdrive", "s3")
-//   - files synced count, error count, uptime
-//   - installation method (msi, zip, manual)
+//   - At tier None (the default), CheckForUpdate is NOT called by smirror
+//     — see selfupdate.go's tier gate. This file's CheckForUpdate is
+//     usable via `smirror selfupdate --check`, a deliberate user action.
+//   - All bug-report and install-event submission lives in the
+//     three-tier subsystem; it does not flow through this file.
 package telemetry
 
 import (
-	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/json"
@@ -26,48 +36,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
-	"sync"
 	"time"
 )
-
-// Endpoint is the telemetry server URL. Override for testing.
-var Endpoint = "https://telemetry.selectivemirror.dev/v1/report"
 
 // UpdateEndpoint is the update check URL (GitHub API). Override for testing
 // or repo relocation.
 var UpdateEndpoint = "https://api.github.com/repos/qraveh/SelectiveMirror/releases/latest"
-
-// Report is the anonymous telemetry payload sent periodically.
-type Report struct {
-	// Identity (anonymous)
-	InstallID string `json:"install_id"` // random UUID, generated once on first run
-
-	// Version info
-	Version  string `json:"version"`
-	GoVer    string `json:"go_version"`
-	OS       string `json:"os"`
-	Arch     string `json:"arch"`
-	OSDetail string `json:"os_detail,omitempty"` // e.g. "Windows 11 23H2"
-
-	// Usage stats
-	MirrorCount   int      `json:"mirror_count"`
-	BackendTypes  []string `json:"backend_types"`  // e.g. ["gdrive", "s3"]
-	FilesSynced   int64    `json:"files_synced"`
-	SyncErrors    int64    `json:"sync_errors"`
-	BytesUploaded int64    `json:"bytes_uploaded"`
-	UptimeSeconds int64    `json:"uptime_seconds"`
-	Mode          string   `json:"mode"` // "foreground" or "service"
-
-	// Configuration (non-identifying)
-	DeletePolicy   string `json:"delete_policy"`
-	SyncWorkers    int    `json:"sync_workers"`
-	DynamicDebounce bool  `json:"dynamic_debounce"` // any mirror uses dynamic debounce
-
-	// Timestamps
-	ReportedAt string `json:"reported_at"`
-}
 
 // ReleaseInfo holds version information from GitHub releases.
 type ReleaseInfo struct {
@@ -87,17 +62,21 @@ type Asset struct {
 	DownloadCount      int    `json:"download_count"`
 }
 
-// Client handles telemetry reporting and update checking.
+// Client handles GitHub release polling for the selfupdate path. It is
+// intentionally narrow: the legacy SendReport/Report path was removed in
+// SM-160. Three-tier telemetry (bug reports, install events) is handled
+// elsewhere in this package.
 type Client struct {
 	installID  string
 	version    string
 	httpClient *http.Client
 	log        *slog.Logger
-	mu         sync.Mutex
-	lastReport time.Time
 }
 
-// NewClient creates a telemetry client.
+// NewClient creates a release-poll client. installID is retained as a
+// constructor parameter for forward-compat with future tier-gated paths
+// that need a stable per-install identifier; this struct's release-poll
+// methods do not currently transmit it.
 func NewClient(installID, version string) *Client {
 	return &Client{
 		installID: installID,
@@ -109,58 +88,16 @@ func NewClient(installID, version string) *Client {
 	}
 }
 
-// SendReport sends an anonymous telemetry report. Non-blocking: errors are logged, not returned.
-func (c *Client) SendReport(ctx context.Context, report Report) {
-	c.mu.Lock()
-	// Rate limit: at most once per hour
-	if time.Since(c.lastReport) < time.Hour {
-		c.mu.Unlock()
-		return
-	}
-	c.lastReport = time.Now()
-	c.mu.Unlock()
-
-	// Fill in standard fields
-	report.InstallID = c.installID
-	report.Version = c.version
-	report.GoVer = runtime.Version()
-	report.OS = runtime.GOOS
-	report.Arch = runtime.GOARCH
-	report.ReportedAt = time.Now().UTC().Format(time.RFC3339)
-
-	data, err := json.Marshal(report)
-	if err != nil {
-		c.log.Debug("telemetry marshal error", "error", err)
-		return
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, Endpoint, bytes.NewReader(data))
-	if err != nil {
-		c.log.Debug("telemetry request error", "error", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", fmt.Sprintf("smirror/%s", c.version))
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		c.log.Debug("telemetry send error", "error", err)
-		return
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		c.log.Debug("telemetry report sent")
-	} else {
-		c.log.Debug("telemetry server returned non-success", "status", resp.StatusCode)
-	}
-}
-
 // CheckForUpdate checks GitHub releases for a newer version.
-// Returns the latest release info, or nil if already up to date.
+// Returns the latest release info, or nil if no releases exist yet.
 // Authenticates automatically: tries `gh auth token`, then GITHUB_TOKEN env,
 // then falls back to unauthenticated (sufficient for public repos).
+//
+// Tier gate: callers MUST verify telemetry tier permits network traffic
+// before calling this. At tier None, the function should never run.
+// `cmd/smirror/selfupdate.go::checkForUpdateOnStartup` enforces this.
+// `smirror selfupdate --check` is a deliberate user action and bypasses
+// the gate (the user explicitly invoked an update check).
 func (c *Client) CheckForUpdate(ctx context.Context) (*ReleaseInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, UpdateEndpoint, nil)
 	if err != nil {
@@ -223,24 +160,6 @@ func FindAsset(assets []Asset, substring string) *Asset {
 		}
 	}
 	return nil
-}
-
-// ExtractBackendTypes extracts unique backend type names from remote strings.
-// e.g. "gdrive:backup/foo" -> "gdrive", "s3:my-bucket/bar" -> "s3"
-func ExtractBackendTypes(remotes []string) []string {
-	seen := make(map[string]bool)
-	var types []string
-	for _, remote := range remotes {
-		parts := strings.SplitN(remote, ":", 2)
-		if len(parts) >= 1 && parts[0] != "" {
-			name := parts[0]
-			if !seen[name] {
-				seen[name] = true
-				types = append(types, name)
-			}
-		}
-	}
-	return types
 }
 
 // CompareVersions compares two semver-like version strings.
@@ -311,12 +230,11 @@ func parseVersion(s string) []int {
 	return nums
 }
 
-// GenerateInstallID creates a simple random-ish install ID using timestamp + random bytes.
-// Not cryptographically secure — just needs to be unique enough for anonymous analytics.
+// GenerateInstallID creates a random anonymous install ID. Used by the
+// three-tier telemetry subsystem when first persisting an install_id to
+// the state DB on transition out of tier None.
 func GenerateInstallID() string {
-	// Use crypto/rand for better uniqueness
 	b := make([]byte, 16)
-	// Try crypto/rand first
 	_, err := io.ReadFull(crand.Reader, b)
 	if err != nil {
 		// Fallback: use timestamp-based ID

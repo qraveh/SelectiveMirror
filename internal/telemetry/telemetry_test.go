@@ -58,41 +58,12 @@ func TestCompareVersions_BothPreRelease(t *testing.T) {
 	}
 }
 
-func TestExtractBackendTypes_Single(t *testing.T) {
-	types := ExtractBackendTypes([]string{"gdrive:backup/foo"})
-	if len(types) != 1 || types[0] != "gdrive" {
-		t.Errorf("got %v, want [gdrive]", types)
-	}
-}
-
-func TestExtractBackendTypes_Multiple(t *testing.T) {
-	types := ExtractBackendTypes([]string{
-		"gdrive:backup/foo",
-		"s3:my-bucket/bar",
-		"sftp:server/path",
-	})
-	if len(types) != 3 {
-		t.Errorf("got %d types, want 3", len(types))
-	}
-}
-
-func TestExtractBackendTypes_Deduplication(t *testing.T) {
-	types := ExtractBackendTypes([]string{
-		"gdrive:backup/foo",
-		"gdrive:another/path",
-		"s3:bucket",
-	})
-	if len(types) != 2 {
-		t.Errorf("got %d types, want 2 (gdrive should be deduplicated)", len(types))
-	}
-}
-
-func TestExtractBackendTypes_Empty(t *testing.T) {
-	types := ExtractBackendTypes(nil)
-	if len(types) != 0 {
-		t.Errorf("got %v, want empty", types)
-	}
-}
+// SM-160: TestExtractBackendTypes_* removed along with the deleted
+// ExtractBackendTypes function. The function existed only to populate
+// Report.BackendTypes for the removed SendReport path. The structural
+// install-event analogue ("backend mix" k-anonymized aggregates) is
+// produced server-side from raw remote names hashed via the Worker
+// proxy in v1.5+ work.
 
 func TestGenerateInstallID_Unique(t *testing.T) {
 	id1 := GenerateInstallID()
@@ -116,113 +87,11 @@ func TestGenerateInstallID_NotEmpty(t *testing.T) {
 	}
 }
 
-func TestSendReport_Success(t *testing.T) {
-	var received Report
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
-		}
-		if ct := r.Header.Get("Content-Type"); ct != "application/json" {
-			t.Errorf("expected application/json, got %s", ct)
-		}
-
-		json.NewDecoder(r.Body).Decode(&received)
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	// Override endpoint
-	origEndpoint := Endpoint
-	Endpoint = server.URL
-	defer func() { Endpoint = origEndpoint }()
-
-	client := NewClient("test-install-id", "0.2.26-dev")
-	report := Report{
-		MirrorCount:  3,
-		BackendTypes: []string{"gdrive", "s3"},
-		FilesSynced:  1234,
-		Mode:         "foreground",
-	}
-
-	client.SendReport(context.Background(), report)
-
-	if received.InstallID != "test-install-id" {
-		t.Errorf("InstallID = %q, want %q", received.InstallID, "test-install-id")
-	}
-	if received.Version != "0.2.26-dev" {
-		t.Errorf("Version = %q, want %q", received.Version, "0.2.26-dev")
-	}
-	if received.MirrorCount != 3 {
-		t.Errorf("MirrorCount = %d, want 3", received.MirrorCount)
-	}
-	if received.FilesSynced != 1234 {
-		t.Errorf("FilesSynced = %d, want 1234", received.FilesSynced)
-	}
-}
-
-func TestSendReport_RateLimit(t *testing.T) {
-	callCount := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer server.Close()
-
-	origEndpoint := Endpoint
-	Endpoint = server.URL
-	defer func() { Endpoint = origEndpoint }()
-
-	client := NewClient("test-id", "0.2.26")
-
-	// Send 3 reports rapidly — only the first should go through
-	for i := 0; i < 3; i++ {
-		client.SendReport(context.Background(), Report{MirrorCount: i})
-	}
-
-	if callCount != 1 {
-		t.Errorf("expected 1 request (rate limited), got %d", callCount)
-	}
-}
-
-func TestSendReport_ServerError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	origEndpoint := Endpoint
-	Endpoint = server.URL
-	defer func() { Endpoint = origEndpoint }()
-
-	client := NewClient("test-id", "0.2.26")
-
-	// Should not panic on server error
-	client.SendReport(context.Background(), Report{})
-}
-
-func TestSendReport_UnreachableEndpoint(t *testing.T) {
-	// Use a non-routable address to test timeout behavior without httptest server
-	origEndpoint := Endpoint
-	Endpoint = "http://127.0.0.1:1" // port 1 — connection refused instantly
-	defer func() { Endpoint = origEndpoint }()
-
-	client := NewClient("test-id", "0.2.26")
-	client.httpClient.Timeout = 1 * time.Second
-
-	// Should complete quickly (connection refused) without panic
-	done := make(chan struct{})
-	go func() {
-		client.SendReport(context.Background(), Report{})
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// good — completed without blocking
-	case <-time.After(5 * time.Second):
-		t.Fatal("SendReport blocked on unreachable endpoint")
-	}
-}
+// SM-160: TestSendReport_* removed along with the deleted SendReport
+// method, Report struct, and Endpoint variable. The legacy aggregated-
+// metrics path violated PRIVACY.md's no-accumulated-counts forward
+// commitment. Three-tier telemetry replaces it with bucketed-only,
+// upgrade-event-only data flows tested separately.
 
 func TestCheckForUpdate_NewVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

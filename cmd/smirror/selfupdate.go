@@ -613,6 +613,15 @@ func recordUpdateTime(configPath, newVersion string) {
 // checkForUpdateOnStartup performs a non-blocking update check and prints
 // a one-line notice if a newer version is available. Rate-limited to once
 // per 24 hours via state DB.
+//
+// SM-159 / PRIVACY.md: this function performs an outbound HTTP request
+// to api.github.com, which counts as telemetry traffic under the
+// three-tier consent model. At tier None (the default), it must NOT
+// run. The PRIVACY.md contract is explicit: "Nothing leaves your
+// machine — not a heartbeat, not a version check." Users who want
+// release notifications can either opt in to Standard / Reliability,
+// or run `smirror selfupdate --check` on demand (a deliberate user
+// action, not a background ping).
 func checkForUpdateOnStartup(configPath string) {
 	// Load config to access state DB
 	cfg, err := config.Load(configPath)
@@ -624,6 +633,15 @@ func checkForUpdateOnStartup(configPath string) {
 		return
 	}
 	defer st.Close()
+
+	// Tier gate: outbound traffic is forbidden at tier None. Check this
+	// BEFORE the rate-limit short-circuit so a None-tier install never
+	// touches the network even once. ReadTier consults state DB first,
+	// then the MSI-written registry value, then defaults to None — the
+	// "fail closed" path that PRIVACY.md guarantees.
+	if !telemetry.ReadTier(st).AllowsNetwork() {
+		return
+	}
 
 	// Rate limit: once per 24 hours
 	if last, err := st.GetMeta("last_update_check"); err == nil && last != "" {

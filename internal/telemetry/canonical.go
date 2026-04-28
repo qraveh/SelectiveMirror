@@ -19,11 +19,44 @@
 package telemetry
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 )
+
+// jsonEncodeNoHTMLEscape serializes a primitive (string / number / bool /
+// null) using encoding/json with HTML escaping DISABLED. This is the
+// critical correctness knob for HMAC parity with PostgreSQL JSONB:
+//
+//   - Go's json.Marshal escapes '<', '>', and '&' as <, >, &.
+//     This is a defense-in-depth feature aimed at HTML/XML embedding.
+//   - PostgreSQL JSONB::text does NOT escape those characters; they
+//     appear literally in the canonical text.
+//
+// If any payload field's string value contains any of those three
+// characters (e.g., a sanitized bug-report log line containing "&" or
+// an HTML snippet), the client-computed HMAC and the server-recomputed
+// HMAC diverge — and RLS rejects the row with no recovery path. The
+// fix is to use json.Encoder with SetEscapeHTML(false), which produces
+// the literal-character form that matches PG.
+//
+// json.Encoder.Encode appends a trailing newline; we trim it.
+func jsonEncodeNoHTMLEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	out := buf.Bytes()
+	// Trim trailing newline that Encoder appends after every value.
+	if n := len(out); n > 0 && out[n-1] == '\n' {
+		out = out[:n-1]
+	}
+	return out, nil
+}
 
 // CanonicalJSON serializes value to a string matching PostgreSQL JSONB::text
 // byte-for-byte for the supported value types (objects, arrays, strings,
@@ -63,7 +96,11 @@ func writeCanonical(b *strings.Builder, v any) error {
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			kJSON, err := json.Marshal(k)
+			// Keys: must NOT HTML-escape (PG JSONB doesn't). Snake-case
+			// identifiers like our schema uses don't contain '<', '>',
+			// '&' — but use the safe encoder anyway so a future schema
+			// addition can't silently break HMAC parity.
+			kJSON, err := jsonEncodeNoHTMLEscape(k)
 			if err != nil {
 				return err
 			}
@@ -90,11 +127,12 @@ func writeCanonical(b *strings.Builder, v any) error {
 	case nil, bool, string, int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64, float32, float64,
 		json.Number:
-		// Allowed primitives: standard JSON encoding matches PG JSONB
-		// normalization for these in the cases SM telemetry sends (no
-		// NaN, no extreme floats, no high-precision numerics outside
-		// what PG round-trips identically).
-		bs, err := json.Marshal(v)
+		// Allowed primitives. We MUST disable HTML escaping here:
+		// json.Marshal would emit "<" / ">" / "&" for
+		// '<' / '>' / '&', which PG JSONB::text does NOT. The result
+		// would be byte-mismatched bytes the server's HMAC verifier
+		// can't reproduce. SM-167.
+		bs, err := jsonEncodeNoHTMLEscape(v)
 		if err != nil {
 			return err
 		}
