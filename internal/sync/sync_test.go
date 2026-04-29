@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1891,7 +1892,6 @@ func TestReconcileAll_WaitGroupPattern(t *testing.T) {
 	}
 }
 
-
 // TestProcessTask_DoneCallback verifies that the Done callback is called
 // after task processing completes, enabling WaitGroup-based synchronization.
 func TestProcessTask_DoneCallback(t *testing.T) {
@@ -2149,10 +2149,10 @@ func TestFindGhosts_MixedLeaksAndOrphans(t *testing.T) {
 	os.WriteFile(filepath.Join(proj.LocalPath, "keep.txt"), []byte("keep"), 0644)
 
 	remoteFiles := []RemoteFile{
-		{Path: "keep.txt", Size: 4, IsDir: false},       // matches local → not ghost
-		{Path: "old.log", Size: 100, IsDir: false},       // excluded by *.log → LEAK
-		{Path: "deleted.txt", Size: 50, IsDir: false},    // no local file → ORPHAN
-		{Path: "debug.log", Size: 200, IsDir: false},     // excluded by *.log → LEAK
+		{Path: "keep.txt", Size: 4, IsDir: false},     // matches local → not ghost
+		{Path: "old.log", Size: 100, IsDir: false},    // excluded by *.log → LEAK
+		{Path: "deleted.txt", Size: 50, IsDir: false}, // no local file → ORPHAN
+		{Path: "debug.log", Size: 200, IsDir: false},  // excluded by *.log → LEAK
 	}
 
 	e := testEngineWithRemoteLister(t, cfg, nil, remoteFiles)
@@ -2657,9 +2657,9 @@ func TestCleanupGhosts_NestedOrphans(t *testing.T) {
 	os.WriteFile(filepath.Join(proj.LocalPath, "src", "main.go"), []byte("package main"), 0644)
 
 	remoteFiles := []RemoteFile{
-		{Path: "src/main.go", Size: 12, IsDir: false},              // matches local
-		{Path: "src/old/legacy.go", Size: 200, IsDir: false},       // orphan (dir deleted)
-		{Path: "src/old/utils.go", Size: 150, IsDir: false},        // orphan (dir deleted)
+		{Path: "src/main.go", Size: 12, IsDir: false},        // matches local
+		{Path: "src/old/legacy.go", Size: 200, IsDir: false}, // orphan (dir deleted)
+		{Path: "src/old/utils.go", Size: 150, IsDir: false},  // orphan (dir deleted)
 	}
 
 	deletedPaths := make(map[string]bool)
@@ -3145,8 +3145,8 @@ func TestAdaptiveCooldown_DeleteBypassesCooldown(t *testing.T) {
 func TestParseExpiredQuarantineEntries_FiltersExpired(t *testing.T) {
 	cutoff := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	entries := []quarantineEntry{
-		{Path: "old/file.txt.20260201T120000Z", Name: "file.txt.20260201T120000Z", IsDir: false}, // Feb 1 — expired
-		{Path: "new/file.txt.20260315T120000Z", Name: "file.txt.20260315T120000Z", IsDir: false}, // Mar 15 — not expired
+		{Path: "old/file.txt.20260201T120000Z", Name: "file.txt.20260201T120000Z", IsDir: false},   // Feb 1 — expired
+		{Path: "new/file.txt.20260315T120000Z", Name: "file.txt.20260315T120000Z", IsDir: false},   // Mar 15 — not expired
 		{Path: "ancient.txt.20250101T000000Z", Name: "ancient.txt.20250101T000000Z", IsDir: false}, // Jan 2025 — expired
 	}
 
@@ -3156,6 +3156,22 @@ func TestParseExpiredQuarantineEntries_FiltersExpired(t *testing.T) {
 	}
 	if expired[0] != "old/file.txt.20260201T120000Z" {
 		t.Errorf("expected first expired to be old/file.txt, got %q", expired[0])
+	}
+}
+
+func TestParseExpiredQuarantineEntries_NanosecondSuffix(t *testing.T) {
+	cutoff := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	entries := []quarantineEntry{
+		{
+			Path:  "old/file.txt.20260201T120000Z.123456789",
+			Name:  "file.txt.20260201T120000Z.123456789",
+			IsDir: false,
+		},
+	}
+
+	expired := parseExpiredQuarantineEntries(entries, cutoff)
+	if len(expired) != 1 || expired[0] != entries[0].Path {
+		t.Fatalf("current quarantine filenames include nanoseconds; expected expired entry, got %v", expired)
 	}
 }
 
@@ -3306,7 +3322,7 @@ func TestSyncSingleFile_ContentAddressedSkip(t *testing.T) {
 
 	// Seed state with matching remote_hash (simulates prior verification)
 	e.state.UpdateFileState(proj.Name, "known.txt", "oldhash", size, 0, 1) // old failed sync
-	e.state.UpdateRemoteVerification(proj.Name, "known.txt", hash, size)    // but remote has current content
+	e.state.UpdateRemoteVerification(proj.Name, "known.txt", hash, size)   // but remote has current content
 
 	e.syncSingleFile(context.Background(), proj, "known.txt")
 
@@ -3368,6 +3384,83 @@ func TestSyncSingleFile_OptimisticRemoteHashUpdate(t *testing.T) {
 
 	if lastArgs == nil {
 		t.Error("A→B→A: rclone should be called because remote has B, not A")
+	}
+}
+
+func TestSyncSingleFile_RemoteVerificationFailureDoesNotTrustStaleHash(t *testing.T) {
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	st, err := state.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open state: %v", err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	sqlDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open sql db: %v", err)
+	}
+	t.Cleanup(func() { sqlDB.Close() })
+
+	testFile := filepath.Join(proj.LocalPath, "cycle.txt")
+	if err := os.WriteFile(testFile, []byte("content A"), 0644); err != nil {
+		t.Fatalf("write A: %v", err)
+	}
+	hashA, sizeA, err := state.HashFile(testFile)
+	if err != nil {
+		t.Fatalf("hash A: %v", err)
+	}
+	if err := st.UpdateFileState(proj.Name, "cycle.txt", hashA, sizeA, 1, 0); err != nil {
+		t.Fatalf("seed local A: %v", err)
+	}
+	if err := st.UpdateRemoteVerification(proj.Name, "cycle.txt", hashA, sizeA); err != nil {
+		t.Fatalf("seed remote A: %v", err)
+	}
+
+	if _, err := sqlDB.Exec(`CREATE TRIGGER fail_remote_hash_update
+BEFORE UPDATE OF remote_hash ON sync_state
+BEGIN
+  SELECT RAISE(FAIL, 'blocked remote verification update');
+END;`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+
+	copyCalls := 0
+	e := NewEngine(cfg, st, nil, nil)
+	e.RunRcloneFunc = func(_ context.Context, args []string) int {
+		if len(args) > 0 && args[0] == "copyto" {
+			copyCalls++
+		}
+		return 0
+	}
+
+	if err := os.WriteFile(testFile, []byte("content B"), 0644); err != nil {
+		t.Fatalf("write B: %v", err)
+	}
+	e.syncSingleFile(context.Background(), proj, "cycle.txt")
+	if copyCalls != 1 {
+		t.Fatalf("B sync copy calls = %d, want 1", copyCalls)
+	}
+
+	fs, err := st.GetFileState(proj.Name, "cycle.txt")
+	if err != nil {
+		t.Fatalf("state after B: %v", err)
+	}
+	if fs == nil {
+		t.Fatal("state after B is nil")
+	}
+	if fs.RemoteHash != hashA {
+		t.Fatalf("test setup expected stale remote_hash A after blocked verification; got %q", fs.RemoteHash)
+	}
+
+	if err := os.WriteFile(testFile, []byte("content A"), 0644); err != nil {
+		t.Fatalf("write A again: %v", err)
+	}
+	e.syncSingleFile(context.Background(), proj, "cycle.txt")
+	if copyCalls != 2 {
+		t.Fatalf("A->B->A after failed remote verification should re-upload A; copy calls = %d, want 2", copyCalls)
 	}
 }
 

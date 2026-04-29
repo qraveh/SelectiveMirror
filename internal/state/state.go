@@ -403,6 +403,26 @@ func (s *Store) UpdateRemoteVerification(project, relPath, remoteHash string, re
 	return err
 }
 
+// MarkRemoteVerificationStale clears remote_verified_at without touching
+// remote_hash. SM-196: when an optimistic UpdateRemoteVerification call
+// fails (state DB I/O error, trigger), the previously-stored remote_hash
+// may be stale relative to the just-completed local sync. Clearing the
+// timestamp signals the next sync's content-addressed skip check that
+// the remote_hash is not trustworthy and a real upload is required.
+//
+// Deliberately scoped narrowly: only touches the timestamp column, not
+// remote_hash itself. This way, this UPDATE does not fire any trigger
+// that may have been the original cause of the UpdateRemoteVerification
+// failure (e.g., a maintenance trigger blocking remote_hash mutations).
+func (s *Store) MarkRemoteVerificationStale(project, relPath string) error {
+	_, err := s.db.Exec(
+		`UPDATE sync_state SET remote_verified_at = ''
+		 WHERE project = ? AND rel_path = ?`,
+		project, relPath,
+	)
+	return err
+}
+
 // UpdateFileState inserts or updates the sync state for a file.
 func (s *Store) UpdateFileState(project, relPath, localHash string, fileSize, mtimeNs int64, rcloneExit int) error {
 	_, err := s.db.Exec(

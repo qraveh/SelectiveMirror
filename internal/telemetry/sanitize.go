@@ -83,12 +83,15 @@ var (
 	rePlaceholderPath = regexp.MustCompile(
 		`((?:<mirror_\d+_path>|<configdir>|~))[\\/][^\s<>"'()]+`)
 
-	// rclone-style remote URIs: a short lowercase scheme followed by
-	// ':' and a path. Excludes a small allowlist of widely-recognized
-	// network protocols (http/https/file/git/ws/wss) so URLs in user-
-	// agent strings or bug links survive intact.
+	// rclone-style remote URIs: a short scheme followed by ':' and a
+	// path. Excludes a small allowlist of widely-recognized network
+	// protocols (http/https/file/git/ws/wss) — checked case-insensitively
+	// in the replace callback — so URLs in user-agent strings or bug
+	// links survive intact. SM-179 update: scheme allows mixed case and
+	// 1-character names (rclone permits both, e.g., "GDrive:..." or
+	// "x:..." for a single-letter remote name).
 	reRemoteURI = regexp.MustCompile(
-		`\b([a-z][a-z0-9_-]{1,30}):([A-Za-z0-9_./\\\-]+)`)
+		`\b([A-Za-z][A-Za-z0-9_-]{0,30}):([A-Za-z0-9_./\\\-]+)`)
 )
 
 var urlSchemeAllow = map[string]bool{

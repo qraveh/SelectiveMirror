@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -566,7 +567,14 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 	// rclone call entirely. This eliminates network I/O for files that changed
 	// metadata (mtime, permissions) but not content, and prevents "big cold area"
 	// re-uploads during batch reconciliation on backends that don't support mtime.
-	if existing != nil && existing.RemoteHash != "" && existing.RemoteHash == hash {
+	//
+	// SM-196: require remote_verified_at to be non-zero. When an optimistic
+	// UpdateRemoteVerification fails (e.g., state DB I/O error, trigger),
+	// the post-failure path below clears remote_verified_at so this check
+	// fails and the next sync proceeds with a real upload rather than
+	// trusting a possibly-stale remote_hash.
+	if existing != nil && existing.RemoteHash != "" && existing.RemoteHash == hash &&
+		!existing.RemoteVerifiedAt.IsZero() {
 		e.log.Debug("content-addressed skip: remote already has this hash",
 			"project", proj.Name, "path", relPath, "hash", hash[:8])
 		// Update local state to reflect current local file state
@@ -635,6 +643,19 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		// and closes the A→B→A window (Case 4 in edge case analysis).
 		if err := e.state.UpdateRemoteVerification(proj.Name, relPath, hash, size); err != nil {
 			e.log.Warn("state: update remote verification", "project", proj.Name, "path", relPath, "err", err)
+			// SM-196: prior remote_hash is now potentially stale (we couldn't
+			// confirm the remote has the new content). Clear remote_verified_at
+			// so the next sync's content-addressed skip check refuses to trust
+			// the stored remote_hash and proceeds with a real upload.
+			if clearErr := e.state.MarkRemoteVerificationStale(proj.Name, relPath); clearErr != nil {
+				e.log.Error("state: failed to mark remote verification stale after failed update",
+					"project", proj.Name, "path", relPath, "first_err", err, "clear_err", clearErr)
+				if e.Anomaly != nil {
+					e.Anomaly.Record(anomaly.KindStateError, proj.Name, relPath,
+						"remote_verified_at could not be cleared after failed UpdateRemoteVerification",
+						fmt.Sprintf("first error: %v; clear error: %v", err, clearErr))
+				}
+			}
 		}
 		e.Queue.SetAdaptiveCooldown(proj.Name+":"+relPath, elapsed)
 		e.Queue.RecordSuccess(proj.Name)
@@ -1563,14 +1584,67 @@ func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, e
 	}
 	e.recordGhostAnomalies(proj, ghosts)
 
+	policy := proj.DeletePolicy(e.cfg)
+
 	deleted := 0
 	for _, g := range ghosts {
+		// SM-191/SM-192: ghost cleanup must respect the configured
+		// delete_policy for ORPHAN / STALE / RETAINED ghosts (which
+		// represent files the user removed locally; the policy says
+		// what should happen to those on remote). LEAK ghosts are an
+		// exception: those files are excluded by the user's
+		// `.syncignore` rules, and keeping them on remote contradicts
+		// the user's explicit gating intent — they get cleaned up
+		// regardless of policy. (RETAINED ghosts also short-circuit
+		// because the kind itself signals "user wanted to keep them
+		// on remote despite local deletion".)
+		ghostPolicy := policy
+		if g.Kind == GhostLeak {
+			ghostPolicy = config.DeleteDelete
+		}
+
+		if ghostPolicy == config.DeleteIgnore {
+			// SM-191: under policy=ignore, ghost cleanup is a no-op
+			// for non-LEAK ghosts. Record the observation and move
+			// on. RETAINED ghosts in particular are EXPECTED here.
+			e.log.Debug("ghost cleanup skipped (policy=ignore)",
+				"project", proj.Name, "path", g.Path, "kind", g.Kind)
+			e.logAction(proj.Name, g.Path, "ghost_retained", "policy=ignore", 0)
+			continue
+		}
+
 		remotePath := proj.Remote + "/" + g.Path
+		kind := string(g.Kind)
+
+		// SM-192: under policy=quarantine, ORPHAN / STALE ghosts move
+		// to .quarantine/ rather than being permanently deleted. LEAK
+		// ghosts always use deletefile (filter exclusion is intentional
+		// gating, not user error). The non-LEAK quarantine path mirrors
+		// deleteRemoteFile's quarantine branch — same nanosecond-suffixed
+		// path scheme so the SM-193 parser handles them too.
+		if ghostPolicy == config.DeleteQuarantine {
+			now := time.Now().UTC()
+			ts := now.Format("20060102T150405Z") + fmt.Sprintf(".%09d", now.Nanosecond())
+			quarantinePath := proj.Remote + "/.quarantine/" + g.Path + "." + ts
+			args := []string{"moveto", remotePath, quarantinePath}
+			args = append(args, e.deleteFlags(proj)...)
+			exitCode := e.runRclone(ctx, args)
+			if exitCode == 0 {
+				e.log.Info("ghost quarantined", "project", proj.Name, "path", g.Path, "kind", kind, "quarantine", quarantinePath)
+				e.logAction(proj.Name, g.Path, "ghost_quarantined", kind, 0)
+				e.deleteFileState(proj.Name, g.Path)
+				deleted++
+			} else {
+				e.log.Warn("ghost quarantine failed", "project", proj.Name, "path", g.Path, "kind", kind, "exit", exitCode)
+			}
+			continue
+		}
+
+		// policy == DeleteDelete (or LEAK forced)
 		args := []string{"deletefile", remotePath}
 		args = append(args, e.deleteFlags(proj)...)
 
 		exitCode := e.runRclone(ctx, args)
-		kind := string(g.Kind)
 		if exitCode == 0 {
 			e.log.Info("ghost cleaned", "project", proj.Name, "path", g.Path, "kind", kind)
 			e.logAction(proj.Name, g.Path, "ghost_cleanup", kind, 0)
@@ -1667,6 +1741,15 @@ type quarantineEntry struct {
 	Size  int64  `json:"Size"`
 }
 
+// quarantineTSRegex matches the timestamp suffix on quarantine
+// filenames produced by the quarantine code path in syncSingleFile
+// (see line ~904 — `now.Format("20060102T150405Z") + ".%09d nano"`).
+// Older quarantine names had no nanosecond suffix; both forms are
+// accepted. SM-193: prior parser used a fixed name[len-16:] slice
+// which only matched the old form, so any file quarantined since
+// the nanosecond suffix was added would never expire.
+var quarantineTSRegex = regexp.MustCompile(`\.(\d{8}T\d{6}Z)(?:\.\d+)?$`)
+
 // parseExpiredQuarantineEntries filters quarantine entries to those older than cutoff.
 // Returns the paths of expired entries. Pure function — no I/O.
 func parseExpiredQuarantineEntries(entries []quarantineEntry, cutoff time.Time) []string {
@@ -1675,12 +1758,11 @@ func parseExpiredQuarantineEntries(entries []quarantineEntry, cutoff time.Time) 
 		if entry.IsDir {
 			continue
 		}
-		name := entry.Name
-		if len(name) < 17 {
+		m := quarantineTSRegex.FindStringSubmatch(entry.Name)
+		if m == nil {
 			continue
 		}
-		tsSuffix := name[len(name)-16:] // "20060102T150405Z"
-		ts, err := time.Parse("20060102T150405Z", tsSuffix)
+		ts, err := time.Parse("20060102T150405Z", m[1])
 		if err != nil {
 			continue
 		}

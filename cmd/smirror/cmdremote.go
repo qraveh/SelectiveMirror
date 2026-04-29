@@ -172,8 +172,15 @@ func cmdRemoteSet(configPath string, remotePath string) {
 		fmt.Println(" OK")
 	}
 
-	// Write to config (YAML single-quoted to preserve backslashes literally)
-	if err := config.SetField(configPath, "default_remote", fmt.Sprintf("'%s'", remotePath)); err != nil {
+	// Write to config. YAML single-quoted preserves backslashes literally,
+	// but a literal apostrophe inside a single-quoted scalar must be
+	// escaped by doubling (`O'Brien` → `'O''Brien'`). SM-194: without
+	// the doubling, a path like `C:\Users\O'Brien\Drive` produced
+	// `'C:\Users\O'Brien\Drive'` which YAML parses as an unterminated
+	// scalar, breaking subsequent config.Load() calls (the user gets
+	// "no mirrors defined" or a parser error on every invocation).
+	escaped := strings.ReplaceAll(remotePath, "'", "''")
+	if err := config.SetField(configPath, "default_remote", fmt.Sprintf("'%s'", escaped)); err != nil {
 		fmt.Fprintf(os.Stderr, "Error updating config: %v\n", err)
 		os.Exit(ExitError)
 	}

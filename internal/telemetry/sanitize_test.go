@@ -60,7 +60,7 @@ func TestSanitizeReport_CredentialPatterns(t *testing.T) {
 			strings.Contains(got, "top") || strings.Contains(got, "xyz") ||
 			strings.Contains(got, "eyJabc") || strings.Contains(got, "long-secret-string") ||
 			strings.Contains(got, "foo") || strings.Contains(got, "secret") &&
-				!strings.Contains(got, "secret=<REDACTED>") || strings.Contains(got, "AKIAABCD") {
+			!strings.Contains(got, "secret=<REDACTED>") || strings.Contains(got, "AKIAABCD") {
 			// the second-secret check is awkward because the substring
 			// "secret" appears in our placeholder too; we just want the
 			// VALUE redacted.
@@ -89,6 +89,19 @@ func TestSanitizeReport_RemoteURIRedaction(t *testing.T) {
 		if got != c.want {
 			t.Errorf("input=%q\n  got: %q\n want: %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestSanitizeReport_RemoteURIRedactionMixedCase(t *testing.T) {
+	in := "copy failed at GDrive:ClientAlpha/SecretProject/file.txt"
+	got := SanitizeReport(in, SanitizeOptions{})
+	for _, forbidden := range []string{"ClientAlpha", "SecretProject", "file.txt"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("mixed-case rclone remote leaked %q in sanitized report: %q", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "gdrive:<REDACTED>") {
+		t.Fatalf("expected mixed-case remote to be redacted, got %q", got)
 	}
 }
 

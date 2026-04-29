@@ -3,6 +3,8 @@ package anomaly
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -59,4 +61,26 @@ func TestSanitizeAnomaly_RedactsAll(t *testing.T) {
 
 func TestSanitizeAnomaly_Nil(t *testing.T) {
 	SanitizeAnomaly(nil) // should not panic
+}
+
+func TestSanitizeAnomaly_ExtraPrefixesCaseInsensitiveOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path casing behavior")
+	}
+	SetExtraSanitizePrefixes([]string{`C:\Work\ClientA`})
+	t.Cleanup(func() { SetExtraSanitizePrefixes(nil) })
+
+	a := &Anomaly{
+		Path:    `c:\work\clienta\secret.txt`,
+		Message: `failure under c:\work\clienta\secret.txt`,
+		Detail:  `rclone copied c:/work/clienta/secret.txt`,
+	}
+	SanitizeAnomaly(a)
+
+	combined := strings.ToLower(a.Path + "\n" + a.Message + "\n" + a.Detail)
+	for _, forbidden := range []string{`c:\work\clienta`, "c:/work/clienta", "clienta"} {
+		if strings.Contains(combined, strings.ToLower(forbidden)) {
+			t.Fatalf("anomaly sanitizer leaked case-varied mirror prefix %q:\n%+v", forbidden, a)
+		}
+	}
 }

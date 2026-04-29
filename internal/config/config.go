@@ -342,6 +342,19 @@ func Load(path string) (*Global, error) {
 	return cfg, nil
 }
 
+// isValidDeletePolicyString reports whether s is one of the accepted
+// delete_policy values. Empty is allowed (means "use the default").
+// SM-190: previously a typo like "ignor" silently fell back to
+// destructive "delete" via parseDeletePolicy's default branch — a
+// data-loss vector when users meant "ignore" but mistyped.
+func isValidDeletePolicyString(s string) bool {
+	switch DeletePolicy(s) {
+	case "", DeleteIgnore, DeleteDelete, DeleteMirror, DeleteQuarantine:
+		return true
+	}
+	return false
+}
+
 // Validate checks the configuration for errors.
 func (g *Global) Validate() error {
 	if len(g.Projects) == 0 {
@@ -493,6 +506,21 @@ func (g *Global) Validate() error {
 			// valid
 		default:
 			return fmt.Errorf("alert_min_severity %q is not recognized (must be one of: info, warning, error, critical; empty defaults to error)", g.AlertMinSeverity)
+		}
+	}
+
+	// SM-190 (validation panel 2026-04-29): validate delete_policy values
+	// at both global and per-mirror scope. Without this, a typo like
+	// `delete_policy: ignor` (the user meaning `ignore`) silently falls
+	// through parseDeletePolicy's default branch and becomes destructive
+	// `delete` — the user's archive-mode mirror would propagate every
+	// local delete to the remote, the opposite of intent.
+	if !isValidDeletePolicyString(g.DeletePolicyStr) {
+		return fmt.Errorf("delete_policy %q is not recognized (must be one of: ignore, delete, mirror, quarantine; empty defaults to delete)", g.DeletePolicyStr)
+	}
+	for _, p := range g.Projects {
+		if !isValidDeletePolicyString(p.DeletePolicyStr) {
+			return fmt.Errorf("mirror %q: delete_policy %q is not recognized (must be one of: ignore, delete, mirror, quarantine; empty inherits from global)", p.Name, p.DeletePolicyStr)
 		}
 	}
 

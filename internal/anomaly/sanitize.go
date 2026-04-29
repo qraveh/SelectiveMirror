@@ -3,9 +3,47 @@ package anomaly
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	gosync "sync"
 )
+
+// caseInsensitiveOnWindows: NTFS is case-insensitive, so a configured
+// mirror at "C:\Work\ClientA" and a runtime path "c:\work\clienta"
+// name the SAME directory and both must be redacted. POSIX is case-
+// sensitive, so we keep the prior strict matching there. SM-195.
+func ciHasPrefix(s, prefix string) bool {
+	if runtime.GOOS != "windows" {
+		return strings.HasPrefix(s, prefix)
+	}
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+}
+
+// ciReplaceAll is strings.ReplaceAll on POSIX and a case-insensitive
+// search-and-replace on Windows. Replacement preserves the original
+// non-matched bytes verbatim. SM-195.
+func ciReplaceAll(text, old, new string) string {
+	if runtime.GOOS != "windows" {
+		return strings.ReplaceAll(text, old, new)
+	}
+	if old == "" {
+		return text
+	}
+	lowText := strings.ToLower(text)
+	lowOld := strings.ToLower(old)
+	var b strings.Builder
+	i := 0
+	for {
+		j := strings.Index(lowText[i:], lowOld)
+		if j == -1 {
+			b.WriteString(text[i:])
+			return b.String()
+		}
+		b.WriteString(text[i : i+j])
+		b.WriteString(new)
+		i += j + len(old)
+	}
+}
 
 // SEC-M5: extra path prefixes that the engine wants redacted alongside
 // the user's home directory. Set via SetExtraSanitizePrefixes from
@@ -56,7 +94,7 @@ func SanitizePath(path string) string {
 	home, _ := os.UserHomeDir()
 	if home != "" {
 		normHome := filepath.ToSlash(home)
-		if strings.HasPrefix(normPath, normHome) {
+		if ciHasPrefix(normPath, normHome) {
 			return "~" + normPath[len(normHome):]
 		}
 	}
@@ -64,10 +102,13 @@ func SanitizePath(path string) string {
 	// SEC-M5: try registered extra prefixes (longest-match first
 	// would matter for nested mirrors; we accept the first match
 	// and suggest callers register most-specific paths first).
+	// SM-195: case-insensitive prefix match on Windows so a runtime
+	// path with different casing than the registered prefix is still
+	// redacted.
 	extraPrefixesMu.RLock()
 	defer extraPrefixesMu.RUnlock()
 	for _, p := range extraPrefixesSlash {
-		if strings.HasPrefix(normPath, p) {
+		if ciHasPrefix(normPath, p) {
 			return extraPrefixPlaceholder + normPath[len(p):]
 		}
 	}
@@ -85,20 +126,23 @@ func SanitizeAnomaly(a *Anomaly) {
 }
 
 // sanitizeText replaces home directory and registered extra prefixes
-// in free-text fields. SEC-M5 extends prior home-only behavior.
+// in free-text fields. SEC-M5 extends prior home-only behavior. SM-195
+// makes the replacements case-insensitive on Windows so paths embedded
+// in error messages with different casing than the registered prefix
+// are still redacted.
 func sanitizeText(text string) string {
 	if text == "" {
 		return ""
 	}
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		text = strings.ReplaceAll(text, home, "~")
-		text = strings.ReplaceAll(text, filepath.ToSlash(home), "~")
+		text = ciReplaceAll(text, home, "~")
+		text = ciReplaceAll(text, filepath.ToSlash(home), "~")
 	}
 	extraPrefixesMu.RLock()
 	defer extraPrefixesMu.RUnlock()
 	for i, p := range extraPrefixesNative {
-		text = strings.ReplaceAll(text, p, extraPrefixPlaceholder)
-		text = strings.ReplaceAll(text, extraPrefixesSlash[i], extraPrefixPlaceholder)
+		text = ciReplaceAll(text, p, extraPrefixPlaceholder)
+		text = ciReplaceAll(text, extraPrefixesSlash[i], extraPrefixPlaceholder)
 	}
 	return text
 }
