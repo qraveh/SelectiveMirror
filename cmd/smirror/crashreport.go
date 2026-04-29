@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qraveh/SelectiveMirror/internal/config"
@@ -19,6 +20,48 @@ import (
 // crashReportDir is the directory where crash reports are saved.
 // Defaults to config.DefaultDataDir(). Override in tests.
 var crashReportDir string
+
+// activeConfigPath holds the currently-parsed --config path, set by
+// cliMain immediately after it parses os.Args, so the crash-report
+// builder and submission paths can sanitize against the user's actual
+// config rather than the default. SM-181: pre-fix, both buildCrashReport
+// and offerCrashSubmission used `config.DefaultConfigPath()` directly,
+// so a user running `smirror --config C:\custom\config.yaml` whose
+// custom mirror names / paths weren't in the default config would have
+// those identifiers leak unredacted into both the on-disk and
+// GitHub-bound crash report.
+//
+// The package-level variable bridges the panic-recovery wrapper
+// (runWithCrashReport, which has no parsed args) to the report
+// builders. Mutex is RWMutex because cliMain writes once at startup
+// and the panic handler reads zero or one time. Default fallback to
+// DefaultConfigPath() preserves behavior for any code path that
+// panics before SetActiveConfigPath was called.
+var (
+	activeConfigPathMu sync.RWMutex
+	activeConfigPath   string
+)
+
+// SetActiveConfigPath records the user's --config path so a subsequent
+// crash-report build/submit can sanitize against it. Called by cliMain
+// immediately after parsing arg flags. SM-181.
+func SetActiveConfigPath(p string) {
+	activeConfigPathMu.Lock()
+	activeConfigPath = p
+	activeConfigPathMu.Unlock()
+}
+
+// getActiveConfigPath returns the user's --config path if cliMain has
+// recorded one; otherwise falls back to the default. Read-side of
+// SM-181's package-level bridge.
+func getActiveConfigPath() string {
+	activeConfigPathMu.RLock()
+	defer activeConfigPathMu.RUnlock()
+	if activeConfigPath != "" {
+		return activeConfigPath
+	}
+	return config.DefaultConfigPath()
+}
 
 // runWithCrashReport wraps fn in a top-level panic recovery.
 // On panic: saves a crash report to ~/.selectivemirror/ and offers to submit it.
@@ -31,8 +74,14 @@ func runWithCrashReport(fn func()) {
 		}
 		stack := string(debug.Stack())
 
+		// SM-181: read the user's active --config path (set by cliMain
+		// after arg parsing). If cliMain hasn't run yet (panic during
+		// init), getActiveConfigPath returns DefaultConfigPath as
+		// fallback.
+		configPath := getActiveConfigPath()
+
 		// Build and save crash report
-		reportPath := saveCrashReport(r, stack)
+		reportPath := saveCrashReport(r, stack, configPath)
 
 		// Print user-friendly message
 		fmt.Fprintln(os.Stderr)
@@ -45,7 +94,7 @@ func runWithCrashReport(fn func()) {
 		fmt.Fprintln(os.Stderr)
 
 		// Offer to submit (interactive CLI only)
-		offerCrashSubmission(reportPath)
+		offerCrashSubmission(reportPath, configPath)
 
 		os.Exit(ExitError)
 	}()
@@ -61,7 +110,7 @@ func runWithCrashReport(fn func()) {
 // home directory from log lines, which left filenames, remote URIs,
 // and credential strings intact — exactly the data the privacy policy
 // promises will never leave the machine.
-func buildCrashReport(panicVal interface{}, stack string) string {
+func buildCrashReport(panicVal interface{}, stack string, configPath string) string {
 	var b strings.Builder
 	tz := time.Now().Format("-07:00")
 	now := time.Now().Format("2006-01-02T15:04:05") + tz
@@ -85,7 +134,14 @@ func buildCrashReport(panicVal interface{}, stack string) string {
 		b.WriteString(fmt.Sprintf("rclone: not found (%v)\n", err))
 	}
 
-	configPath := config.DefaultConfigPath()
+	// SM-181: configPath is the active --config (set by cliMain via
+	// SetActiveConfigPath) rather than DefaultConfigPath, so the
+	// sanitizer below builds its prefix list from the user's actual
+	// mirrors. Empty fallback to default for any panic before
+	// SetActiveConfigPath ran.
+	if configPath == "" {
+		configPath = config.DefaultConfigPath()
+	}
 	var loadedCfg *config.Global
 	if cfg, err := config.Load(configPath); err == nil {
 		loadedCfg = cfg
@@ -134,9 +190,11 @@ func buildCrashReport(panicVal interface{}, stack string) string {
 }
 
 // saveCrashReport writes a crash report file to ~/.selectivemirror/.
+// configPath is the user's active --config (SM-181) so the report's
+// embedded sanitizer-options reflect the user's actual mirror set.
 // Returns the path to the saved file, or "" if saving failed.
-func saveCrashReport(panicVal interface{}, stack string) string {
-	report := buildCrashReport(panicVal, stack)
+func saveCrashReport(panicVal interface{}, stack, configPath string) string {
+	report := buildCrashReport(panicVal, stack, configPath)
 
 	dataDir := crashReportDir
 	if dataDir == "" {
@@ -175,7 +233,7 @@ func saveCrashReport(panicVal interface{}, stack string) string {
 //     the file was edited externally between save and submit.
 //   - We never URL-encode the raw bytes. Even on the truncation
 //     branch, we sanitize the truncated slice before encoding.
-func offerCrashSubmission(reportPath string) {
+func offerCrashSubmission(reportPath string, configPath string) {
 	if reportPath == "" {
 		return
 	}
@@ -205,7 +263,13 @@ func offerCrashSubmission(reportPath string) {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
 		sanOpts.HomeDir = home
 	}
-	configPath := config.DefaultConfigPath()
+	// SM-181: use the active --config the panic handler captured (or
+	// the unsent-report-replay caller passed) rather than always
+	// defaulting. Fallback for empty configPath preserves prior
+	// behavior for any caller that hasn't migrated.
+	if configPath == "" {
+		configPath = config.DefaultConfigPath()
+	}
 	if dir := filepath.Dir(configPath); dir != "" && dir != "." {
 		sanOpts.ConfigDir = dir
 	}
@@ -295,8 +359,11 @@ func checkUnsentCrashReports(configPath string) {
 		return
 	}
 
-	// Submit the most recent one
-	offerCrashSubmission(unsent[len(unsent)-1])
+	// Submit the most recent one. SM-181: configPath is the active
+	// --config the caller passed (cliMain in main.go's per-command
+	// switch); offerCrashSubmission uses it to build sanitizer
+	// options matching the user's actual mirror set.
+	offerCrashSubmission(unsent[len(unsent)-1], configPath)
 
 	// Mark all as sent
 	for _, f := range unsent {

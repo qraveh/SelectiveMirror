@@ -8,14 +8,14 @@ import (
 )
 
 func TestBuildCrashReport_ContainsVersion(t *testing.T) {
-	report := buildCrashReport("nil pointer dereference", "goroutine 1 [running]:\nmain.main()")
+	report := buildCrashReport("nil pointer dereference", "goroutine 1 [running]:\nmain.main()", "")
 	if !strings.Contains(report, version) {
 		t.Errorf("crash report should contain version %q", version)
 	}
 }
 
 func TestBuildCrashReport_ContainsPanicValue(t *testing.T) {
-	report := buildCrashReport("index out of range [5]", "goroutine 1 [running]:")
+	report := buildCrashReport("index out of range [5]", "goroutine 1 [running]:", "")
 	if !strings.Contains(report, "index out of range [5]") {
 		t.Error("crash report should contain the panic value")
 	}
@@ -23,14 +23,14 @@ func TestBuildCrashReport_ContainsPanicValue(t *testing.T) {
 
 func TestBuildCrashReport_ContainsStackTrace(t *testing.T) {
 	stack := "goroutine 1 [running]:\nmain.doSomething()\n\t/path/to/main.go:42"
-	report := buildCrashReport("oops", stack)
+	report := buildCrashReport("oops", stack, "")
 	if !strings.Contains(report, "main.doSomething()") {
 		t.Error("crash report should contain the stack trace")
 	}
 }
 
 func TestBuildCrashReport_ContainsSections(t *testing.T) {
-	report := buildCrashReport("test panic", "test stack")
+	report := buildCrashReport("test panic", "test stack", "")
 	sections := []string{
 		"smirror crash report",
 		"--- Panic ---",
@@ -45,7 +45,7 @@ func TestBuildCrashReport_ContainsSections(t *testing.T) {
 }
 
 func TestBuildCrashReport_ContainsPlatform(t *testing.T) {
-	report := buildCrashReport("test", "stack")
+	report := buildCrashReport("test", "stack", "")
 	if !strings.Contains(report, "platform:") {
 		t.Error("crash report should contain platform info")
 	}
@@ -61,7 +61,7 @@ func TestSaveCrashReport_WritesFile(t *testing.T) {
 	crashReportDir = dir
 	defer func() { crashReportDir = origDir }()
 
-	path := saveCrashReport("test panic", "test stack")
+	path := saveCrashReport("test panic", "test stack", "")
 	if path == "" {
 		t.Fatal("saveCrashReport should return a path")
 	}
@@ -90,7 +90,7 @@ func TestSaveCrashReport_FileNaming(t *testing.T) {
 	crashReportDir = dir
 	defer func() { crashReportDir = origDir }()
 
-	path := saveCrashReport("test", "stack")
+	path := saveCrashReport("test", "stack", "")
 	base := filepath.Base(path)
 	if !strings.HasPrefix(base, "crash-") {
 		t.Errorf("filename should start with 'crash-', got: %s", base)

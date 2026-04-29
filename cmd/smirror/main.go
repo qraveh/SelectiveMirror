@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.72-dev"
+var version = "0.9.73-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -172,6 +172,14 @@ func cliMain() {
 	// `smirror --config bogus --config good version`.
 	configPath := config.DefaultConfigPath()
 	args := extractConfigPath(os.Args[1:], &configPath)
+
+	// SM-181: record the user's active --config so a panic recovery via
+	// runWithCrashReport's deferred handler (in crashreport.go) can
+	// sanitize against the user's actual mirror set rather than the
+	// default config. The package-level setter is safe to call
+	// repeatedly; subsequent commands' bumps don't break in-flight
+	// crash reporting.
+	SetActiveConfigPath(configPath)
 
 	if len(args) == 0 {
 		printUsage()
