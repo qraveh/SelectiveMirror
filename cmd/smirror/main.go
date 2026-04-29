@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.52-dev"
+var version = "0.9.53-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -832,17 +832,21 @@ Examples:
 	syncFailed := false
 	for _, proj := range projects {
 		if err := syncEngine.SyncFullProject(ctx, proj); err != nil {
-			fmt.Fprintf(os.Stderr, "Sync failed for %s: %v\n", proj.Name, err)
+			// Tier-2 #26: surface a concrete next-step instead of a bare error.
+			fmt.Fprintf(os.Stderr, "Sync failed for %s: %v\n  Try: smirror test-mirrors %s\n",
+				proj.Name, err, proj.Name)
 			syncFailed = true
 		}
 	}
 
 	// Clean up ghost files (LEAKs + ORPHANs) on remote
 	totalCleaned := 0
+	ghostFailed := false // Tier-2 #27: ghost-cleanup error must change the exit code
 	for _, proj := range projects {
 		cleaned, err := syncEngine.CleanupGhosts(ctx, proj)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Ghost cleanup error for %s: %v\n", proj.Name, err)
+			ghostFailed = true
 			continue
 		}
 		if cleaned > 0 {
@@ -854,6 +858,15 @@ Examples:
 	if syncFailed {
 		fmt.Fprintln(os.Stderr, "Sync completed with errors.")
 		os.Exit(ExitError)
+	}
+	if ghostFailed {
+		// Tier-2 #27: previously logged-and-continued silently. Sync-now's
+		// contract includes ghost cleanup, so a partial failure must
+		// surface as a non-zero exit. ExitDrift is the natural code:
+		// "diagnostic found drift" — ghost-cleanup failures leave drift
+		// on the remote.
+		fmt.Fprintln(os.Stderr, "Sync complete but ghost cleanup had errors.")
+		os.Exit(ExitDrift)
 	}
 	if totalCleaned > 0 {
 		fmt.Printf("Sync complete (%d ghost files cleaned)\n", totalCleaned)

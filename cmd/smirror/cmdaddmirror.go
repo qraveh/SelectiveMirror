@@ -376,6 +376,19 @@ global_excludes:
 		}
 	}
 
+	// Tier-2 #28 (validation panel 2026-04-29): if no default_remote is
+	// configured, surface the concrete next step. Without this, the user
+	// adds a mirror with an explicit -dest, then later runs `addmirror`
+	// without -dest and gets a "no destination specified" error that
+	// reads as a regression from the previous successful add. Reload the
+	// config to see the post-edit state.
+	if reloadCfg, err := config.Load(configPath); err == nil && reloadCfg.DefaultRemote == "" && len(addedMirrors) > 0 {
+		fmt.Println()
+		fmt.Println("Tip: no default_remote is set in the config. Future `addmirror` calls without -dest")
+		fmt.Println("will fail. Set a default with:")
+		fmt.Printf("  smirror remote %s\n", strings.Split(baseRemote, "/")[0])
+	}
+
 	// SM-133: Exit non-zero if any mirrors failed to add (defense in depth).
 	if len(addedMirrors) < len(localPaths) {
 		os.Exit(ExitError)

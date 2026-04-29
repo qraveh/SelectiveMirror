@@ -345,7 +345,13 @@ func Load(path string) (*Global, error) {
 // Validate checks the configuration for errors.
 func (g *Global) Validate() error {
 	if len(g.Projects) == 0 {
-		return fmt.Errorf("no mirrors defined in config")
+		// Tier-2 #29 (validation panel 2026-04-29): explicit hint that
+		// "no mirrors defined" can be the symptom of a YAML structural
+		// issue (a mirror entry whose first non-comment child is a
+		// `key: value` rather than `- name:` makes the parser read
+		// `mirrors:` as a map and silently drop entries). Point users
+		// at the most common cause and the diagnostic command.
+		return fmt.Errorf("no mirrors defined in config — if your config has a `mirrors:` section, this often means a YAML structural issue silently zeroed it out (each entry must start with `- name:` and use consistent 2-space indentation). Run `smirror addmirror <path>` against an empty config to see a known-good example, or paste your config into a YAML linter")
 	}
 
 	// BUG-1 fix: dedup case-insensitively. On Windows (case-insensitive
