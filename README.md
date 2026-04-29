@@ -26,7 +26,7 @@ The MSI is the recommended path on Windows. The ZIP is for portable use; both ar
 
 Download `SelectiveMirror.msi` from [Releases](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to the system PATH and registers an uninstaller entry. perMachine install (`%ProgramFiles%\SelectiveMirror\`) — admin elevation required. Background registration is **not** automatic; pick the privilege model after install with `smirror task install` (per-user, no admin) or `smirror service install` (LocalSystem, admin + admin-owned config). See [SECURITY.md](SECURITY.md#scope) for the trust model.
 
-**SmartScreen on first install (v0.9.x — pre-SignPath)**
+**SmartScreen on first install (v1.0 — pre-SignPath)**
 
 Until [SignPath Foundation](https://signpath.io/) issues an EV certificate for the project (in flight; tracked in [SECURITY.md § Code Signing](SECURITY.md#code-signing)), the MSI ships unsigned. Microsoft Defender SmartScreen will display **"Microsoft Defender SmartScreen prevented an unrecognized app from starting"** on first launch. Click **More info → Run anyway**.
 
