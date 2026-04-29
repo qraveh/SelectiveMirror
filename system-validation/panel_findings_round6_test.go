@@ -261,8 +261,14 @@ func TestPanelR6_Adv_ConcurrentAddmirrorRemoteSet(t *testing.T) {
 
 	cfgBytes, _ := os.ReadFile(cfg)
 	cfgText := string(cfgBytes)
+	// `createConfig` writes paths with %q, addmirror with %s — accept either
+	// escaping form (same fix as TestPanelR4_CLI_ConcurrentAddMirror, applied
+	// here after the implementation session flagged the asymmetry).
+	containsPath := func(text, path string) bool {
+		return strings.Contains(text, path) || strings.Contains(text, fmt.Sprintf("%q", path))
+	}
 	hasSeed := strings.Contains(cfgText, "seed")
-	hasA := strings.Contains(cfgText, srcA)
+	hasA := containsPath(cfgText, srcA)
 	hasNewRemote := strings.Contains(cfgText, "newremote:bucket/path")
 
 	if !hasSeed {

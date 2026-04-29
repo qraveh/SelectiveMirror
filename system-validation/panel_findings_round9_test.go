@@ -317,9 +317,10 @@ func TestPanelR9_Endurance_AnomalyFileAccumulation(t *testing.T) {
 		}
 	}
 	t.Logf("PANEL OBS: after 5 failed-sync cycles, anomaly dir has %d entries totaling %d bytes. "+
-		"Per BUG-R5-1, anomaly.Rotate is never invoked, so this number grows unbounded "+
-		"over the daemon's lifetime. At a sustained 100 anomalies/day, after 30 days that's "+
-		"3000 entries. The 50 MB cap (FR-ANOM-10) is not enforced today.",
+		"BUG-R5-1 closed in 0.9.45-dev — anomaly.Rotate is now wired into heartbeatLoop's "+
+		"reconcile tick, so the 30-day / 50 MB cap (FR-ANOM-10) is enforced from a running "+
+		"daemon. Single sync-now invocations don't trigger the heartbeat path, so a steady-state "+
+		"trajectory test still requires the 'smirror start' daemon mode.",
 		count, totalBytes)
 }
 

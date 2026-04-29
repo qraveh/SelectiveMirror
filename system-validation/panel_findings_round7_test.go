@@ -301,8 +301,13 @@ func TestPanelR7_Security_StatusJsonSanitizationScope(t *testing.T) {
 	}
 	bytes, _ := os.ReadFile(statusPath)
 	statusText := string(bytes)
+	// status.json is JSON; backslashes appear escaped (`\\`). Check for both
+	// forms of the path — bare and JSON-escaped — to avoid the false-positive
+	// pattern the implementation session flagged in TestPanelR4_CLI_ConcurrentAddMirror.
+	srcJSON := strings.ReplaceAll(src, `\`, `\\`)
 	hasRawPath := strings.Contains(statusText, "secret-data.txt") ||
-		strings.Contains(statusText, src)
+		strings.Contains(statusText, src) ||
+		strings.Contains(statusText, srcJSON)
 	if hasRawPath {
 		t.Logf("PANEL OBS: status.json error fields contain raw file paths "+
 			"(found: %v). Per NFR-CO-03 diagnostic outputs should sanitize. "+
