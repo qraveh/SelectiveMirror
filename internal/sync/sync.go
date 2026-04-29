@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -39,19 +38,28 @@ const consecFullSyncFailKey = "consecutive_full_sync_failures_"
 // recordPersistentFullSyncFailure increments and returns the
 // persistent consecutive-full-sync-failure counter for a project.
 // Returns 0 if no state store is attached (test fakes).
+//
+// SM-209: now uses state.Store.IncrementMetaCounter which wraps the
+// SELECT/UPDATE in a transaction. The prior Go-level read-modify-
+// write was vulnerable to lost-update under concurrent failures of
+// the same project; in practice the FairQueue serializes per-project
+// sync so the race window was narrow, but the atomic UPDATE is the
+// defense-in-depth fix — costs ~one transaction per failure (rare),
+// gains correctness independent of caller serialization.
 func (e *Engine) recordPersistentFullSyncFailure(projName string) int {
 	if e.state == nil {
 		return 0
 	}
-	raw, _ := e.state.GetMeta(consecFullSyncFailKey + projName)
-	n := 0
-	if raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil {
-			n = v
-		}
+	n, err := e.state.IncrementMetaCounter(consecFullSyncFailKey + projName)
+	if err != nil {
+		// On state-DB error, fall back to a non-zero count so the
+		// caller's "n == circuitBreakerThreshold" check has a stable
+		// floor (without the increment, breaker emission would also
+		// be lost).
+		e.log.Warn("state increment counter failed; breaker tally may be inaccurate",
+			"project", projName, "error", err)
+		return 1
 	}
-	n++
-	e.state.SetMeta(consecFullSyncFailKey+projName, strconv.Itoa(n))
 	return n
 }
 

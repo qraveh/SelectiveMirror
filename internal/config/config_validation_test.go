@@ -507,6 +507,75 @@ func TestValidate_LocalPath_NormalDirAllowed(t *testing.T) {
 	}
 }
 
+// SM-206: subdirectories of system dirs must be rejected, not just
+// the exact path. Pre-fix, `C:\Windows\Logs` (a real Windows path
+// with 600+ files) sailed through the exact-match check.
+func TestValidate_LocalPath_SystemDirSubdirRejected(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("system-dir env vars are Windows-specific")
+	}
+	sr := os.Getenv("SystemRoot")
+	if sr == "" {
+		t.Skip("SystemRoot env var unset")
+	}
+	candidates := []string{
+		filepath.Join(sr, "Logs"),
+		filepath.Join(sr, "System32"),
+		filepath.Join(sr, "Temp"),
+	}
+	for _, p := range candidates {
+		if reason := isUnsafeLocalPath(p); reason == "" {
+			t.Errorf("expected subdirectory of %%SystemRoot%% (%s) to be rejected", p)
+		}
+	}
+}
+
+// SM-207: \\?\ extended-length prefix must be stripped before the
+// system-dir check. Pre-fix, `\\?\C:\Windows\Logs` sailed through
+// because the literal-string compare missed the prefix.
+func TestValidate_LocalPath_ExtendedLengthPrefixStripped(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("Windows-specific extended-length form")
+	}
+	sr := os.Getenv("SystemRoot")
+	if sr == "" {
+		t.Skip("SystemRoot env var unset")
+	}
+	cases := []string{
+		`\\?\` + sr,
+		`\\?\` + filepath.Join(sr, "Logs"),
+		`\\?\` + filepath.Join(sr, "System32"),
+	}
+	for _, p := range cases {
+		if reason := isUnsafeLocalPath(p); reason == "" {
+			t.Errorf("expected extended-length form of system path (%s) to be rejected", p)
+		}
+	}
+}
+
+// SM-208: UNC paths (\\server\share\...) must be rejected outright.
+// Pre-fix, `\\COMPUTERNAME\C$\Windows\Logs` sailed through because
+// the env-var check uses drive-letter form (no UNC equivalent).
+func TestValidate_LocalPath_UNCRejected(t *testing.T) {
+	if filepath.Separator != '\\' {
+		t.Skip("UNC form is Windows-specific")
+	}
+	cases := []string{
+		`\\COMPUTERNAME\C$\Users\Public\Desktop`,
+		`\\server\share\path`,
+		`\\server\share`,
+	}
+	for _, p := range cases {
+		reason := isUnsafeLocalPath(p)
+		if reason == "" {
+			t.Errorf("expected UNC path %q to be rejected", p)
+		}
+		if reason != "" && !strings.Contains(reason, "UNC") {
+			t.Errorf("UNC rejection reason for %q should mention UNC, got %q", p, reason)
+		}
+	}
+}
+
 // GAP-5: traversal-shaped remote rejected.
 func TestValidate_Remote_TraversalRejected(t *testing.T) {
 	cases := []string{

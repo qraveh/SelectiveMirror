@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.yaml.in/yaml/v3"
 )
 
 // testConfigDir creates a temp dir with a valid minimal config file.
@@ -425,6 +427,65 @@ func TestAddMirror_RejectsControlCharsInName(t *testing.T) {
 			lowerErr := strings.ToLower(err.Error())
 			if !strings.Contains(lowerErr, "control") && !strings.Contains(lowerErr, "del") {
 				t.Errorf("error %v doesn't mention control char or DEL", err)
+			}
+		})
+	}
+}
+
+// SM-205 CRITICAL: addmirror with YAML-special characters in
+// local_path or name must round-trip correctly through the YAML
+// emit + reparse cycle. Pre-fix used `%s` (unquoted) for both
+// name and local_path; ` #x` mid-value got parsed as a YAML
+// end-of-line comment, truncating the path. The fix uses `%q`
+// (Go-double-quoted form, which YAML accepts as a double-quoted
+// scalar with `\\` for backslash) for both fields.
+//
+// The reproducer specifically uses ` #` (space-hash) because YAML
+// 1.2 §6.6 says "Outside scalars, characters following the # are
+// considered to be a comment, which can also be used to introduce
+// the meaning of an indicator". The space-then-hash is the
+// minimal trigger.
+func TestAddMirror_YAMLSpecialCharsInPath_RoundTrip(t *testing.T) {
+	cases := []struct {
+		name      string
+		mirrorName string
+		mirrorPath string
+	}{
+		{"hash-comment in path", "foo bar #x", "C:\\Temp\\foo bar #x"},
+		{"hash-comment in name", "name#suffix", "C:\\Temp\\plain"},
+		{"colon-space in path", "colonpath", "C:\\Temp\\foo: bar"},
+		{"leading dash in name", "-leading", "C:\\Temp\\plain"},
+		{"yaml folded indicator", ">folded", "C:\\Temp\\plain"},
+		{"yaml literal indicator", "|literal", "C:\\Temp\\plain"},
+		{"yaml anchor", "&anchor", "C:\\Temp\\plain"},
+		{"yaml alias", "*alias", "C:\\Temp\\plain"},
+		{"yaml tag", "!tag", "C:\\Temp\\plain"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			block := formatMirrorBlock(Project{
+				Name:      tc.mirrorName,
+				LocalPath: tc.mirrorPath,
+				Remote:    "x:y",
+			})
+			// The block must round-trip through yaml unmarshal
+			// without losing any character of the name/path.
+			yamlText := "mirrors:\n" + block + "\n"
+			var parsed struct {
+				Mirrors []Project `yaml:"mirrors"`
+			}
+			if err := yaml.Unmarshal([]byte(yamlText), &parsed); err != nil {
+				t.Fatalf("yaml unmarshal failed: %v\nblock:\n%s", err, block)
+			}
+			if len(parsed.Mirrors) != 1 {
+				t.Fatalf("expected 1 mirror, got %d\nblock:\n%s", len(parsed.Mirrors), block)
+			}
+			got := parsed.Mirrors[0]
+			if got.Name != tc.mirrorName {
+				t.Errorf("name round-trip lost characters: got %q, want %q\nblock:\n%s", got.Name, tc.mirrorName, block)
+			}
+			if got.LocalPath != tc.mirrorPath {
+				t.Errorf("local_path round-trip lost characters: got %q, want %q\nblock:\n%s", got.LocalPath, tc.mirrorPath, block)
 			}
 		})
 	}

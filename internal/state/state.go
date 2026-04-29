@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -631,6 +632,56 @@ func (s *Store) GetMeta(key string) (string, error) {
 		return "", nil
 	}
 	return v, err
+}
+
+// IncrementMetaCounter atomically increments an integer-valued meta
+// key and returns the new value. SM-209: the prior pattern in the
+// sync engine was a Go-level read-modify-write
+// (`raw, _ := GetMeta(...); n, _ := strconv.Atoi(raw); n++;
+// SetMeta(...)`) which is non-atomic across goroutines even though
+// the SQL operations themselves serialize through the single
+// connection. Two concurrent failures of the same project could read
+// the same starting value and each write `n+1`, losing one
+// increment.
+//
+// This method wraps the read-modify-write in a transaction so the
+// SELECT-UPDATE pair runs as one critical section. With
+// db.SetMaxOpenConns(1), a second concurrent caller's Begin blocks
+// until the first commits — clean atomicity.
+//
+// Non-integer existing values are reset to 1 (treated as "first
+// failure" rather than failing-the-failure-emitter on parse errors;
+// the alternative would mask the actual sync failure behind a state
+// DB issue).
+func (s *Store) IncrementMetaCounter(key string) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var raw sql.NullString
+	if err := tx.QueryRow("SELECT value FROM meta WHERE key = ?", key).Scan(&raw); err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+	n := 0
+	if raw.Valid && raw.String != "" {
+		if v, atoiErr := strconv.Atoi(raw.String); atoiErr == nil {
+			n = v
+		}
+	}
+	n++
+
+	if _, err := tx.Exec(
+		"INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+		key, strconv.Itoa(n),
+	); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // HashFile computes the MD5 hash of a file.

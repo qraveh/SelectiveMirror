@@ -578,6 +578,29 @@ func isUnsafeLocalPath(p string) string {
 	if p == "" {
 		return ""
 	}
+
+	// SM-207: strip Windows extended-length-path prefixes before any
+	// other check. `\\?\C:\Windows\Logs` and `\\?\C:\Windows` name the
+	// same files as `C:\Windows\Logs` / `C:\Windows`, but a literal
+	// string compare against `os.Getenv("SystemRoot")` (which is
+	// always the drive-letter form) misses them. Same for the UNC
+	// extended-length form `\\?\UNC\server\share` → `\\server\share`.
+	if strings.HasPrefix(p, `\\?\UNC\`) {
+		p = `\\` + p[len(`\\?\UNC\`):]
+	} else if strings.HasPrefix(p, `\\?\`) {
+		p = p[len(`\\?\`):]
+	}
+
+	// SM-208: refuse UNC paths outright. There's no clear use case for
+	// "mirror an SMB share" that doesn't have a more legitimate
+	// expression as a drive-letter mount, and UNC bypasses the system-
+	// directory check below (env vars are stored in drive-letter form,
+	// so `\\COMPUTERNAME\C$\Windows` would otherwise sail through).
+	// `\\?\` is already stripped above; remaining `\\` is a real UNC.
+	if strings.HasPrefix(p, `\\`) {
+		return "UNC paths (\\\\server\\share) are not valid mirror sources; mount the share as a drive letter and use that path instead"
+	}
+
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "" // let downstream Stat surface the real problem
@@ -593,14 +616,30 @@ func isUnsafeLocalPath(p string) string {
 		return "filesystem root '/' is not a valid mirror source (choose a sub-directory)"
 	}
 
-	// Windows system directories. Compare case-insensitively.
+	// SM-206: Windows system directories — match the path itself OR
+	// any subdirectory below it. Pre-fix used exact-match equality, so
+	// a user pointing at `C:\Windows\Logs` (672 system files) or
+	// `C:\ProgramData\Microsoft` (thousands) sailed through while only
+	// `C:\Windows` (literally) was blocked. The exact-match policy
+	// failed the GAP-4 stated intent ("recurses over millions of
+	// entries… almost always misconfigurations"). Now blocks any path
+	// at-or-under each system directory; separator-boundary check on
+	// the prefix prevents `C:\WindowsApps` (a sibling) from spuriously
+	// matching `C:\Windows`.
 	envVars := []string{"SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "windir"}
 	cleanedLower := strings.ToLower(cleaned)
+	sep := string(filepath.Separator)
 	for _, ev := range envVars {
-		if val := os.Getenv(ev); val != "" {
-			if cleanedLower == strings.ToLower(filepath.Clean(val)) {
-				return "system directory %" + ev + "% is not a valid mirror source"
-			}
+		val := os.Getenv(ev)
+		if val == "" {
+			continue
+		}
+		envLower := strings.ToLower(filepath.Clean(val))
+		if cleanedLower == envLower {
+			return "system directory %" + ev + "% is not a valid mirror source"
+		}
+		if strings.HasPrefix(cleanedLower, envLower+sep) {
+			return "subdirectory of system directory %" + ev + "% is not a valid mirror source (recurses over privileged content)"
 		}
 	}
 

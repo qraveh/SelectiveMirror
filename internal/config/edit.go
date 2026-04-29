@@ -388,10 +388,32 @@ func removeMirrorLocked(configPath, name string) error {
 
 // formatMirrorBlock formats a Project as a YAML list item with 2-space indent.
 // Only includes fields that have non-zero values.
+//
+// SM-205 CRITICAL: name and local_path are now `%q`-quoted (Go's
+// double-quoted form) to match the existing remote/syncignore_path/
+// pre_sync_hook/post_sync_hook treatment. Pre-fix, the asymmetric
+// `%s`-unquoted form for name + local_path silently corrupted on YAML
+// special characters — most dangerously the unescaped ` #` mid-value,
+// which YAML 1.2 interprets as an end-of-line comment, truncating the
+// path. A user who typed `addmirror "C:\Temp\foo bar #x"` got a
+// mirror registered at `local_path: C:\Temp\foo bar` (with the
+// trailing ` #x` parsed as a comment) — and if a directory with that
+// truncated name happened to exist, the wrong directory's contents
+// would be uploaded to the remote with no error.
+//
+// `%q` writes Go-escaped strings, which YAML's double-quoted-scalar
+// rules accept verbatim: `\\` for backslash, `\"` for quote,
+// non-printable Unicode escaped. Empirically verified that yaml.v3
+// round-trips Go-`%q` paths correctly on Windows.
+//
+// delete_policy stays unquoted because its value space is a closed
+// set ("ignore" / "delete" / "mirror" / "quarantine") with no YAML-
+// special characters and validateDeletePolicyString rejects anything
+// outside it.
 func formatMirrorBlock(p Project) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("  - name: %s\n", p.Name))
-	b.WriteString(fmt.Sprintf("    local_path: %s\n", p.LocalPath))
+	b.WriteString(fmt.Sprintf("  - name: %q\n", p.Name))
+	b.WriteString(fmt.Sprintf("    local_path: %q\n", p.LocalPath))
 	b.WriteString(fmt.Sprintf("    remote: %q\n", p.Remote))
 
 	if p.DebounceSec > 0 {
