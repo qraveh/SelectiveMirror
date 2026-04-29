@@ -2,9 +2,9 @@
 
 ## SelectiveMirror — Compliance with 29148:2018, 25010:2023, 25023:2016, 29119:2023
 
-**Document Version**: 0.4 (Parallel-session integration)
-**Date**: 2026-04-27
-**Status**: **SELF-ASSESSMENT — retained for v1.0**. External independent review committed for v1.0.1 / v1.1 (action `A-GOV-01`). v1.0 ships with explicit "Partial ISO Compliance" disclosure in `README.md` and `CHANGELOG.md`.
+**Document Version**: 0.6 (Multi-role review remediation; 2026-04-29 evening). Bumped from header-stale 0.4 per F-1 of the 2026-04-29 ISO audit re-evaluation; full version history in §10.4.
+**Date**: 2026-04-27 (original); 2026-04-29 (v0.6 remediation pass)
+**Status**: **SELF-ASSESSMENT — retained permanently** per A-GOV-01 (decided 2026-04-29: external review is **not** planned; the project is a deliberate Non-Conformity by Choice on 29148:2018 §5.2.4 / §6.5). v1.0 ships with explicit "Partial ISO Compliance" disclosure in `README.md` and `CHANGELOG.md`.
 **Release strategy**: Option β (ship 2026-05-01 with disclosure; close compliance gaps in v1.0.1 / v1.1).
 **v0.4 integration**: incorporates 5 commits (0.9.8..0.9.12-dev) that landed in parallel after v0.3 was baselined. Several actions advanced; new bugs SM-155 and SM-156 filed; new action `A-29119-12` added (per-release VV-Plan §5.2 re-measurement ritual).
 **Accountable owner**: Raveh (project lead). All actions in §9 are owned by Raveh; the *role-context* column names the BMad persona (John/Winston/Paige/Amelia) Raveh adopts when executing the action.
@@ -663,15 +663,22 @@ External / independent ISO compliance review is **NOT planned** for SelectiveMir
 
 Recorded 2026-04-29 as part of A-GOV-04 progress. Maps each panel-review finding (Rounds 2–11, plus the SEC-H6 regression) to its GitHub issue number, severity, and current status.
 
+> **Numbering-system collision (recorded 2026-04-29 evening, F-2 of the ISO audit re-evaluation)**: the SM-NNN labels in this section refer to **GitHub issues** in the qraveh/SelectiveMirror repository, per A-GOV-04's GitHub-canonical decision. The local `C:\BugTracker\projects\SelectiveMirror\` filesystem-tracker uses the same SM-NNN numbering scheme but contains DIFFERENT content under SM-152..SM-156 (filed 2026-04-27 as ISO-audit findings, never migrated to GitHub) and SM-190..SM-198 (filed 2026-04-29 by the Codex audit). Treat the two systems as separate namespaces:
+> - When a CHANGELOG entry, commit message, or this `iso-compliance.md` row references an SM-NNN, it is the **GitHub issue** number unless explicitly noted otherwise.
+> - The BugTracker entries are not retroactively renumbered (they ship with closed CHANGELOG/commit references that would become misleading if relabeled). Going forward, when filing a new bug, check both systems and pick a number that's free in both — the next safely-free range as of 2026-04-29 evening is **SM-199 onwards**.
+> - The cleaner long-term resolution (single source of truth) is deferred; would require either migrating the BugTracker findings to GitHub or moving the GitHub issues to a non-colliding label. Both are v1.1+ scope.
+> - The audit recommendation (renumber the panel-found GitHub issues to SM-190+) was not executed because (a) the SM-190..198 range is now also taken (by Codex audit filings), and (b) renumbering closed issues retroactively would invalidate shipped CHANGELOG/commit references. Documenting the collision honestly is the v1.0 compromise.
+
 | SM-NNN | GH # | Severity | Title | Source | Status | Closing commit |
 |---|---|---|---|---|---|---|
 | SM-152 | #155 | minor | SEC-H6 regression: fresh config.yaml + heartbeat.txt mode 0644 | Round 4 + ISO compliance review §4 #1 | **CLOSED** | `93273d1` (0.9.38-dev) |
-| SM-153 | #156 | critical | BUG-R4-1: concurrent addmirror destroys pre-existing seed mirror | Round 4 §3 | OPEN | — |
-| SM-154 | #157 | major | FIND-R4-1: per-file hooks do not fire on batch sync | Round 4 §4 | OPEN | — |
-| SM-155 | #158 | minor | alert_min_severity typo accepted by Validate() | Round 4 §6 | OPEN | — |
-| SM-156 | #159 | minor | BUG-R3-1: gitignore parent-exclusion + child negation divergence | Round 3 + Round 11 reconfirm | OPEN (in release.yml allowlist) | — |
-| SM-157 | #160 | minor | BUG-R5-1: anomaly.Rotate is never invoked | Round 5 + Round 9/10 endurance | OPEN | — |
-| SM-158 | #161 | minor | NEW-R10-1: failed sync-now cycles produce zero anomaly files | Round 10 + Round 11 reconfirm | OPEN | — |
+| SM-153 | #156 | critical | BUG-R4-1: concurrent addmirror destroys pre-existing seed mirror | Round 4 §3 | **CLOSED** | `dee8ba8` (0.9.44-dev) |
+| SM-154 | #157 | major | FIND-R4-1: per-file hooks do not fire on batch sync | Round 4 §4 | **CLOSED by deferral** | `e4e4eb1` (0.9.50-dev) |
+| SM-155 | #158 | minor | alert_min_severity typo accepted by Validate() | Round 4 §6 | **CLOSED** | `9c13d11` (0.9.42-dev) |
+| SM-156 | #159 | minor | BUG-R3-1: gitignore parent-exclusion + child negation divergence | Round 3 + Round 11 reconfirm | **CLOSED by decision** | `424d672` (0.9.49-dev) |
+| SM-157 | #160 | minor | BUG-R5-1: anomaly.Rotate is never invoked | Round 5 + Round 9/10 endurance | **CLOSED** | `e1a459f` (0.9.45-dev) |
+| SM-158 | #161 | minor | NEW-R10-1: failed sync-now cycles produce zero anomaly files | Round 10 + Round 11 reconfirm | **CLOSED** | `a198724` (0.9.48-dev) |
 | SM-159 | #162 | cosmetic | R12-OBS: rclone 2.x classified as Full Compatibility | Round 7 rclone-reviewer #8; Round 12 confirm | OPEN | — |
+| SM-160 | #163 | minor | Hooks deferred from v1.0 — possible future feature | RESOLUTION-2026-04-29-hooks-deferred.md | OPEN (tracker) | — |
 
-**Going forward**: any new panel-found bug gets a fresh SM-NNN (continuing from 160 onwards) and is filed as a GitHub issue at the same time as the panel-review document is committed. The CHANGELOG closure entry references the SM-NNN, the GitHub issue references the closing commit, and the panel review references the SM-NNN. Three-way cross-link.
+**Going forward**: any new panel-found bug gets a fresh SM-NNN (continuing from SM-199 onwards as of 2026-04-29 evening — see numbering-system-collision note above) and is filed as a GitHub issue at the same time as the panel-review document is committed. The CHANGELOG closure entry references the SM-NNN, the GitHub issue references the closing commit, and the panel review references the SM-NNN. Three-way cross-link.

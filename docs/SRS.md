@@ -503,6 +503,32 @@ This section is organized by ISO/IEC 25010 quality characteristics (2011 layout 
 | NFR-AC-01 | System SHALL NOT open network listeners | Minimizes attack surface; outbound-only via rclone | Zero inbound ports | Met |
 | NFR-AC-02 | System SHALL prevent directory traversal via symlink-to-directory rejection | Symlink escape could sync files outside project boundary | Reject symlink-to-dir in watcher setup | Met |
 
+#### 4.6.5 Authenticity
+
+*Stub NFRs (added 2026-04-29 per F-4 of the ISO audit re-evaluation): the project shipped substantive Authenticity engineering — TOCTOU defenses, NTFS reparse-point handling, state-DB symlink rejection, service-mode symlink-reject — without a corresponding NFR home. Full elaboration with measurement functions per ISO/IEC 25023 §5.2 is deferred to v1.0.1 (recommendation δ of `docs/iso-compliance-review-2026-04-29.md`). Stubs are sufficient to give the engineering surface a doc-traceable home for v1.0.*
+
+| ID | Requirement | Rationale | Target | Status |
+|----|------------|-----------|--------|--------|
+| NFR-AU-01 | System SHALL detect and reject filesystem-object identity swaps between quiescence verification and rclone copyto invocation. | TOCTOU defense (SEC-H3): an attacker writing into a watched mirror could swap a regular file for a symlink to a sensitive system file between the engine's hash computation and rclone's read; the symlink would then be uploaded to remote. | `os.Lstat` re-check immediately before subprocess invocation; abort and re-enqueue if mode changed. | Met (`internal/sync/sync.go::syncSingleFile` lines 585+) |
+| NFR-AU-02 | System SHALL refuse to follow NTFS reparse points that escape the configured project root. | Reparse-point escape was the SEC-H4 / SEC-H5 / PF-A3 finding cluster; LocalSystem service mode would otherwise inherit the user's planted junctions. | Reject reparse points in watcher setup and recursive walkers. | Met (`internal/watcher/recurse_windows.go`, `internal/watcher/reparse_windows.go`) |
+| NFR-AU-03 | System SHALL refuse to open the state DB via a symlinked path. | SEC-H7: a symlink at `~/.selectivemirror/state.db` pointing at a writable system file would let LocalSystem-service-mode writes corrupt admin-owned files. | `os.Lstat`-then-reject before any SQLite open. | Met (`internal/state/state.go::Open` SEC-H7 block) |
+
+#### 4.6.6 Resistance
+
+| ID | Requirement | Rationale | Target | Status |
+|----|------------|-----------|--------|--------|
+| NFR-RS-01 | Configuration validation SHALL reject inputs that would enable command injection, path traversal, or rclone-flag denylist bypass. | GAP-1..5 + SEC-M batch closed concrete attack vectors (rclone_extra_flags `--rc` / `--log-file` / `--config` / `--password-command` denylist with non-ASCII confusables also blocked; remote-name traversal-shape rejection; control-character rejection in identifiers). | `Validate()` enforces denylist + traversal-shape + control-char regex; PR-S6 blocks ASCII/Unicode confusables for flag names. | Met (`internal/config/config.go::validateRcloneExtraFlags`, `Validate`) |
+| NFR-RS-02 | Hooks SHALL execute in a Job Object on Windows so child processes are killed when the parent times out. | SEC-M14 / PF-A5: a runaway hook subprocess could outlive smirror and leak resources. | Windows Job Object kill-tree on timeout. | Met (`internal/hooks/hooks.go` Windows path) |
+| NFR-RS-03 | Hash verification of downloaded rclone binary SHALL precede installation. | SEC-H11: the auto-installer downloads rclone from `downloads.rclone.org`; an MITM-substituted binary would gain the install privilege of the running user. | Compare against `.sha256` sibling fetched from same server before extracting. | Met (`installer/install-rclone.ps1`) |
+
+#### 4.6.7 Privacy
+
+| ID | Requirement | Rationale | Target | Status |
+|----|------------|-----------|--------|--------|
+| NFR-PR-01 | Telemetry SHALL emit zero outbound traffic at the None tier and SHALL NOT include file names, paths, or credentials at any tier. | Three-tier consent model (None / Standard / Reliability) with default = None; Standard sends version + install-id only; Reliability adds anomaly counts. | Outbound-byte gate at None; payload schema enforced by `internal/telemetry` and the Cloudflare Worker proxy. | Met (`internal/telemetry/telemetry.go`, `internal/telemetry/sanitize.go`, three-tier consent registry) |
+| NFR-PR-02 | Diagnostic outputs (`report-bug`, `crash-report`, `status --sanitize`) SHALL pass through a single shared sanitizer that redacts paths, mirror names, and credential-style key=value pairs. | SEC-L4 vs SEC-M-4 deadlock: status.json on disk stays raw for local-debug readability; sharing-time entry points run the redactor uniformly. | `internal/telemetry/sanitize.go::SanitizeReport` is the single redactor; consumed by `cmdReportBug`, `crashreport.go`, `cmdStatus` (--sanitize). | Met (`SanitizeReport` + per-call wiring) |
+| NFR-PR-03 | Anomaly logs SHALL not leak per-mirror local paths even when service-mode home is `C:\Windows\System32`. | SEC-M5: per-mirror `local_path` prefixes registered with the anomaly sanitizer and substituted with `<mirror>` placeholder. SM-195: case-insensitive on Windows. | `anomaly.SetExtraSanitizePrefixes` populated from `cfg.Projects` at startup. | Met (`internal/anomaly/sanitize.go`) |
+
 ### 4.7 Maintainability
 
 *Degree of effectiveness and efficiency with which a product can be modified.*
