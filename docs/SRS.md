@@ -5,7 +5,7 @@
 **Document Version**: 1.1 (ISO compliance revision) — 2026-04-27
 **Date**: 2026-04-06 (baseline 1.0); 2026-04-18 (status refresh); 2026-04-27 (1.1 ISO compliance revision)
 **Author**: Raveh / Claude (iterative collaboration)
-**Project Version**: 0.9.7-dev (source-current at this revision)
+**Project Version**: 0.9.53-dev (source-current at this revision; 2026-04-29 doc sweep)
 **Status**: BASELINED — approved for v1.0 release planning. ISO compliance status: **Partial** (see `docs/iso-compliance.md`).
 
 ---
@@ -518,7 +518,7 @@ This section is organized by ISO/IEC 25010 quality characteristics (2011 layout 
 
 | ID | Requirement | Rationale | Target | Measurement | Status |
 |----|------------|-----------|--------|-------------|--------|
-| NFR-TE-01 | Unit test count SHALL exceed 280 across all packages | Regression safety net for rapid development | > 280 tests | `go test ./internal/... ./cmd/... -count=1` | Met (608 tests across 15 packages; total internal/ statement coverage **66.6%** — measured 2026-04-27, above v1.0 60% target). Watcher at 59.3% (was reported as 16.6% in `VV-Plan.md` §5.2 — that baseline was 9 days stale; see SM-155). Full watcher refactor for testability (X-04 in `docs/iso-compliance.md`) deferred to v1.0.1; v1.0 ships at current 59.3% with no further blockers. |
+| NFR-TE-01 | Unit test count SHALL exceed 280 across all packages | Regression safety net for rapid development | > 280 tests | `go test ./internal/... ./cmd/... -count=1` | Met (650+ tests across 16 packages; total internal/ statement coverage **66.0%** — re-measured 2026-04-29 against 0.9.53-dev, above v1.0 60% target). Watcher at 59.5% (was reported as 16.6% in `VV-Plan.md` §5.2 — that baseline was 9 days stale; see SM-155). Full watcher refactor for testability (X-04 in `docs/iso-compliance.md`) deferred to v1.0.1; v1.0 ships at current 59.5% with no further blockers. |
 | NFR-TE-02 | All tests SHALL pass with `-race` detection | Concurrency bugs are the hardest class to reproduce | Zero data races | `go test -race` on concurrent packages | Met |
 | NFR-TE-03 | Critical subsystems SHALL have injectable dependencies for test isolation | Tests must not require rclone or network | ListRemoteFunc, syncer interface | Met |
 | NFR-TE-04 | Bug hunt markers (SM-xxx) SHALL link each regression test to the bug it covers | Traceability from test to requirement to fix | Every SM-xxx test documents the scenario | Met |

@@ -241,11 +241,11 @@ For each package, identify:
 
 | Metric | Value (baseline v0.5.0 → current v0.9.x) |
 |--------|------------------------------------------|
-| Total statement coverage (internal/) | 35.8% → **66.4%** (re-measured 2026-04-29 against v0.9.39-dev) |
+| Total statement coverage (internal/) | 35.8% → **66.0%** (re-measured 2026-04-29 against 0.9.53-dev; was 66.4% against 0.9.39-dev) |
 | Total functions | 184 → grown with anomaly/hooks/telemetry/fsutil packages |
 | Functions at 0% | 137 (74.5%) at baseline; reduced materially but watcher still has 8 of 27 functions at 0% (NewManager, Start, Stop, eventLoop, healthMonitor, isLinkToDir, removeRecursive, WatchCount) |
-| Unit test count | 530+ → **640+** |
-| System-validation tests (panel review rounds 2-11) | new artifact class; ~120 tests across 10 round files |
+| Unit test count | 530+ → **650+** (656 top-level Test/Fuzz across 16 packages; 871 incl. subtests) |
+| System-validation tests (panel review rounds 2-13) | new artifact class; ~140 tests across 12 round files (+ Round 12 fuzz / rclone matrix, Round 13 cloud-backend) |
 | Integration tests | 66 + 11 stress → 123 integration cases |
 | Fuzz tests | 2 targets (filter, config); 30s × 2 targets, 18M+ execs clean |
 | Test code lines | 6,798 (Go) + 1,150 (PowerShell) at baseline; grown with panel-review tests |
