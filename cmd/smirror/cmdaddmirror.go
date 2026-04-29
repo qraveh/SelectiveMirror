@@ -313,6 +313,9 @@ global_excludes:
   - "*.tmp"
   - ".~lock.*"
   - "*~"
+  - Thumbs.db
+  - desktop.ini
+  - "*.lnk"
 `, baseRemote)
 		// SEC-H6 regression closure (panel R4): fresh config.yaml MUST be
 		// 0600 to match SECURITY.md baseline. The 0644 here was a creation-

@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.46-dev"
+var version = "0.9.47-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -2878,6 +2878,17 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 				// disabled), so unconditional invocation is safe.
 				if removed, err := anomaly.Rotate(filepath.Join(dd, "anomalies"), anomaly.DefaultRotation()); err == nil && removed > 0 {
 					slog.Info("anomaly archives rotated", "removed", removed)
+				}
+
+				// Tier-2 #6 (validation panel 2026-04-29): VACUUM the state
+				// DB at most once a week. PruneOldLogs above frees pages
+				// internally but does not return them to the OS; without
+				// VACUUM the file grows monotonically. Errors are non-fatal
+				// — the DB remains usable, just bloated.
+				if vacuumed, err := st.VacuumIfStale(); err != nil {
+					slog.Warn("state vacuum failed", "error", err)
+				} else if vacuumed {
+					slog.Info("state vacuumed")
 				}
 			}
 

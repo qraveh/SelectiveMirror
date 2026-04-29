@@ -51,6 +51,9 @@ global_excludes:
   - "*.tmp"
   - ".~lock.*"     # LibreOffice lock files
   - "*~"           # Backup files (editors, OS file replacement)
+  - Thumbs.db      # Windows Explorer thumbnail cache
+  - desktop.ini    # Windows Explorer folder customization
+  - "*.lnk"        # Windows shortcut files
 
 # State and log locations (default: ~/.selectivemirror/)
 # state_db: ~/.selectivemirror/state.db

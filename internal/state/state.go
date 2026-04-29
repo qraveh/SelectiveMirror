@@ -193,6 +193,26 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("migration: %w", err)
 	}
 
+	// Tier-2 #7 (validation panel 2026-04-29): defense against silent
+	// corruption. SQLite can persist torn pages or partially-written WAL
+	// segments after an unclean shutdown; the daemon would then operate
+	// on quietly inconsistent state for hours before `smirror
+	// test-mirrors` notices. PRAGMA integrity_check at Open is the
+	// canonical SQLite recipe — fast on small DBs (sync_state stays well
+	// under 100 MB even for large mirrors), and surfacing corruption at
+	// startup is far cheaper than discovering it under load.
+	{
+		var result string
+		if err := db.QueryRow("PRAGMA integrity_check").Scan(&result); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("integrity_check pragma failed: %w", err)
+		}
+		if result != "ok" {
+			db.Close()
+			return nil, fmt.Errorf("state DB integrity_check returned %q (expected \"ok\"); suggestion: back up %s and either restore a known-good copy or delete state.db to start fresh", result, dbPath)
+		}
+	}
+
 	s := &Store{db: db, WasFreshOpen: wasFresh, WasZeroByteOpen: wasZero}
 
 	// schema_version: never downgrade. An older binary running a read-only
@@ -258,6 +278,38 @@ func (s *Store) PruneOldLogs(retentionDays int) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+// vacuumInterval is the minimum time between VACUUM passes. Weekly is
+// the validation panel's recommendation — frequent enough to bound the
+// state-DB file size against PruneOldLogs / DeleteProject churn, rare
+// enough that the cost (a full table rewrite) is negligible amortized.
+const vacuumInterval = 7 * 24 * time.Hour
+
+// VacuumIfStale runs SQLite VACUUM if more than vacuumInterval has
+// elapsed since the last successful VACUUM. Without this, DELETE
+// statements (PruneOldLogs, DeleteProject) free pages internally but
+// do not return them to the filesystem — the state-DB file grows
+// monotonically across the daemon's lifetime even on a steady-state
+// workload. Tier-2 #6 (validation panel 2026-04-29).
+//
+// Returns true if VACUUM was run, false if skipped because the last
+// run was recent. Errors are returned for the caller to decide
+// whether to log; VACUUM failures are not fatal (state remains
+// usable, just bloated).
+func (s *Store) VacuumIfStale() (bool, error) {
+	if last, _ := s.GetMeta("last_vacuum_at"); last != "" {
+		if t, err := time.Parse(time.RFC3339, last); err == nil {
+			if time.Since(t) < vacuumInterval {
+				return false, nil
+			}
+		}
+	}
+	if _, err := s.db.Exec("VACUUM"); err != nil {
+		return false, err
+	}
+	s.SetMeta("last_vacuum_at", time.Now().UTC().Format(time.RFC3339))
+	return true, nil
 }
 
 // DeleteProject removes all sync_state and sync_log rows for the given
