@@ -549,6 +549,9 @@ func runInitialSync(configPath string, mirrorNames []string) {
 
 	filters := buildFilters(cfg)
 	syncEngine := msync.NewEngine(cfg, st, filters, nil)
+	if rec := wireAnomalyRecorder(syncEngine, cfg); rec != nil {
+		defer rec.Close()
+	}
 
 	ctx := context.Background()
 

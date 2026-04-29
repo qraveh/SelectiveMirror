@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	gosync "sync"
 	"sync/atomic"
@@ -24,6 +25,45 @@ import (
 	"github.com/qraveh/SelectiveMirror/internal/metrics"
 	"github.com/qraveh/SelectiveMirror/internal/state"
 )
+
+// consecFullSyncFailKey is the meta-table prefix used to persist the
+// per-project consecutive-full-sync-failure counter across processes.
+// NEW-R10-1: a daemon's FairQueue keeps an in-memory counter that's
+// sufficient for daemon-mode breaker tripping, but each `smirror
+// sync-now` is a separate short-lived process whose in-memory counter
+// resets to zero. Persisting the counter lets 3 successive sync-now
+// invocations against a bogus remote trip the breaker in aggregate.
+const consecFullSyncFailKey = "consecutive_full_sync_failures_"
+
+// recordPersistentFullSyncFailure increments and returns the
+// persistent consecutive-full-sync-failure counter for a project.
+// Returns 0 if no state store is attached (test fakes).
+func (e *Engine) recordPersistentFullSyncFailure(projName string) int {
+	if e.state == nil {
+		return 0
+	}
+	raw, _ := e.state.GetMeta(consecFullSyncFailKey + projName)
+	n := 0
+	if raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			n = v
+		}
+	}
+	n++
+	e.state.SetMeta(consecFullSyncFailKey+projName, strconv.Itoa(n))
+	return n
+}
+
+// resetPersistentFullSyncFailures resets the persistent
+// consecutive-full-sync-failure counter for a project. Called from the
+// SyncFullProject success path so a single recovered sync clears any
+// breaker state from previous failures.
+func (e *Engine) resetPersistentFullSyncFailures(projName string) {
+	if e.state == nil {
+		return
+	}
+	e.state.SetMeta(consecFullSyncFailKey+projName, "0")
+}
 
 // TaskType distinguishes sync from delete operations.
 type TaskType int
@@ -706,6 +746,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 		e.log.Info("full sync complete", "project", proj.Name, "ms", elapsed.Milliseconds())
 		e.state.LogAction(proj.Name, "", "full_sync", fmt.Sprintf("ok, %dms", elapsed.Milliseconds()), elapsed.Milliseconds())
 		e.state.SetMeta("last_full_sync_"+proj.Name, time.Now().UTC().Format(time.RFC3339))
+		e.resetPersistentFullSyncFailures(proj.Name) // NEW-R10-1
 		e.Queue.RecordSuccess(proj.Name)
 
 		// SM-083: Backfill state DB for files synced by batch reconciliation.
@@ -724,11 +765,28 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 	if e.metrics != nil {
 		e.metrics.RecordError(proj.Name, fmt.Sprintf("full sync rclone exit %d", exitCode))
 	}
-	if e.Queue.RecordFailure(proj.Name) {
-		e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, "",
-			fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold),
-			fmt.Sprintf("last rclone exit code: %d (full sync)", exitCode))
+
+	// NEW-R10-1: emit KindSyncFailure on every full-sync failure so each
+	// sync-now error is visible in the anomaly log even before the breaker
+	// trips. Persistent counter survives across CLI invocations so 3 failed
+	// sync-now calls (each its own short-lived process) trip the breaker
+	// in aggregate. The per-process FairQueue counter still drives daemon-
+	// mode dequeue backoff but no longer gates breaker-anomaly emission.
+	n := e.recordPersistentFullSyncFailure(proj.Name)
+	if e.Anomaly != nil {
+		e.Anomaly.Record(anomaly.KindSyncFailure, proj.Name, "",
+			fmt.Sprintf("full sync failed: rclone exit %d", exitCode),
+			fmt.Sprintf("ms=%d, consecutive_failures=%d", elapsed.Milliseconds(), n))
+		if n == circuitBreakerThreshold {
+			e.Anomaly.Record(anomaly.KindCircuitBreaker, proj.Name, "",
+				fmt.Sprintf("circuit breaker tripped after %d consecutive failures", circuitBreakerThreshold),
+				fmt.Sprintf("last rclone exit code: %d (full sync)", exitCode))
+		}
 	}
+
+	// Inform the in-memory FairQueue for dequeue-side backoff (daemon use).
+	e.Queue.RecordFailure(proj.Name)
+
 	return fmt.Errorf("rclone exit %d", exitCode)
 }
 

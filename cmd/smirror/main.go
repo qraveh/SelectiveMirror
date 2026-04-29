@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.47-dev"
+var version = "0.9.48-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -357,6 +357,36 @@ func buildFilters(cfg *config.Global) map[string]*filter.Engine {
 // dataDir returns the directory containing the state DB — used for lock, heartbeat, status.json.
 func dataDir(cfg *config.Global) string {
 	return filepath.Dir(cfg.StateDB)
+}
+
+// wireAnomalyRecorder attaches a fresh anomaly.Recorder to syncEngine
+// when anomaly detection is enabled in cfg. Returns the recorder so
+// the caller can defer Close on it; returns nil if anomaly detection
+// is disabled.
+//
+// NEW-R10-1: cmdSyncNow / runInitialSync used to skip this wiring
+// (only cmdStart and serviceMain configured the engine's recorder),
+// so failures from those code paths produced zero anomaly files even
+// with anomaly_detection_enabled=true. The persistent failure counter
+// in `internal/sync/sync.go::recordPersistentFullSyncFailure` provides
+// the cross-process state; this helper provides the recorder that
+// actually writes the anomaly JSONL files.
+func wireAnomalyRecorder(syncEngine *msync.Engine, cfg *config.Global) *anomaly.Recorder {
+	if !cfg.IsAnomalyDetectionEnabled() {
+		return nil
+	}
+	anomalyDir := filepath.Join(dataDir(cfg), "anomalies")
+	rec := anomaly.NewRecorder(anomaly.NewFileWriter(anomalyDir))
+	syncEngine.Anomaly = rec
+
+	// SEC-M5: register per-mirror local_path prefixes for anomaly
+	// path-sanitization (matches cmdStart / serviceMain wiring).
+	paths := make([]string, 0, len(cfg.Projects))
+	for _, p := range cfg.Projects {
+		paths = append(paths, p.LocalPath)
+	}
+	anomaly.SetExtraSanitizePrefixes(paths)
+	return rec
 }
 
 // severityAtLeast returns true if sev is at or above the threshold.
@@ -778,6 +808,9 @@ Examples:
 
 	filters := buildFilters(cfg)
 	syncEngine := msync.NewEngine(cfg, st, filters, nil)
+	if rec := wireAnomalyRecorder(syncEngine, cfg); rec != nil {
+		defer rec.Close()
+	}
 
 	ctx := context.Background()
 
