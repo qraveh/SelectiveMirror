@@ -98,15 +98,26 @@ func runExplainSuite(t *testing.T, suiteName string, rules []string, cases []exp
 	}
 }
 
-// CRITICAL per gitignore reviewer: child file under excluded directory
-// CANNOT be re-included via negation. Per spec, once a parent is excluded,
-// its children aren't even evaluated.
+// BUG-R3-1 / Documented divergence (decision recorded 2026-04-29):
+// smirror deliberately diverges from gitignore's "parent-exclusion blocks
+// child negation" rule. The gitignore spec says `foo/**` followed by
+// `!foo/bar/baz.txt` keeps the leaf EXCLUDED (because git never walks
+// into the excluded directory). smirror's matcher applies last-pattern-
+// wins per-file independently, re-including the leaf. The divergence is
+// intentional — for a selective-mirror tool, "exclude tree, keep one
+// file" is a useful authoring pattern; the gitignore restriction is a
+// git-implementation artifact. See docs/SRS.md FR-FILTER-01 (Documented
+// divergence note) and internal/filter/filter.go::IsExcluded comment.
+//
+// This test asserts smirror's documented behavior. The test name is
+// preserved from the original Round 3 review for traceability; the
+// expected outcome flipped on 2026-04-29.
 func TestPanelR3_Gitignore_ExcludedParentBlocksChildNegation(t *testing.T) {
 	t.Parallel()
-	runExplainSuite(t, "excluded-parent",
+	runExplainSuite(t, "documented-divergence",
 		[]string{"foo/**", "!foo/bar/baz.txt"},
 		[]explainCase{
-			{relPath: "foo/bar/baz.txt", excluded: true},  // spec: excluded (parent dir excluded)
+			{relPath: "foo/bar/baz.txt", excluded: false}, // smirror: re-included by leaf negation
 			{relPath: "foo/other.txt", excluded: true},
 			{relPath: "outside.txt", excluded: false},
 		},

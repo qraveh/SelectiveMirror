@@ -100,8 +100,7 @@ jobs:
           # Allowlist of known-RED tests. Each entry must also appear in
           # CHANGELOG `## Known issues` for the release to be tolerable.
           $allowed = @(
-              'TestPanelR3_Gitignore_ExcludedParentBlocksChildNegation', # BUG-R3-1: gitignore parent-exclusion + child negation divergence; documented deviation, fix planned for v1.0.
-              'TestPanelR4_Hooks_EnvVarsActuallyExported'                # FIND-R4-1: per-file hooks bypassed by batch sync; behavior decision (implement post-batch walk vs add project-level batch hooks) pending.
+              'TestPanelR4_Hooks_EnvVarsActuallyExported' # FIND-R4-1: per-file hooks bypassed by batch sync; behavior decision (implement post-batch walk vs add project-level batch hooks) pending.
           )
           $events = @(Get-Content ../system-validation-results.json | ForEach-Object { $_ | ConvertFrom-Json })
           $failed = $events | Where-Object { $_.Action -eq 'fail' -and $_.Test } | ForEach-Object { ($_.Test -split '/')[0] } | Sort-Object -Unique

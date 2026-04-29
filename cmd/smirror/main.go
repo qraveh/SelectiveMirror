@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.48-dev"
+var version = "0.9.49-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.

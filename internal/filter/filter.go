@@ -385,20 +385,19 @@ func (e *Engine) Generation() uint64 {
 // IsExcluded returns true if the relative path should be excluded from sync.
 // relPath should use forward slashes. Safe for concurrent use.
 //
-// BUG-R3-1 (panel review 2026-04-28; tracked as deviation, not regression):
-// per the gitignore specification, "It is not possible to re-include a file
-// if a parent directory of that file is excluded." smirror's underlying
-// matcher (github.com/git-pkgs/gitignore) applies last-pattern-wins
-// independently per file, which means a `!foo/bar/baz.txt` rule will
-// re-include the leaf even if a prior `foo/**` excluded the entire
-// foo/ directory. This is a documented deviation from gitignore semantics
-// (FR-FILTER-01); the planned fix for v1.0 walks parent directories and
-// short-circuits the leaf when any ancestor matches an exclude pattern.
-// Until that ships, the deviation is exercised by
+// BUG-R3-1 (panel review Round 3, decision recorded 2026-04-29): smirror
+// deliberately diverges from one corner of the gitignore specification.
+// Spec: "It is not possible to re-include a file if a parent directory
+// of that file is excluded." (Reason: git skips excluded directories
+// entirely for performance, so the leaf is never even evaluated.) smirror
+// applies last-pattern-wins per-file independently, so `foo/**` followed
+// by `!foo/bar/baz.txt` re-includes the leaf. The divergence is
+// intentional — for a selective-mirror tool, "exclude tree, keep one
+// file" is a real and useful authoring pattern; the gitignore restriction
+// is a git-implementation artifact, not a desirable semantic here.
+// Documented in SRS FR-FILTER-01 (Documented divergence note).
 // system-validation/TestPanelR3_Gitignore_ExcludedParentBlocksChildNegation
-// and listed in CHANGELOG "Known issues". Practical impact is small —
-// `.syncignore` authors writing this pattern still get the file synced
-// (fail-open); the SRS update marks it as "deferred conformance gap".
+// asserts the documented behavior (leaf is re-included).
 func (e *Engine) IsExcluded(relPath string) bool {
 	relPath = filepath.ToSlash(relPath)
 
