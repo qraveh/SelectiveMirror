@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.73-dev"
+var version = "0.9.74-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -109,24 +109,54 @@ func main() {
 // GAP-6 (panel review 2026-04-28): last-wins for --config matches kubectl/
 // docker/gh conventions and avoids the first-wins-but-stops-iterating
 // behavior that left subsequent --config args in the slice.
+// extractConfigPath returns the residual args after stripping --config
+// flag pairs. It calls os.Exit(ExitConfigError) on user-error inputs
+// (trailing --config, --config followed by another flag, empty
+// --config= value). For unit-testing, use extractConfigPathErr which
+// returns the error rather than exiting.
 func extractConfigPath(args []string, out *string) []string {
+	result, err := extractConfigPathErr(args, out)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(ExitConfigError)
+	}
+	return result
+}
+
+// extractConfigPathErr is the testable form of extractConfigPath.
+// SM-187: pre-fix, a trailing `--config` (no value) was silently
+// dropped, so `smirror status --config` defaulted to
+// ~/.selectivemirror/config.yaml instead of erroring. Worse: a
+// `--config --other-flag` would consume the next flag as the config-
+// path value. Both cases now produce a non-nil error so the user
+// gets an explicit "missing value" exit.
+func extractConfigPathErr(args []string, out *string) ([]string, error) {
 	result := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if a == "--config" {
-			if i+1 < len(args) {
-				*out = args[i+1]
-				i++ // consume the value
+			if i+1 >= len(args) {
+				return nil, fmt.Errorf("--config requires a value (path to config.yaml)")
 			}
+			next := args[i+1]
+			if strings.HasPrefix(next, "-") {
+				return nil, fmt.Errorf("--config requires a value (got next-flag %q; pass the path explicitly)", next)
+			}
+			*out = next
+			i++ // consume the value
 			continue
 		}
 		if strings.HasPrefix(a, "--config=") {
-			*out = strings.TrimPrefix(a, "--config=")
+			val := strings.TrimPrefix(a, "--config=")
+			if val == "" {
+				return nil, fmt.Errorf("--config= requires a value (path to config.yaml)")
+			}
+			*out = val
 			continue
 		}
 		result = append(result, a)
 	}
-	return result
+	return result, nil
 }
 
 // earlyLogTarget returns the path for the very-early diagnostic log written

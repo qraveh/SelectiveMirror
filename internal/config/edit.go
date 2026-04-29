@@ -241,7 +241,7 @@ func addMirrorLocked(configPath string, p Project) error {
 	lines := strings.Split(stripBOM(string(data)), "\n")
 
 	// Check for duplicate name
-	namePattern := regexp.MustCompile(`^\s+-\s+name:\s*` + regexp.QuoteMeta(p.Name) + `\s*$`)
+	namePattern := regexp.MustCompile(`^\s+-\s+name:\s*['"]?` + regexp.QuoteMeta(p.Name) + `['"]?\s*$`)
 	for _, line := range lines {
 		if namePattern.MatchString(line) {
 			return fmt.Errorf("mirror %q already exists in config", p.Name)
@@ -335,9 +335,14 @@ func removeMirrorLocked(configPath, name string) error {
 
 	lines := strings.Split(stripBOM(string(data)), "\n")
 
-	// Find the mirror's "  - name: <name>" line
+	// Find the mirror's "  - name: <name>" line. SM-143: regex now
+	// tolerates the YAML-quoted forms (`name: 'src1'` and
+	// `name: "src1"`) that were silently missed by the prior
+	// unquoted-only pattern. YAML parsers accept all three forms,
+	// so a config a user authored by hand or via some other tool
+	// may use any of them; unmirror must remove regardless.
 	startIdx := -1
-	namePattern := regexp.MustCompile(`^\s+-\s+name:\s*` + regexp.QuoteMeta(name) + `\s*$`)
+	namePattern := regexp.MustCompile(`^\s+-\s+name:\s*['"]?` + regexp.QuoteMeta(name) + `['"]?\s*$`)
 	for i, line := range lines {
 		if namePattern.MatchString(line) {
 			startIdx = i

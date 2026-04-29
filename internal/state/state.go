@@ -161,9 +161,30 @@ func Open(dbPath string) (*Store, error) {
 	// gives safe concurrent goroutine access via database/sql's internal mutex (SM-047).
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec(baseSchema); err != nil {
+	// SM-142: brief caller-side retry on SQLITE_BUSY for the
+	// schema-create exec. The connection-level `_busy_timeout=5000`
+	// covers most contention cases, but some Windows-only race
+	// patterns (the `go checkForUpdateOnStartup` goroutine launched
+	// concurrently with the main thread's state.Open in cmdStatus
+	// and cmdStart) can still surface BUSY here. Three retries with
+	// linear backoff gives the racing opener time to release the
+	// schema-create write lock without globally raising busy_timeout
+	// (which would slow legitimate-error paths).
+	var schemaErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if _, schemaErr = db.Exec(baseSchema); schemaErr == nil {
+			break
+		}
+		// Only retry on busy/locked. Other errors are real.
+		msg := schemaErr.Error()
+		if !strings.Contains(msg, "database is locked") && !strings.Contains(msg, "SQLITE_BUSY") {
+			break
+		}
+		time.Sleep(time.Duration(50+attempt*100) * time.Millisecond)
+	}
+	if schemaErr != nil {
 		db.Close()
-		return nil, fmt.Errorf("creating schema: %w", err)
+		return nil, fmt.Errorf("creating schema: %w", schemaErr)
 	}
 
 	// GAP-7 (panel review 2026-04-28): refuse to open a state DB whose
