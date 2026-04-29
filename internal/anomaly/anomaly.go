@@ -27,6 +27,7 @@ const (
 	KindSyncStalled       Kind = "Sync:Stalled"  // multi-signal flatline: rclone wedged below its own retry layer
 	KindSyncLsJsonSlow    Kind = "Sync:LsJsonSlow" // info: lsjson elapsed past warn threshold, but still alive
 	KindSyncFailure       Kind = "Sync:Failure"
+	KindStateError        Kind = "State:Error" // state-DB write failure (audit log row, sync_state row, meta key) — Tier-2 #13/#14
 )
 
 // Severity levels for anomalies.
@@ -59,7 +60,7 @@ func SeverityFor(k Kind) Severity {
 		return SeverityCritical
 	case KindCircuitBreaker, KindReconcileStale, KindSyncFailure:
 		return SeverityError
-	case KindWatcherError, KindQueueDepthWarning, KindGhostLeak, KindGhostOrphan, KindGhostStale, KindPathGone, KindSyncTimeout, KindSyncStalled:
+	case KindWatcherError, KindQueueDepthWarning, KindGhostLeak, KindGhostOrphan, KindGhostStale, KindPathGone, KindSyncTimeout, KindSyncStalled, KindStateError:
 		return SeverityWarning
 	case KindSyncLsJsonSlow:
 		return SeverityInfo

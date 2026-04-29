@@ -39,6 +39,52 @@ type Signals struct {
 // proc_windows.go; tests inject a fake.
 type LivenessProbe func(handle uintptr) (Signals, error)
 
+// stderrBufCap is the maximum number of bytes captured into the
+// per-rclone stderr buffer. Tier-2 #19 (validation panel 2026-04-29):
+// `rclone --verbose --verbose` against a backend with 100K files can
+// emit hundreds of MB of stderr; capturing it all into a strings.Builder
+// is a heap-blowup vector that has no upside (we only need a slice for
+// the failure log line). 64 KB is more than enough for the diagnostic.
+const stderrBufCap = 64 * 1024
+
+// boundedStderrWriter is an io.Writer that captures up to stderrBufCap
+// bytes into an internal strings.Builder; further bytes are silently
+// dropped. The String() method appends a truncation marker once the
+// cap is reached so the diagnostic remains honest.
+type boundedStderrWriter struct {
+	buf       strings.Builder
+	cap       int
+	truncated bool
+}
+
+func newBoundedStderr() *boundedStderrWriter {
+	return &boundedStderrWriter{cap: stderrBufCap}
+}
+
+func (b *boundedStderrWriter) Write(p []byte) (int, error) {
+	if b.cap <= 0 {
+		return b.buf.Write(p)
+	}
+	remaining := b.cap - b.buf.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		b.buf.Write(p[:remaining])
+		b.truncated = true
+		return len(p), nil
+	}
+	return b.buf.Write(p)
+}
+
+func (b *boundedStderrWriter) String() string {
+	if !b.truncated {
+		return b.buf.String()
+	}
+	return b.buf.String() + fmt.Sprintf("\n...[stderr truncated at %d bytes]", b.cap)
+}
+
 // activityWriter is an io.Writer that records the timestamp of the latest
 // write into an atomic int64 (unix nanoseconds). Used as one branch of
 // io.MultiWriter on rclone's stdout/stderr — every byte rclone produces
@@ -156,10 +202,11 @@ func runWithSupervisor(
 	activity := &activityWriter{lastNs: &lastActivityNs, lastLine: &lastLine}
 
 	// Stderr capture preserved for diagnostic logging. Stdout still routed
-	// to os.Stdout for foreground operators.
-	var stderrBuf strings.Builder
+	// to os.Stdout for foreground operators. Tier-2 #19: capture is capped
+	// at stderrBufCap to defend against rclone --verbose blowing up heap.
+	stderrBuf := newBoundedStderr()
 	cmd.Stdout = io.MultiWriter(os.Stdout, activity)
-	cmd.Stderr = io.MultiWriter(activity, &stderrBuf)
+	cmd.Stderr = io.MultiWriter(activity, stderrBuf)
 
 	if err := cmd.Start(); err != nil {
 		stderrCapture = stderrBuf.String()

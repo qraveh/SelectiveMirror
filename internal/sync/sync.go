@@ -65,6 +65,42 @@ func (e *Engine) resetPersistentFullSyncFailures(projName string) {
 	e.state.SetMeta(consecFullSyncFailKey+projName, "0")
 }
 
+// logAction wraps state.LogAction with anomaly emission on failure.
+// Tier-2 #13 (validation panel 2026-04-29): the audit trail must not
+// silently lose entries on transient state-DB errors (read-only data
+// dir, disk full, journal contention). Round 10 fault injection
+// confirmed: file synced to remote, exit 0 reported, audit-trail entry
+// silently lost. Anomaly emission ensures the loss is visible to
+// operators via the anomaly log + status output. The slog.Warn keeps
+// the failure visible in the regular log stream too.
+func (e *Engine) logAction(project, relPath, action, detail string, durationMs int64) {
+	if err := e.state.LogAction(project, relPath, action, detail, durationMs); err != nil {
+		e.log.Warn("state log_action failed", "project", project, "path", relPath, "action", action, "error", err)
+		if e.Anomaly != nil {
+			e.Anomaly.Record(anomaly.KindStateError, project, relPath,
+				fmt.Sprintf("audit log write failed for action=%s", action),
+				fmt.Sprintf("state.LogAction error: %v", err))
+		}
+	}
+}
+
+// deleteFileState wraps state.DeleteFileState with anomaly emission on
+// failure. Tier-2 #14: failures here leave a stale sync_state row after
+// a successful remote operation; subsequent ghost cleanup would then
+// see the row, lsjson the remote (file gone), classify as orphan, and
+// cascade-delete other state. Surfacing the error via anomaly + log
+// catches it before the cascade.
+func (e *Engine) deleteFileState(project, relPath string) {
+	if err := e.state.DeleteFileState(project, relPath); err != nil {
+		e.log.Warn("state delete_file_state failed", "project", project, "path", relPath, "error", err)
+		if e.Anomaly != nil {
+			e.Anomaly.Record(anomaly.KindStateError, project, relPath,
+				"sync_state row delete failed after successful remote operation",
+				fmt.Sprintf("state.DeleteFileState error: %v", err))
+		}
+	}
+}
+
 // TaskType distinguishes sync from delete operations.
 type TaskType int
 
@@ -480,14 +516,14 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 			return
 		}
 		e.log.Debug("file gone or locked before sync", "project", proj.Name, "path", relPath, "error", err)
-		e.state.LogAction(proj.Name, relPath, "skip_gone", fmt.Sprintf("%v", err), 0)
+		e.logAction(proj.Name, relPath, "skip_gone", fmt.Sprintf("%v", err), 0)
 		return
 	}
 
 	// Skip if too large
 	if info.Size() > proj.MaxFileSize() {
 		e.log.Debug("file too large", "project", proj.Name, "path", relPath, "size", info.Size())
-		e.state.LogAction(proj.Name, relPath, "skip_size", fmt.Sprintf("%d bytes", info.Size()), 0)
+		e.logAction(proj.Name, relPath, "skip_size", fmt.Sprintf("%d bytes", info.Size()), 0)
 		return
 	}
 
@@ -495,7 +531,7 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 	hash, size, err := state.HashFile(localPath)
 	if err != nil {
 		e.log.Warn("hash failed", "project", proj.Name, "path", relPath, "error", err)
-		e.state.LogAction(proj.Name, relPath, "error", fmt.Sprintf("hash: %v", err), 0)
+		e.logAction(proj.Name, relPath, "error", fmt.Sprintf("hash: %v", err), 0)
 		if e.metrics != nil {
 			e.metrics.RecordError(proj.Name, fmt.Sprintf("hash failed: %v", err))
 		}
@@ -535,7 +571,7 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 			"project", proj.Name, "path", relPath, "hash", hash[:8])
 		// Update local state to reflect current local file state
 		e.state.UpdateFileState(proj.Name, relPath, hash, size, info.ModTime().UnixNano(), 0)
-		e.state.LogAction(proj.Name, relPath, "skip_hash_match", "remote already has content", 0)
+		e.logAction(proj.Name, relPath, "skip_hash_match", "remote already has content", 0)
 		return
 	}
 
@@ -549,7 +585,7 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		if linfo.Mode()&os.ModeSymlink != 0 || !linfo.Mode().IsRegular() {
 			e.log.Warn("path mode changed between quiescence and rclone (TOCTOU defense)",
 				"project", proj.Name, "path", relPath, "mode", linfo.Mode().String())
-			e.state.LogAction(proj.Name, relPath, "toctou_aborted",
+			e.logAction(proj.Name, relPath, "toctou_aborted",
 				fmt.Sprintf("file mode changed to %s after quiescence; aborted", linfo.Mode()), 0)
 			return
 		}
@@ -590,7 +626,7 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 
 	if exitCode == 0 {
 		e.log.Info("synced", "project", proj.Name, "path", relPath, "size", size, "ms", elapsed.Milliseconds())
-		e.state.LogAction(proj.Name, relPath, "copy", fmt.Sprintf("%d bytes, %dms", size, elapsed.Milliseconds()), elapsed.Milliseconds())
+		e.logAction(proj.Name, relPath, "copy", fmt.Sprintf("%d bytes, %dms", size, elapsed.Milliseconds()), elapsed.Milliseconds())
 		if e.metrics != nil {
 			e.metrics.RecordSync(proj.Name, size, elapsed.Milliseconds())
 		}
@@ -604,7 +640,7 @@ func (e *Engine) syncSingleFile(ctx context.Context, proj config.Project, relPat
 		e.Queue.RecordSuccess(proj.Name)
 	} else {
 		e.log.Warn("sync failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
-		e.state.LogAction(proj.Name, relPath, "error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
+		e.logAction(proj.Name, relPath, "error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
 		if e.metrics != nil {
 			e.metrics.RecordError(proj.Name, fmt.Sprintf("rclone exit %d for %s", exitCode, relPath))
 		}
@@ -654,7 +690,7 @@ func (e *Engine) syncMtime(ctx context.Context, proj config.Project, relPath str
 	if exitCode == 0 {
 		e.log.Info("metadata synced", "project", proj.Name, "path", relPath,
 			"mtime", mtime.UTC().Format(time.RFC3339), "ms", elapsed.Milliseconds())
-		e.state.LogAction(proj.Name, relPath, "mtime_sync",
+		e.logAction(proj.Name, relPath, "mtime_sync",
 			fmt.Sprintf("mtime=%s, %dms", mtime.UTC().Format(time.RFC3339), elapsed.Milliseconds()),
 			elapsed.Milliseconds())
 		if e.metrics != nil {
@@ -669,7 +705,7 @@ func (e *Engine) syncMtime(ctx context.Context, proj config.Project, relPath str
 		// mtime issues sees them.
 		e.log.Warn("metadata sync failed (backend may not support mtime updates)",
 			"project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
-		e.state.LogAction(proj.Name, relPath, "mtime_sync_error",
+		e.logAction(proj.Name, relPath, "mtime_sync_error",
 			fmt.Sprintf("rclone exit %d (backend may not support mtime updates)", exitCode),
 			elapsed.Milliseconds())
 		if e.Anomaly != nil {
@@ -744,7 +780,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 
 	if exitCode == 0 {
 		e.log.Info("full sync complete", "project", proj.Name, "ms", elapsed.Milliseconds())
-		e.state.LogAction(proj.Name, "", "full_sync", fmt.Sprintf("ok, %dms", elapsed.Milliseconds()), elapsed.Milliseconds())
+		e.logAction(proj.Name, "", "full_sync", fmt.Sprintf("ok, %dms", elapsed.Milliseconds()), elapsed.Milliseconds())
 		e.state.SetMeta("last_full_sync_"+proj.Name, time.Now().UTC().Format(time.RFC3339))
 		e.resetPersistentFullSyncFailures(proj.Name) // NEW-R10-1
 		e.Queue.RecordSuccess(proj.Name)
@@ -761,7 +797,7 @@ func (e *Engine) syncFullProject(ctx context.Context, proj config.Project) error
 	}
 
 	e.log.Warn("full sync failed", "project", proj.Name, "exit", exitCode, "ms", elapsed.Milliseconds())
-	e.state.LogAction(proj.Name, "", "full_sync_error", fmt.Sprintf("rclone exit %d, %dms", exitCode, elapsed.Milliseconds()), elapsed.Milliseconds())
+	e.logAction(proj.Name, "", "full_sync_error", fmt.Sprintf("rclone exit %d, %dms", exitCode, elapsed.Milliseconds()), elapsed.Milliseconds())
 	if e.metrics != nil {
 		e.metrics.RecordError(proj.Name, fmt.Sprintf("full sync rclone exit %d", exitCode))
 	}
@@ -834,7 +870,7 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 
 	if policy == config.DeleteIgnore {
 		e.log.Debug("local delete ignored (policy=ignore)", "project", proj.Name, "path", relPath)
-		e.state.LogAction(proj.Name, relPath, "delete_ignored", "policy=ignore", 0)
+		e.logAction(proj.Name, relPath, "delete_ignored", "policy=ignore", 0)
 		return
 	}
 
@@ -851,11 +887,11 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 
 		if exitCode == 0 {
 			e.log.Info("remote deleted", "project", proj.Name, "path", relPath, "ms", elapsed.Milliseconds())
-			e.state.LogAction(proj.Name, relPath, "delete", "mirrored delete", elapsed.Milliseconds())
-			e.state.DeleteFileState(proj.Name, relPath)
+			e.logAction(proj.Name, relPath, "delete", "mirrored delete", elapsed.Milliseconds())
+			e.deleteFileState(proj.Name, relPath)
 		} else {
 			e.log.Warn("remote delete failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
-			e.state.LogAction(proj.Name, relPath, "delete_error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
+			e.logAction(proj.Name, relPath, "delete_error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
 		}
 
 	case config.DeleteQuarantine:
@@ -876,11 +912,11 @@ func (e *Engine) deleteRemoteFile(ctx context.Context, proj config.Project, relP
 
 		if exitCode == 0 {
 			e.log.Info("remote quarantined", "project", proj.Name, "path", relPath, "quarantine", quarantinePath, "ms", elapsed.Milliseconds())
-			e.state.LogAction(proj.Name, relPath, "quarantine", quarantinePath, elapsed.Milliseconds())
-			e.state.DeleteFileState(proj.Name, relPath)
+			e.logAction(proj.Name, relPath, "quarantine", quarantinePath, elapsed.Milliseconds())
+			e.deleteFileState(proj.Name, relPath)
 		} else {
 			e.log.Warn("remote quarantine failed", "project", proj.Name, "path", relPath, "exit", exitCode, "ms", elapsed.Milliseconds())
-			e.state.LogAction(proj.Name, relPath, "quarantine_error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
+			e.logAction(proj.Name, relPath, "quarantine_error", fmt.Sprintf("rclone exit %d", exitCode), elapsed.Milliseconds())
 		}
 
 	}
@@ -960,10 +996,10 @@ func (e *Engine) deleteRemoteDir(ctx context.Context, proj config.Project, dirPa
 		if exitCode == 0 {
 			// Clean state DB for all files under the directory
 			for _, relPath := range files {
-				e.state.DeleteFileState(proj.Name, relPath)
+				e.deleteFileState(proj.Name, relPath)
 			}
 			e.log.Info("remote dir purged (atomic)", "project", proj.Name, "path", dirPath, "files", len(files), "ms", elapsed.Milliseconds())
-			e.state.LogAction(proj.Name, dirPath, "dir_purge", fmt.Sprintf("%d files, %dms", len(files), elapsed.Milliseconds()), elapsed.Milliseconds())
+			e.logAction(proj.Name, dirPath, "dir_purge", fmt.Sprintf("%d files, %dms", len(files), elapsed.Milliseconds()), elapsed.Milliseconds())
 		} else {
 			// Purge failed — fall back to per-file deletion
 			e.log.Warn("rclone purge failed, falling back to per-file delete", "project", proj.Name, "path", dirPath, "exit", exitCode)
@@ -1145,9 +1181,10 @@ func (e *Engine) runWithLegacyTimeout(ctx context.Context, rclonePath string, ar
 
 	cmd := exec.CommandContext(rcloneCtx, rclonePath, args...)
 
-	var stderrBuf strings.Builder
+	// Tier-2 #19: cap stderr capture (see liveness.go::boundedStderrWriter).
+	stderrBuf := newBoundedStderr()
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = &stderrBuf
+	cmd.Stderr = stderrBuf
 
 	err := cmd.Run()
 	if err != nil {
@@ -1536,8 +1573,8 @@ func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, e
 		kind := string(g.Kind)
 		if exitCode == 0 {
 			e.log.Info("ghost cleaned", "project", proj.Name, "path", g.Path, "kind", kind)
-			e.state.LogAction(proj.Name, g.Path, "ghost_cleanup", kind, 0)
-			e.state.DeleteFileState(proj.Name, g.Path)
+			e.logAction(proj.Name, g.Path, "ghost_cleanup", kind, 0)
+			e.deleteFileState(proj.Name, g.Path)
 			deleted++
 		} else if exitCode == 4 {
 			// SM-075: deletefile failed with "file not found" — likely duplicate directories
@@ -1549,8 +1586,8 @@ func (e *Engine) CleanupGhosts(ctx context.Context, proj config.Project) (int, e
 				fallbackArgs = append(fallbackArgs, e.deleteFlags(proj)...)
 				if e.runRclone(ctx, fallbackArgs) == 0 {
 					e.log.Info("ghost cleaned (parent dir fallback)", "project", proj.Name, "path", g.Path, "kind", kind)
-					e.state.LogAction(proj.Name, g.Path, "ghost_cleanup", kind+" (dir fallback)", 0)
-					e.state.DeleteFileState(proj.Name, g.Path)
+					e.logAction(proj.Name, g.Path, "ghost_cleanup", kind+" (dir fallback)", 0)
+					e.deleteFileState(proj.Name, g.Path)
 					deleted++
 				} else {
 					e.log.Warn("ghost cleanup failed (dir fallback also failed)", "project", proj.Name, "path", g.Path, "kind", kind)
@@ -1586,8 +1623,8 @@ func (e *Engine) CleanupLeaks(ctx context.Context, proj config.Project) (int, er
 		exitCode := e.runRclone(ctx, args)
 		if exitCode == 0 {
 			e.log.Info("leak cleaned (filter exclusion)", "project", proj.Name, "path", g.Path)
-			e.state.LogAction(proj.Name, g.Path, "leak_cleanup", "filter_change", 0)
-			e.state.DeleteFileState(proj.Name, g.Path)
+			e.logAction(proj.Name, g.Path, "leak_cleanup", "filter_change", 0)
+			e.deleteFileState(proj.Name, g.Path)
 			deleted++
 		} else {
 			e.log.Warn("leak cleanup failed", "project", proj.Name, "path", g.Path, "exit", exitCode)
