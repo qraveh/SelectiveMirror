@@ -30,9 +30,11 @@
 | Aspect | Verification | Validation |
 |--------|-------------|-----------|
 | Question | "Are we building the product right?" | "Are we building the right product?" |
-| Method | Testing, static analysis, code review, coverage | User acceptance, integration tests, field testing |
+| Method | Testing (unit, integration, system), static analysis, code review, coverage | User acceptance, field testing, beta feedback |
 | When | Every commit, CI pipeline | Per-release, user feedback cycles |
 | Owner | Developer + CI | User + developer |
+
+> **Footnote** (corrected per BugTracker SM-152, v1.0 baseline): the prior version of this table placed "integration tests" under Validation/Method. That was a category error per ISO/IEC/IEEE 29148:2018 §A.2 and ISO/IEC/IEEE 29119-1:2022 vocabulary — integration tests verify that components interact per spec; they do not validate stakeholder fitness. Validation concerns operational/stakeholder fitness only (user acceptance, field testing, beta feedback).
 
 ### 1.2 Test Tiers
 

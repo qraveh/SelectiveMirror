@@ -5,7 +5,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-### Known issues
+## [1.0.0] — 2026-05-01
+
+First stable release. Closes the v0.9.x panel-review backlog (5 of 5 Tier-1 findings closed), the Codex audit's nine new bugs (8 of 9 closed; SM-198 deferred), and the ISO compliance audit's six findings (5 closed + 1 partial — collision-acknowledgment block in `docs/iso-compliance.md` §10.6). Ships as **Self-Assessment with Partial ISO Compliance**: A-GOV-01 (independent external review) is permanently classified as Non-Conformity by Choice on ISO/IEC/IEEE 29148:2018 §5.2.4 / §6.5; the project deliberately does not pursue those clauses. SignPath Authenticode signing remains pending (external dependency) — first installs on Windows will continue to trigger SmartScreen until the SignPath Foundation cert lands; verification commands in `SECURITY.md`.
+
+### Deferred to v1.0.1
+
+- **R-12 — NFR-PR-01 measurement-function elaboration**: Cloudflare Worker access-log analysis; ratio of None-tier records over None-tier installs across the v1.0.0 release window; target = 0.000. First measurement at v1.0.1 cut, included in v1.0.1 release notes.
+- **R-13 — `internal/lock::isProcessAlive` multi-process test harness**: GAP-9 stale-PID detection currently at 0% function coverage drags the package average to 54.8% (above the new 50% per-package floor; tracked as risk in commit `b0d7505`). Multi-process harness raises coverage above 60%.
+- **R-14 — `internal/rclone::Detect` interface extraction + mocks**: removes the `internal/rclone` waiver from `ci.yml`; coverage rises above 50%.
+- **R-15 — `internal/fsutil` direct unit tests**: removes the `internal/fsutil` waiver; coverage > 50%.
+- **R-16 — `docs/test-strategy.md` single-page consolidation**: closes A-29119-01; promotes the ISO/IEC/IEEE 29119 compliance row to ✅ in `docs/iso-compliance.md` §3.1.
+- **R-17 — `docs/security-audit-2026-04-18.md` finding-closure cross-reference**: enumeration of every SEC-C / SEC-H / SEC-M / SEC-L finding closed in the v1.0.0 cycle; closes A-GOV-04.
+
+### Deferred to v1.1
+
+- **R-18 — Full ISO/IEC 25023 §5.2 measurement-function elaboration** for all NFR-AU-* / NFR-RS-* / NFR-PR-* in SRS §4.6.5/.6/.7. Each NFR will carry purpose, method-of-application, type-of-measure (Base/Derived/Indicator), scale type, audience, and measurement function. δ recommendation from the iso-compliance review; A-25023-04.
+- **R-19 — A-25023-02a..k full measurement campaign**: 11 NFR-TB / NFR-RU / NFR-CA targets currently "Not Measured" each get a recorded measurement value with date.
+- **R-20 — A-25010-01b restructure**: SRS §4 reorganized to ISO/IEC 25010:2023 layout — Flexibility as top-level characteristic; Adaptability / Installability / Replaceability / Scalability move there; full Authenticity / Resistance / Privacy elaboration in §4.6. SRS §4.0 deviation note removed; full 2023 schema in place.
+- **R-21 — SM-NNN single-source-of-truth migration**: BugTracker (`C:\BugTracker\projects\SelectiveMirror\`) ↔ GitHub Issues namespace reconciliation per A-GOV-04. One canonical numbering stream; collision-acknowledgment block in `docs/iso-compliance.md` §10.6 simplified to historical note.
+- **R-22 — 29148:2018 §9.5.5 doc-attribute gaps**: A-29148-02 (in-doc Change History per document) / A-29148-03 (named Approval/sign-off block) / A-29148-07 (ConOps document) / A-29148-15 (Stakeholder list, Glossary, Distribution list, Doc Conventions) / A-29148-17 (User Documentation Requirements section). `docs/iso-compliance.md` §4.1 row count moves from 11/19 to 16/19+.
+
+### v1.0 release-prep changes (this commit)
+
+- Source `cmd/smirror/main.go::version` bumped 0.9.66-dev → **1.0.0** (R-3, pre-authorized per the standing-authorization block in `docs/iso-audit-required-actions-2026-04-29.md`).
+- `README.md` ISO disclosure language tightened: "external review committed for v1.0.1" replaced with the audit's proposed Non-Conformity-by-Choice framing (R-6).
+- `docs/VV-Plan.md` §1.1 V&V table corrected: "integration tests" moved from Validation/Method (category error per ISO/IEC/IEEE 29148:2018 §A.2 and 29119-1:2022 vocabulary) to Verification/Method; Validation/Method becomes "User acceptance, field testing, beta feedback" (R-8). BugTracker `SM-152` status flipped open → fixed (R-11).
+- `docs/iso-compliance.md` Source-documents-audited block refreshed to current revisions (R-9); §10.4 Change log gains a `v1.0 baseline (2026-05-01)` row (R-10).
+
+### Known issues at tag
+
+The following findings are open against this version. Each is exercised by a test in `system-validation/`. The release pipeline (`.github/workflows/release.yml`) tolerates the named tests in its allowlist; everything else blocks. Plan: closed in v1.0.x patches.
 
 The following findings are open against this version. Each is exercised by a test in `system-validation/`. The release pipeline (`.github/workflows/release.yml`) tolerates the named tests in its allowlist; everything else blocks. Plan: closed before v1.0.
 
