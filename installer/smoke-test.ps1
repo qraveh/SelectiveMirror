@@ -184,23 +184,34 @@ else                                                  { Fail "$targetDir NOT on 
 #-------------------------------------------------------------------------------
 Heading "5. Per-user task round-trip"
 if (Test-Path $target) {
-    # `smirror task install` preflights config.Load to reject broken
-    # configs. Clean CI runners have no config, so we seed a minimal
-    # valid one, run the round-trip, then remove it. The seeded config
-    # needs only to parse cleanly -- the task doesn't actually run during
-    # the smoke test, so the mirror targets never get exercised.
+    # `smirror task install` preflights config.Load to reject broken or
+    # empty configs (Tier-2 #29: "no mirrors defined in config" fires
+    # when `mirrors:` parses as null/empty). The smoke test must seed a
+    # known-good config regardless of whether one already exists at
+    # ~/.selectivemirror/config.yaml — an operator with a partially-
+    # configured config (e.g., default_remote set but mirrors empty)
+    # would otherwise see this section fail through no fault of the MSI.
+    #
+    # Strategy: back up the operator's config to <name>.smoke-bak.<pid>,
+    # seed our known-good minimal config, run the round-trip, restore
+    # the original on cleanup. Cleanup is in finally so a Ctrl-C between
+    # steps still restores correctly.
     $cfgDir = Join-Path $env:USERPROFILE ".selectivemirror"
     $cfgPath = Join-Path $cfgDir "config.yaml"
     $cfgPreExisted = Test-Path $cfgPath
-    if (-not $cfgPreExisted) {
-        New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
-        # Use forward slashes so the YAML string parser doesn't misinterpret
-        # backslash sequences (e.g. the \U in C:\Users\... would be parsed
-        # as a Unicode escape expecting 8 hex digits in a double-quoted
-        # YAML string). Forward slashes work as path separators on Windows
-        # and avoid the entire escape-sequence class of YAML errors.
-        $tempForward = $env:TEMP -replace '\\','/'
-        $testConfig = @"
+    $cfgBackup = "$cfgPath.smoke-bak.$PID"
+    New-Item -ItemType Directory -Path $cfgDir -Force | Out-Null
+    if ($cfgPreExisted) {
+        Copy-Item -Path $cfgPath -Destination $cfgBackup -Force
+        Write-Host "  (backed up existing config to $(Split-Path -Leaf $cfgBackup))"
+    }
+    # Use forward slashes so the YAML string parser doesn't misinterpret
+    # backslash sequences (e.g. the \U in C:\Users\... would be parsed
+    # as a Unicode escape expecting 8 hex digits in a double-quoted
+    # YAML string). Forward slashes work as path separators on Windows
+    # and avoid the entire escape-sequence class of YAML errors.
+    $tempForward = $env:TEMP -replace '\\','/'
+    $testConfig = @"
 mirrors:
   - name: smoke-test-placeholder
     local_path: $tempForward
@@ -208,9 +219,8 @@ mirrors:
 global_excludes:
   - .git/
 "@
-        Set-Content -Path $cfgPath -Value $testConfig -Encoding UTF8
-        Write-Host "  (seeded minimal config at $cfgPath for task round-trip)"
-    }
+    Set-Content -Path $cfgPath -Value $testConfig -Encoding UTF8
+    Write-Host "  (seeded minimal config at $cfgPath for task round-trip)"
 
     try {
         $taskOut = & $target task install 2>&1
@@ -235,7 +245,13 @@ global_excludes:
         if ($uninstallOut -match 'uninstalled|nothing to do') { Pass "task uninstall" }
         else                                                   { Fail "task uninstall output unexpected" }
     } finally {
-        if (-not $cfgPreExisted) {
+        # Restore the operator's original config (or remove the seeded
+        # one entirely if no original existed). Either path leaves the
+        # filesystem indistinguishable from pre-test state.
+        if ($cfgPreExisted) {
+            Move-Item -Path $cfgBackup -Destination $cfgPath -Force -ErrorAction SilentlyContinue
+            Write-Host "  (restored original config from backup)"
+        } else {
             Remove-Item $cfgPath -Force -ErrorAction SilentlyContinue
             # Only remove dir if it's empty and we created it.
             if ((Get-ChildItem $cfgDir -ErrorAction SilentlyContinue).Count -eq 0) {
