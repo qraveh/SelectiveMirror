@@ -79,7 +79,7 @@ Per Adversarial Reviewer feedback: a passing reference, a parenthetical, or a si
 | Standard | Overall | Compliant | Partial | Non-compliant | v0.4 delta |
 |---|---|---|---|---|---|
 | 29148:2018 | ⚠️ **Partial** | 11 / 19 | 3 | 5 | unchanged |
-| 25010:2023 | ⚠️ **Partial** | 7 of 9 top-level characteristics | 0 | 1 (Usability schema mismatch) | Faultlessness now has substantive evidence (rclone stall detection); Analysability strengthened (new anomaly kinds Sync:Stalled / Sync:LsJsonSlow) |
+| 25010:2023 | ⚠️ **Partial** — engineering caught up to documentation | 7 of 9 top-level characteristics | 0 | 1 (Usability schema mismatch) | NFR-AU-01..03 / NFR-RS-01..03 / NFR-PR-01..03 stubs landed in SRS §4.6.5 / .6 / .7 with implementation cites (commit `4f119fa`). Faultlessness substantive evidence (rclone stall detection in liveness.go) and Analysability extension (new anomaly kinds Sync:Stalled / Sync:LsJsonSlow) carry forward. Full ISO/IEC 25023 §5.2 measurement-function elaboration is R-18 v1.1. |
 | 25023:2016 | ⚠️ **Partial** | 6 functions defined / ~24 quantitative NFRs | many | most "Not Measured" | unchanged — but liveness.go thresholds (60s transfer flat-grace, 240s metadata) are *new* measurement targets that should be captured |
 | 29119 family | ⚠️ **Partial** | Test Plan, test design, techniques | Reports, naming convention | Org Test Strategy ❌; **Test Monitoring & Control improved ⚠️→✅ via release.yml hardening** | release.yml runs `go vet` + `go test ./internal/... ./cmd/...` before GoReleaser; race detector now covers internal/sync + internal/state |
 
