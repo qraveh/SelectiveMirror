@@ -689,12 +689,25 @@ func validateNoLocalPathOverlap(projects []Project) error {
 //                          produce a password; arbitrary command exec
 //   - --ask-password     : prompts on stderr; broken in service mode
 //                          and a UI-injection vector in foreground
+//   - --copy-links / -L  : follow symlinks and copy the pointed-to item.
+//                          SM-183: this directly undermines the service-
+//                          mode symlink-exfiltration hardening (SEC-H5 +
+//                          PF-A3 + the new RejectSymlinkedFiles guard) by
+//                          making rclone read whatever a user-planted
+//                          symlink points to. Always denied in
+//                          rclone_extra_flags; the engine separately
+//                          injects --skip-links via commonFlags.
+//   - --links / -l       : copy symlinks as symlinks. Conservative
+//                          rejection; smirror's contract is "files only"
+//                          and a service-mode operator setting this is
+//                          almost certainly mis-configured.
 //
 // We intentionally use prefix matching for `--rc` so `--rc-addr`,
 // `--rc-no-auth`, etc. are all caught.
 var rcloneExtraFlagDenylist = struct {
-	exact   map[string]bool
-	prefix  []string
+	exact      map[string]bool
+	exactShort map[string]bool // single-hyphen short flags (rclone uses -X form)
+	prefix     []string
 }{
 	exact: map[string]bool{
 		"--log-file":         true,
@@ -702,6 +715,12 @@ var rcloneExtraFlagDenylist = struct {
 		"--config":           true,
 		"--password-command": true,
 		"--ask-password":     true,
+		"--copy-links":       true, // SM-183
+		"--links":            true, // SM-183
+	},
+	exactShort: map[string]bool{
+		"-L": true, // SM-183: short form of --copy-links
+		"-l": true, // SM-183: short form of --links
 	},
 	prefix: []string{"--rc"}, // matches --rc, --rc-addr, --rc-no-auth, --rcfile, etc.
 }
@@ -720,6 +739,21 @@ var rcloneExtraFlagDenylist = struct {
 // can't slip past the `--rc` prefix check.
 func validateRcloneExtraFlags(where string, flags []string) error {
 	for _, raw := range flags {
+		// SM-183: short-flag check. rclone's short flags use a single
+		// hyphen (`-L`, `-l`), so the prior `--`-only filter let them
+		// slip through entirely. The exactShort table catches them.
+		// `-L=value` is also possible (`--copy-links` accepts no value
+		// but defensively split on `=`).
+		if strings.HasPrefix(raw, "-") && !strings.HasPrefix(raw, "--") {
+			short := raw
+			if eq := strings.Index(raw, "="); eq > 0 {
+				short = raw[:eq]
+			}
+			if rcloneExtraFlagDenylist.exactShort[short] {
+				return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; symlink-following short flag undermines service-mode symlink-exfiltration hardening — see docs/SECURITY.md SM-183)", where, short)
+			}
+			continue
+		}
 		if !strings.HasPrefix(raw, "--") {
 			continue
 		}
@@ -736,7 +770,7 @@ func validateRcloneExtraFlags(where string, flags []string) error {
 			}
 		}
 		if rcloneExtraFlagDenylist.exact[name] {
-			return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; this flag changes what rclone executes — see docs/SECURITY.md GAP-1)", where, name)
+			return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; this flag changes what rclone executes — see docs/SECURITY.md GAP-1 / SM-183)", where, name)
 		}
 		for _, p := range rcloneExtraFlagDenylist.prefix {
 			// Any flag whose name starts with `--rc` is rejected. This

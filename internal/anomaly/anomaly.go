@@ -95,7 +95,24 @@ type Recorder struct {
 	droppedCallbacks    atomic.Int64
 	overflowAnnounced   atomic.Bool
 	callbackGoroutineWg sync.WaitGroup
-	closed              atomic.Bool
+
+	// sendMu serializes channel send (Record path) against channel
+	// close (Close path). SM-186: the prior implementation used an
+	// `atomic.Bool` checked-then-sent pattern which is not atomic as a
+	// pair — a goroutine could read closed=false, then a concurrent
+	// Close could set closed=true and close the channel, then the
+	// first goroutine's send would panic on a closed channel. The
+	// RWMutex makes the check-and-send a single critical section
+	// against close.
+	//
+	//   Record: RLock → check closed → send (non-blocking) → RUnlock
+	//   Close:  Lock  → set closed   → close(channel)       → Unlock
+	//
+	// Multiple Records can run concurrently (RLock); Close blocks
+	// until in-flight Records finish, then performs the close exactly
+	// once.
+	sendMu sync.RWMutex
+	closed bool
 }
 
 // Writer is the interface for anomaly persistence.
@@ -189,29 +206,36 @@ func (r *Recorder) Record(kind Kind, project, path, message, detail string) *Ano
 	// against a 5-second HTTP timeout), drop the callback and increment
 	// the counter. The on-disk record from writer.Write above is intact —
 	// only the alerting hook is dropped.
-	if r.OnRecord != nil && !r.closed.Load() {
-		select {
-		case r.callbackQueue <- a:
-		default:
-			r.droppedCallbacks.Add(1)
-			// Announce the overflow once so an operator knows the alerting
-			// stream is degraded. Subsequent drops are silent (counter only).
-			if r.overflowAnnounced.CompareAndSwap(false, true) {
-				// Best-effort; if Close was called between the load and
-				// here, this is a no-op.
-				select {
-				case r.callbackQueue <- &Anomaly{
-					ID:       fmt.Sprintf("A-overflow-%d", time.Now().UnixNano()),
-					Time:     time.Now().UTC().Format(time.RFC3339),
-					Kind:     KindQueueDepthWarning,
-					Severity: SeverityWarning,
-					Message:  "anomaly callback queue overflow — webhook downstream is slow",
-					Detail:   "subsequent dropped callbacks counted in droppedCallbacks (see Recorder)",
-				}:
-				default:
+	//
+	// SM-186: send is performed under sendMu's RLock. Concurrent Close
+	// takes sendMu's write-lock, so this check-and-send cannot race
+	// against `close(r.callbackQueue)`. If Close has already run when
+	// we acquire RLock, `r.closed` is true and we skip the send entirely.
+	if r.OnRecord != nil {
+		r.sendMu.RLock()
+		if !r.closed {
+			select {
+			case r.callbackQueue <- a:
+			default:
+				r.droppedCallbacks.Add(1)
+				// Announce the overflow once so an operator knows the alerting
+				// stream is degraded. Subsequent drops are silent (counter only).
+				if r.overflowAnnounced.CompareAndSwap(false, true) {
+					select {
+					case r.callbackQueue <- &Anomaly{
+						ID:       fmt.Sprintf("A-overflow-%d", time.Now().UnixNano()),
+						Time:     time.Now().UTC().Format(time.RFC3339),
+						Kind:     KindQueueDepthWarning,
+						Severity: SeverityWarning,
+						Message:  "anomaly callback queue overflow — webhook downstream is slow",
+						Detail:   "subsequent dropped callbacks counted in droppedCallbacks (see Recorder)",
+					}:
+					default:
+					}
 				}
 			}
 		}
+		r.sendMu.RUnlock()
 	}
 
 	return a
@@ -256,15 +280,22 @@ func (r *Recorder) Total() int64 {
 // Close closes the underlying writer and stops the callback goroutine.
 // Subsequent Record calls do not block; pending callbacks already in
 // the queue at Close time are drained before the goroutine exits.
+//
+// SM-186: takes sendMu's write-lock to serialize against any in-flight
+// Record's send. The lock-based mark-and-close is the critical section
+// the prior atomic.Bool / non-atomic-check-and-send pair lacked.
 func (r *Recorder) Close() error {
 	if r == nil {
 		return nil
 	}
-	// Mark closed BEFORE closing the channel so Record's non-blocking
-	// send doesn't race with the channel close (sending to a closed
-	// channel panics). closed.Load() is checked in Record above.
-	if r.closed.CompareAndSwap(false, true) {
+	r.sendMu.Lock()
+	alreadyClosed := r.closed
+	if !alreadyClosed {
+		r.closed = true
 		close(r.callbackQueue)
+	}
+	r.sendMu.Unlock()
+	if !alreadyClosed {
 		r.callbackGoroutineWg.Wait()
 	}
 	if r.writer == nil {

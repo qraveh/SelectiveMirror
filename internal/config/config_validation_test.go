@@ -342,6 +342,15 @@ func TestValidate_RcloneExtraFlags_DenylistGlobal(t *testing.T) {
 		{"--password-command", []string{"--password-command", "echo hi"}, "--password-command"},
 		{"--ask-password", []string{"--ask-password"}, "--ask-password"},
 		{"--log-format", []string{"--log-format", "json"}, "--log-format"},
+		// SM-183: symlink-following flags must be denied. Both long
+		// and short forms; service-mode RejectSymlinkedFiles is
+		// undermined if rclone follows symlinks via these flags.
+		{"--copy-links", []string{"--copy-links"}, "--copy-links"},
+		{"--copy-links separate", []string{"--copy-links", "true"}, "--copy-links"},
+		{"--links", []string{"--links"}, "--links"},
+		{"-L short", []string{"-L"}, "-L"},
+		{"-L=value", []string{"-L=true"}, "-L"},
+		{"-l short", []string{"-l"}, "-l"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

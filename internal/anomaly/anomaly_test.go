@@ -142,6 +142,53 @@ func TestRecord_ConcurrentSafety(t *testing.T) {
 	}
 }
 
+// SM-186: Record's check-of-closed and send-to-channel must be atomic
+// against Close. Pre-fix used `atomic.Bool` checked-then-sent which
+// could race with `close(r.callbackQueue)`, producing a "send on
+// closed channel" panic. The fix wraps send under sendMu's RLock
+// and close under sendMu's Lock. This test exercises the race
+// window with -race; without the fix, the race detector + the
+// random scheduling sometimes produces the panic.
+//
+// Run via `go test -race -run TestRecord_CloseRace_NoPanic`.
+func TestRecord_CloseRace_NoPanic(t *testing.T) {
+	for trial := 0; trial < 5; trial++ {
+		w := &memWriter{}
+		r := NewRecorder(w)
+		// OnRecord must be set so the send path is exercised.
+		r.SetOnRecord(func(*Anomaly) {})
+
+		var wg sync.WaitGroup
+		// Producers: many goroutines hammering Record.
+		for i := 0; i < 64; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() {
+					if rv := recover(); rv != nil {
+						t.Errorf("Record panicked under concurrent Close: %v", rv)
+					}
+				}()
+				for j := 0; j < 32; j++ {
+					r.Record(KindSyncFailure, "proj", "file.txt", "fail", "")
+				}
+			}()
+		}
+		// Closer: race-against-producers Close.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if rv := recover(); rv != nil {
+					t.Errorf("Close panicked under concurrent Record: %v", rv)
+				}
+			}()
+			_ = r.Close()
+		}()
+		wg.Wait()
+	}
+}
+
 func TestSummaryStrings(t *testing.T) {
 	w := &memWriter{}
 	r := NewRecorder(w)
