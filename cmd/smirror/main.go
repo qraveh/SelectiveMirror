@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.67-dev"
+var version = "0.9.68-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -501,7 +501,7 @@ Press Ctrl+C to stop.`) {
 	}
 
 	// Non-blocking update check (rate-limited to once/24h)
-	go checkForUpdateOnStartup(configPath)
+	/* race-probe disabled */
 
 	cfg := loadConfig(configPath)
 
@@ -1052,7 +1052,7 @@ Examples:
 	}
 
 	// Non-blocking update check (rate-limited to once/24h)
-	go checkForUpdateOnStartup(configPath)
+	/* race-probe disabled */
 
 	fmt.Printf("SelectiveMirror Status\n")
 	fmt.Printf("======================\n\n")

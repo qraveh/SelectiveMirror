@@ -167,7 +167,7 @@ SelectiveMirror is the **missing link**: real-time + selective + backend-agnosti
 
 | ID | Requirement | Priority | Rationale | Status |
 |----|------------|----------|-----------|--------|
-| FR-SYNC-01 | System SHALL sync individual file changes via `rclone copyto --checksum` | Must | Per-file sync with checksum avoids redundant uploads | Done |
+| FR-SYNC-01 | System SHALL sync individual file changes via `rclone copyto` (default rclone size+mtime comparison; no `--checksum` on the single-file path). Full-project reconciliation uses `rclone copy --checksum --filter-from` (FR-SYNC-02). | Must | Per-file sync without `--checksum` lets rclone honor mtime-only changes (mtime bump with same content) — needed for editor save patterns where the file is rewritten with the same bytes. The SM-017 fix specifically removed `--checksum` from this path; older revisions of this row claimed it was still in place (SM-199 doc-drift, fixed 2026-04-29). The full-project path keeps `--checksum` because batch reconciliation needs content-addressed verification across the whole tree. | Done |
 | FR-SYNC-02 | System SHALL perform batch sync on startup via `rclone copy` per mirror | Must | Batch is O(1) rclone calls vs O(N) per-file; startup was 170s → 15s after this fix | Done |
 | FR-SYNC-03 | System SHALL verify quiescence before syncing (file stable for configurable duration) | Must | Office apps write in multiple stages; syncing mid-write uploads partial files | Done |
 | FR-SYNC-04 | System SHALL skip syncing files that are exclusively locked by another process | Must | Locked files cannot be read; attempting sync would fail and waste queue cycles | Done |

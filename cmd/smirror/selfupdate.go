@@ -380,35 +380,76 @@ func selfUpdatePreflight(release *telemetry.ReleaseInfo) selfUpdateResult {
 
 // downloadAndVerify downloads the release zip, verifies its checksum, and
 // extracts smirror.exe to a staging directory. Returns the staging dir path.
+// maxReleaseZipSize is the upper bound on a release ZIP that selfupdate
+// will accept. Current SelectiveMirror release ZIPs are ~3-4 MB; the cap
+// is set generously (~30x current size) so legitimate growth is fine
+// while a malicious or accidentally oversized asset can't fill the
+// user's temp disk before extraction-time bounds engage. SM-201
+// (selfupdate ZIP download is unbounded before verification): without
+// this cap, downloadFile streams an unbounded response body to disk
+// before the existing 200 MB extraction-time cap (maxExtractSize) ever
+// runs.
+const maxReleaseZipSize = 100 * 1024 * 1024 // 100 MB
+
+// maxChecksumFileSize is the upper bound on the GoReleaser-format
+// `checksums.txt` companion asset. The file is a few hundred bytes per
+// release artifact, so 1 MB is comfortable. Same SM-201 motivation:
+// a hostile checksum asset must not consume unbounded bytes before the
+// content is parsed.
+const maxChecksumFileSize = 1 * 1024 * 1024 // 1 MB
+
 func downloadAndVerify(ctx context.Context, result selfUpdateResult) (string, error) {
 	stageDir, err := os.MkdirTemp("", "smirror-selfupdate-*")
 	if err != nil {
 		return "", fmt.Errorf("creating staging directory: %w", err)
 	}
 
-	// Download zip
+	// SM-200: a release that does not advertise a checksums.txt asset
+	// MUST NOT proceed silently to extraction. Pre-2026-04-29 the
+	// missing-checksum branch was treated as "skip verification, extract
+	// anyway" — that's fail-open. The maintainer has an emergency
+	// override for unsigned/unchecksummed releases (--allow-unverified
+	// flag, future), but the default path now hard-fails.
+	if result.checksumAsset == nil {
+		return stageDir, fmt.Errorf("release does not advertise a checksums.txt asset; refusing to install an unverified binary (SM-200)")
+	}
+
+	// SM-201: reject up-front if the release's advertised ZIP size is
+	// already larger than maxReleaseZipSize. This is the cheap pre-flight
+	// — saves a bandwidth-bound download for an obvious case. The
+	// streaming cap inside downloadFile catches missing-Content-Length
+	// or chunked-stream cases too.
+	if result.zipAsset.Size > maxReleaseZipSize {
+		return stageDir, fmt.Errorf("release advertises ZIP size %d bytes (>%d MB cap); refusing to download (SM-201)",
+			result.zipAsset.Size, maxReleaseZipSize/(1024*1024))
+	}
+
+	// Download zip with a hard byte cap. SM-201: the cap engages even if
+	// the server omits Content-Length or the response is chunked.
 	zipPath := filepath.Join(stageDir, result.zipAsset.Name)
 	fmt.Printf("Downloading %s... ", result.zipAsset.Name)
-	if err := downloadFile(ctx, result.zipAsset.BrowserDownloadURL, zipPath); err != nil {
+	if err := downloadFile(ctx, result.zipAsset.BrowserDownloadURL, zipPath, maxReleaseZipSize); err != nil {
 		return stageDir, fmt.Errorf("downloading release: %w", err)
 	}
 
 	zipInfo, _ := os.Stat(zipPath)
 	fmt.Printf("OK (%.1f MB)\n", float64(zipInfo.Size())/(1024*1024))
 
-	// Verify checksum if available
-	if result.checksumAsset != nil {
-		fmt.Print("Verifying checksum... ")
-		checksumPath := filepath.Join(stageDir, "checksums.txt")
-		if err := downloadFile(ctx, result.checksumAsset.BrowserDownloadURL, checksumPath); err != nil {
-			fmt.Printf("SKIP (download failed: %v)\n", err)
-		} else {
-			if err := verifyChecksum(zipPath, checksumPath, result.zipAsset.Name); err != nil {
-				return stageDir, fmt.Errorf("checksum verification failed: %w", err)
-			}
-			fmt.Println("OK (SHA256 match)")
-		}
+	// SM-200: a checksum asset was advertised; failing to download or
+	// verify it is now a hard error, not a print-and-continue. The old
+	// behavior turned a transient or attacker-induced checksum failure
+	// into an unverified binary install.
+	fmt.Print("Verifying checksum... ")
+	checksumPath := filepath.Join(stageDir, "checksums.txt")
+	if err := downloadFile(ctx, result.checksumAsset.BrowserDownloadURL, checksumPath, maxChecksumFileSize); err != nil {
+		fmt.Println("FAIL")
+		return stageDir, fmt.Errorf("checksum asset advertised but download failed; refusing to install an unverified binary: %w (SM-200)", err)
 	}
+	if err := verifyChecksum(zipPath, checksumPath, result.zipAsset.Name); err != nil {
+		fmt.Println("FAIL")
+		return stageDir, fmt.Errorf("checksum verification failed: %w", err)
+	}
+	fmt.Println("OK (SHA256 match)")
 
 	// Extract smirror.exe from zip
 	fmt.Print("Extracting smirror.exe... ")
@@ -420,8 +461,18 @@ func downloadAndVerify(ctx context.Context, result selfUpdateResult) (string, er
 	return stageDir, nil
 }
 
-// downloadFile downloads a URL to a local file path.
-func downloadFile(ctx context.Context, url, destPath string) error {
+// downloadFile downloads a URL to a local file path with a maximum
+// byte budget. SM-201: callers must supply a cap; the streaming
+// io.LimitReader engages even when the server response has no
+// Content-Length header (chunked transfer). If the response body
+// exceeds maxBytes, the partial file is left on disk for the caller's
+// stageDir cleanup; the function returns an explicit "exceeds cap"
+// error.
+//
+// The Content-Length pre-check is best-effort — when present it
+// rejects oversize responses without writing any bytes; when absent
+// the streaming cap engages instead.
+func downloadFile(ctx context.Context, url, destPath string, maxBytes int64) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
@@ -438,14 +489,28 @@ func downloadFile(ctx context.Context, url, destPath string) error {
 		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
 	}
 
+	// SM-201: pre-flight on Content-Length when the server provides it.
+	// Streaming cap below catches the no-Content-Length / chunked case.
+	if resp.ContentLength > 0 && resp.ContentLength > maxBytes {
+		return fmt.Errorf("response Content-Length %d exceeds %d-byte cap from %s", resp.ContentLength, maxBytes, url)
+	}
+
 	f, err := os.Create(destPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	_, err = io.Copy(f, resp.Body)
-	return err
+	// Streaming cap: read maxBytes+1 so we can detect overrun precisely
+	// (mirroring extractZipEntry's pattern at sync.go:540).
+	written, err := io.Copy(f, io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return err
+	}
+	if written > maxBytes {
+		return fmt.Errorf("response body exceeds %d-byte cap from %s (read at least %d bytes)", maxBytes, url, written)
+	}
+	return nil
 }
 
 // verifyChecksum checks the SHA256 of zipPath against the expected hash in

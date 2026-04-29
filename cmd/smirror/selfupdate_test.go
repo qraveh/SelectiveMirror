@@ -2,9 +2,12 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -234,6 +237,103 @@ func TestVerifyChecksum_FileNotInChecksums(t *testing.T) {
 	}
 	if err != nil && !contains(err.Error(), "not found") {
 		t.Errorf("expected 'not found' error, got: %v", err)
+	}
+}
+
+func TestDownloadAndVerify_ChecksumDownloadFailureFailsClosed(t *testing.T) {
+	zipBytes := selfUpdateTestZipBytes(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.zip":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(zipBytes)
+		case "/checksums.txt":
+			http.Error(w, "checksum temporarily unavailable", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	stageDir, err := downloadAndVerify(context.Background(), selfUpdateResult{
+		zipAsset: &telemetry.Asset{
+			Name:               "SelectiveMirror_1.0.0_windows_amd64.zip",
+			BrowserDownloadURL: srv.URL + "/release.zip",
+		},
+		checksumAsset: &telemetry.Asset{
+			Name:               "checksums.txt",
+			BrowserDownloadURL: srv.URL + "/checksums.txt",
+		},
+	})
+	if stageDir != "" {
+		defer os.RemoveAll(stageDir)
+	}
+	if err == nil {
+		t.Fatal("checksum asset was advertised but could not be downloaded; selfupdate should fail closed")
+	}
+}
+
+func TestDownloadAndVerify_MissingChecksumAssetFailsClosed(t *testing.T) {
+	zipBytes := selfUpdateTestZipBytes(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/release.zip" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(zipBytes)
+	}))
+	defer srv.Close()
+
+	stageDir, err := downloadAndVerify(context.Background(), selfUpdateResult{
+		zipAsset: &telemetry.Asset{
+			Name:               "SelectiveMirror_1.0.0_windows_amd64.zip",
+			BrowserDownloadURL: srv.URL + "/release.zip",
+		},
+	})
+	if stageDir != "" {
+		defer os.RemoveAll(stageDir)
+	}
+	if err == nil {
+		t.Fatal("release has no checksum asset; selfupdate should fail closed or require an explicit override")
+	}
+}
+
+func TestDownloadAndVerify_AdvertisedOversizeZipFailsClosed(t *testing.T) {
+	zipBytes := selfUpdateTestZipBytes(t)
+	hash := sha256.Sum256(zipBytes)
+	checksum := fmt.Sprintf("%x  SelectiveMirror_1.0.0_windows_amd64.zip\n", hash)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.zip":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(zipBytes)
+		case "/checksums.txt":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(checksum))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	stageDir, err := downloadAndVerify(context.Background(), selfUpdateResult{
+		zipAsset: &telemetry.Asset{
+			Name:               "SelectiveMirror_1.0.0_windows_amd64.zip",
+			Size:               500 * 1024 * 1024,
+			BrowserDownloadURL: srv.URL + "/release.zip",
+		},
+		checksumAsset: &telemetry.Asset{
+			Name:               "checksums.txt",
+			BrowserDownloadURL: srv.URL + "/checksums.txt",
+		},
+	})
+	if stageDir != "" {
+		defer os.RemoveAll(stageDir)
+	}
+	if err == nil {
+		t.Fatal("release asset advertises an oversized ZIP; selfupdate should fail before download/extract")
 	}
 }
 
@@ -477,6 +577,20 @@ func searchSubstring(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func selfUpdateTestZipBytes(t *testing.T) []byte {
+	t.Helper()
+	dir := t.TempDir()
+	zipPath := filepath.Join(dir, "SelectiveMirror_1.0.0_windows_amd64.zip")
+	createTestZip(t, zipPath, map[string]string{
+		"smirror.exe": "binary content",
+	})
+	zipBytes, err := os.ReadFile(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return zipBytes
 }
 
 func createTestZip(t *testing.T, zipPath string, files map[string]string) {

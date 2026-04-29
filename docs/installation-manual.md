@@ -67,7 +67,7 @@ The practical benefit: you configure a backend once using `rclone config`, and S
 SelectiveMirror invokes rclone as a subprocess for each sync operation. It does not link against rclone as a library or embed it into its binary. The interaction follows this pattern:
 
 1. SelectiveMirror detects a file change via the Windows filesystem watcher
-2. It constructs an rclone command (e.g., `rclone copyto --checksum <source> <dest>`)
+2. It constructs an rclone command. Single-file sync uses `rclone copyto <source> <dest>` (default rclone size+mtime comparison — no `--checksum`, so mtime-only changes propagate; SM-017). Batch reconciliation uses `rclone copy --checksum --filter-from <filter>` against the project root.
 3. It executes rclone as a child process and captures its exit code
 4. The exit code, along with timestamps and checksums, is recorded in the state database
 
