@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.55-dev"
+var version = "0.9.56-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -941,8 +941,69 @@ Examples:
 	}
 }
 
+// statusEmitSanitized reads status.json and writes a redacted form
+// to stdout. Tier-2 #22 / SEC-M-4: sharing-time sanitizer for the
+// status payload. Per validation-session recommendation D
+// (system-validation/MEMO-TO-IMPL-2026-04-29.md):
+//
+//   - The raw status.json on disk is preserved as-is — local debug
+//     readability is the contract there (matches the log-file
+//     local-only-raw convention).
+//   - This entry point pipes the same payload through the shared
+//     telemetry sanitizer (the same one used by report-bug) and
+//     emits the redacted JSON to stdout. Users can pipe directly:
+//     `smirror status --sanitize > status.sanitized.json` or
+//     `smirror status --sanitize | clip` to share.
+//
+// The redactor handles: HomeDir, ConfigDir, per-mirror local_paths,
+// per-mirror names, credential-style key=value pairs, rclone-style
+// remote URIs. Same sanitization scope as report-bug --stdout.
+//
+// On config load failure, falls back to a best-effort sanitization
+// using only HomeDir + ConfigDir (the report-bug fallback path).
+func statusEmitSanitized(configPath string) {
+	cfg, _ := config.Load(configPath)
+
+	statusPath := configPath
+	if cfg != nil {
+		statusPath = filepath.Join(dataDir(cfg), "status.json")
+	} else {
+		// Best-effort: assume status.json sits beside the config file
+		// (default layout). If not, the read fails below and we exit.
+		statusPath = filepath.Join(filepath.Dir(configPath), "status.json")
+	}
+
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: cannot read %s: %v\n", statusPath, err)
+		os.Exit(ExitError)
+	}
+
+	sanOpts := telemetry.SanitizeOptions{}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		sanOpts.HomeDir = home
+	}
+	if configDir := filepath.Dir(configPath); configDir != "" && configDir != "." {
+		sanOpts.ConfigDir = configDir
+	}
+	if cfg != nil {
+		sanOpts.MirrorPaths = make([]string, len(cfg.Projects))
+		sanOpts.MirrorNames = make([]string, len(cfg.Projects))
+		for i, p := range cfg.Projects {
+			sanOpts.MirrorPaths[i] = p.LocalPath
+			sanOpts.MirrorNames[i] = p.Name
+		}
+	}
+
+	sanitized := telemetry.SanitizeReport(string(data), sanOpts)
+	fmt.Print(sanitized)
+	if !strings.HasSuffix(sanitized, "\n") {
+		fmt.Println()
+	}
+}
+
 func cmdStatus(configPath string, args []string) {
-	if subcommandHelp(args, `Usage: smirror status [mirror]
+	if subcommandHelp(args, `Usage: smirror status [mirror] [--sanitize]
 
 Show sync status, metrics, and instance state.
 
@@ -950,13 +1011,45 @@ Displays: service state, live/last-known metrics (files synced, bytes
 uploaded, errors, latency), per-mirror sync state, ghost scan results,
 and recent anomalies.
 
+Flags:
+  --sanitize    Print the contents of status.json with paths, mirror
+                names, and credential-style values redacted. Use this
+                form when sharing diagnostic output (bug reports,
+                support requests) — the bare 'smirror status' keeps
+                raw paths in service of local debugging readability.
+                Aliases: --for-sharing.
+
 Examples:
-  smirror status              Show full status
-  smirror status MyProject    Show status for one mirror only`) {
+  smirror status              Show full status (raw, local-debug form)
+  smirror status MyProject    Show status for one mirror only
+  smirror status --sanitize   Emit redacted status.json to stdout`) {
 		return
+	}
+
+	// Tier-2 #22 / SEC-M-4: extract --sanitize / --for-sharing flag
+	// before passing args through rejectUnknownFlags. Sharing-time
+	// sanitizer recommended by the validation session as the
+	// resolution to the SEC-L4 (raw status.json for local debug)
+	// vs. SEC-M-4 (uniform sanitization) tension.
+	sanitizeFlag := false
+	{
+		filtered := args[:0:len(args)]
+		for _, a := range args {
+			if a == "--sanitize" || a == "--for-sharing" {
+				sanitizeFlag = true
+				continue
+			}
+			filtered = append(filtered, a)
+		}
+		args = filtered
 	}
 	rejectUnknownFlags("status", args)
 	checkMaxArgs("status", args, 1)
+
+	if sanitizeFlag {
+		statusEmitSanitized(configPath)
+		return
+	}
 
 	// Non-blocking update check (rate-limited to once/24h)
 	go checkForUpdateOnStartup(configPath)
