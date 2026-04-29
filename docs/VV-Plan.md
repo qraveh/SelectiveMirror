@@ -241,7 +241,7 @@ For each package, identify:
 
 ### 5.1 Summary
 
-| Metric | Value (baseline v0.5.0 → current v0.9.x) |
+| Metric | Value (baseline v0.5.0 → current v1.0 prep) |
 |--------|------------------------------------------|
 | Total statement coverage (internal/) | 35.8% → **66.0%** (re-measured 2026-04-29 against 0.9.53-dev; was 66.4% against 0.9.39-dev) |
 | Total functions | 184 → grown with anomaly/hooks/telemetry/fsutil packages |

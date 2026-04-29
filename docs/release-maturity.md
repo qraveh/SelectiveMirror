@@ -19,7 +19,7 @@ This file is a **live snapshot** of the indicators that decide whether Selective
 | **system-validation gating** | All `panel_findings_*_test.go` green at release time, OR allowlisted with CHANGELOG known-issues entry | Wired in release.yml v0.9.27 cycle. Allowlist for `panel_findings_*` is empty after the Phase A-G + Round 14 batch (all five Tier-1 findings closed). **However, the broader `system-validation/` suite has separate failures outside the panel-test scope** — telemetry server-contract / Worker / RLS tests, TestCLI_Status SQLITE_BUSY parallel-load flake (SM-142), TestScenario_BurstFileCreation / High-depth queue under load. SM-197 (Codex audit 2026-04-29) flagged the dashboard as overstated. Honest read: 🟡. The release.yml gate passes because it scopes to panel-found tests; full-suite green is a v1.0.x roadmap item. | 🟡 |
 | **SLA smoke** | Latest scheduled run within 48h is green | Workflow added in v0.9.27 cycle; first scheduled run pending | 🟡 |
 | **Open Highs from latest panel review** | Zero open Highs against the about-to-tag commit | 0 open. BUG-R4-1 closed in 0.9.44-dev. FIND-R4-1 closed by hooks deferral 2026-04-29 (see docs/RESOLUTION-2026-04-29-hooks-deferred.md). | 🟢 |
-| **Open Mediums** | ≤ 3 open, all with planned fix versions | 4 open (OBS-R4-1..5, R4-PF-10). Planned for v0.9.x patches. | 🟡 |
+| **Open Mediums** | ≤ 3 open, all with planned fix versions | 4 open (OBS-R4-1..5, R4-PF-10). Planned for v1.0.x patches. | 🟡 |
 | **Telemetry health (last 7 days)** | Envelope rate steady, no recurring signature on the latest released version | First Phase-5-live release (v0.9.4-dev) data ingested; weekly digest sample-size still small | 🟡 |
 | **Report-bug PII smoke** | Release-time smoke green every release | `scripts/check-pii-leak.ps1` wired into release.yml + dryrun in v0.9.27 cycle | 🟢 |
 | **HMAC master key** | Stored, rotation procedure documented + tested, absent-key fail-loud at release | Stored ✓; rotation documented (telemetry-ops.md); CI fail-loud added in v0.9.27 cycle (PR-S3); rotation never actually executed | 🟡 |
@@ -39,8 +39,8 @@ The set of indicators above maps to a recommended audience.
 
 | Audience | Hard requirements | Current verdict |
 |---|---|---|
-| **Maintainer-only** | Code signing not required. Indicators all 🟡 or better. No active red-state findings. | ✅ Ready. v0.9.x is at this level. |
-| **Maintainer + small group of testers** | Same as above + audience signaling in README + known-issues inventory in CHANGELOG. | ✅ Ready. **Current audience for v0.9.x.** |
+| **Maintainer-only** | Code signing not required. Indicators all 🟡 or better. No active red-state findings. | ✅ Ready. v0.9.x shipped at this level; v1.0.0 retains it. |
+| **Maintainer + small group of testers** | Same as above + audience signaling in README + known-issues inventory in CHANGELOG. | ✅ Ready. **Current audience for v1.0.0** (recommended for the first 30 days post-tag while telemetry signature data accumulates and the SignPath cert lands). |
 | **Wider beta (forum / Hacker News announcement)** | Above + winget submitted (🟢 row 4) + SLA smoke 🟢 + at most 1 open High with explicit user-facing call-out + first dryrun green. | ❌ Not yet. winget pending, SLA pending, 2 open Highs. |
 | **General public / "production"** | All rows 🟢 or ⚪ except optional. Code signing 🟢 (the row 1 blocker). MSI consent UI 🟢 dialog. Zero open Highs. | ❌ Not yet. Row 1 (signing) is the long pole. |
 

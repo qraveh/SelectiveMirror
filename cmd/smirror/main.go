@@ -501,7 +501,7 @@ Press Ctrl+C to stop.`) {
 	}
 
 	// Non-blocking update check (rate-limited to once/24h)
-	/* race-probe disabled */
+	go checkForUpdateOnStartup(configPath)
 
 	cfg := loadConfig(configPath)
 
@@ -1052,7 +1052,7 @@ Examples:
 	}
 
 	// Non-blocking update check (rate-limited to once/24h)
-	/* race-probe disabled */
+	go checkForUpdateOnStartup(configPath)
 
 	fmt.Printf("SelectiveMirror Status\n")
 	fmt.Printf("======================\n\n")

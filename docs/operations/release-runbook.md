@@ -12,7 +12,7 @@ The aim is that "tag, then watch CI" is the only thing left to do at tag time â€
 Default cadence is "tag when there's a coherent batch worth pinning a version to" â€” usually after a panel review wraps, after a security batch closes, or when telemetry / external users need a specific fix.
 
 Skip a release if:
-- Any **High** finding from the most recent panel review is open AND the audience for the next release includes anyone who would hit it. v0.9.x audience is "maintainer + small group of testers" per [README.md](../../README.md#audience-and-maturity-v09x); a hard-to-trigger High can ship under that audience with a CHANGELOG known-issues entry. A public-facing release cannot.
+- Any **High** finding from the most recent panel review is open AND the audience for the next release includes anyone who would hit it. The current v1.0 audience is "maintainer + small group of testers" per [README.md](../../README.md#audience-and-maturity-v10) (carries forward from the v0.9.x cycle for the first 30 days post-tag while telemetry signature data accumulates and the SignPath cert lands). A hard-to-trigger High can ship under that audience with a CHANGELOG known-issues entry. A public-facing release cannot.
 - The merge bar is dirty: untracked panel-review artifacts, uncommitted `system-validation/` tests, or a CHANGELOG `[Unreleased]` that doesn't reflect the diff.
 - Live telemetry or `report-bug` traffic shows a recurring signature on the CURRENT released version that hasn't been investigated. Don't bury it under a new release; close it first.
 
