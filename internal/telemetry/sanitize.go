@@ -66,8 +66,18 @@ var (
 	// We deliberately keep the matched key name visible in the output
 	// (so a maintainer can see "token=<REDACTED>" rather than just
 	// "<REDACTED>") — that's diagnostic without leaking the value.
+	//
+	// SM-180: env-var-style ALL_CAPS_WITH_UNDERSCORES names where the
+	// sensitive word is a SUFFIX (`GITHUB_TOKEN=...`, `OPENAI_API_KEY=...`,
+	// `AWS_SESSION_TOKEN=...`) didn't match because `\b` is not a word
+	// boundary between two word characters (underscore is `\w`). Fix:
+	// allow an optional env-var-shaped prefix `(\w*_)?` before the
+	// sensitive keyword. The prefix is captured but not used in the
+	// replace callback — `m[:sepIdx+1]` already preserves the full key
+	// up to the separator, so `GITHUB_TOKEN=secret` becomes
+	// `GITHUB_TOKEN=<REDACTED>`.
 	reCredential = regexp.MustCompile(
-		`(?i)\b(token|password|passwd|secret|api[_-]?key|bearer|authorization|client[_-]?secret|access[_-]?token|x[_-]?api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?access[_-]?key[_-]?id|cookie)\s*[=:]\s*[^\s,;'"<>]+`)
+		`(?i)\b(\w*_)?(token|password|passwd|secret|api[_-]?key|bearer|authorization|client[_-]?secret|access[_-]?token|x[_-]?api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?access[_-]?key[_-]?id|cookie)\s*[=:]\s*[^\s,;'"<>]+`)
 
 	// Bare bearer / basic auth tokens with whitespace separator instead
 	// of '=' or ':'. Catches "Bearer eyJabc..." and "Basic xxxxx" lines
@@ -80,8 +90,32 @@ var (
 	// this regex chops the trailing path components down to "<files>".
 	// The placeholder set is closed: we created these placeholders
 	// ourselves, so we can match them precisely.
+	//
+	// SM-188: paths with spaces previously leaked. The prior class
+	// `[^\s<>"'()]+` terminated at the first space, so
+	// `<mirror_0_path>/Project Alpha/Secret File.txt` reduced to
+	// `<mirror_0_path>/<files> Alpha/Secret File.txt` — the trailing
+	// filename survived. The new pattern allows spaces inside
+	// components by terminating only at clear non-path delimiters
+	// (tab, newline, angle-bracket, quote, comma, semicolon). Greedy
+	// over multiple `[\\/]`-separated components so the entire path
+	// collapses to a single `<files>` placeholder. Trade-off: prose
+	// after a sanitized path with no clear delimiter may be
+	// over-redacted; acceptable in privacy-first.
 	rePlaceholderPath = regexp.MustCompile(
-		`((?:<mirror_\d+_path>|<configdir>|~))[\\/][^\s<>"'()]+`)
+		`((?:<mirror_\d+_path>|<configdir>|~))(?:[\\/][^\t\n\r<>"',;]+)+`)
+
+	// SM-189: absolute Windows paths (drive-letter form) that aren't
+	// under any configured HomeDir / ConfigDir / MirrorPath placeholder.
+	// Bug reports and crash dumps include log lines, panic stacks,
+	// service-error messages, hook output, and rclone subprocess
+	// output where a path like `C:\Windows\System32\config\SAM` or
+	// `D:\Backup\PrivateProject\quarterly.xlsx` can appear. Without a
+	// fallback redactor those leak verbatim. Same delimiter rules as
+	// rePlaceholderPath above (allows spaces in components, stops at
+	// clear non-path delimiters). Replaced with `<path>/<files>`.
+	reAbsoluteWinPath = regexp.MustCompile(
+		`\b[A-Za-z]:(?:[\\/][^\t\n\r<>"',;]+)+`)
 
 	// rclone-style remote URIs: a short scheme followed by ':' and a
 	// path. Excludes a small allowlist of widely-recognized network
@@ -179,7 +213,24 @@ func SanitizeReport(report string, opts SanitizeOptions) string {
 	//    chopped its parent).
 	report = rePlaceholderPath.ReplaceAllString(report, "$1/<files>")
 
-	// 4. Remote URI redaction. Done after path subs because a path
+	// 4. SM-189: fallback redaction for absolute Windows paths (drive-
+	//    letter form) NOT under any configured prefix. The earlier
+	//    prefix-substitution step (#2) handles paths under HomeDir /
+	//    ConfigDir / MirrorPath; this step catches everything else —
+	//    log lines like "error opening C:\Windows\System32\config\SAM",
+	//    hook stderr referencing absolute paths, panic stacks, etc.
+	//    Replaced with `<path>/<files>` so the maintainer sees the
+	//    fact-of-an-absolute-path without the actual path.
+	//
+	//    Order matters: this MUST run BEFORE step 5 (remote URI),
+	//    because the SM-179-relaxed remote URI regex now accepts
+	//    1-character schemes, which would otherwise misclassify
+	//    `C:\foo` as the 1-char remote `c:` followed by `\foo`.
+	//    Drive-path is the more-likely interpretation when a
+	//    single-letter scheme is followed by `[\\/]` plus content.
+	report = reAbsoluteWinPath.ReplaceAllString(report, "<path>/<files>")
+
+	// 5. Remote URI redaction. Done after path subs because a path
 	//    can incidentally contain a colon (rare on Windows; possible
 	//    in bytestring contexts). We don't want to misclassify those
 	//    as remotes.
@@ -195,7 +246,7 @@ func SanitizeReport(report string, opts SanitizeOptions) string {
 		return scheme + ":<REDACTED>"
 	})
 
-	// 5. Mirror name substitution. Done LAST so that a name appearing
+	// 6. Mirror name substitution. Done LAST so that a name appearing
 	//    inside a path was already covered by the path substitution
 	//    in step 2. Length-descending order avoids a name being a
 	//    prefix of another name (e.g., "Acme" replaced inside

@@ -105,6 +105,73 @@ func TestSanitizeReport_RemoteURIRedactionMixedCase(t *testing.T) {
 	}
 }
 
+// SM-180: env-var-style ALL_CAPS_WITH_UNDERSCORES credential names
+// where the sensitive word is a SUFFIX. Pre-fix, `\b\w*_TOKEN` didn't
+// match because `\b` is not a word boundary between two word chars
+// (the underscore is `\w`).
+func TestSanitizeReport_CredentialPatterns_EnvVarSuffix(t *testing.T) {
+	cases := []struct {
+		in       string
+		mustHide string // value that must NOT appear in output
+		mustShow string // key=<REDACTED> shape that MUST appear
+	}{
+		{"GITHUB_TOKEN=ghp_realsecret_value", "ghp_realsecret_value", "GITHUB_TOKEN=<REDACTED>"},
+		{"OPENAI_API_KEY=sk-leaktoken-value", "sk-leaktoken-value", "OPENAI_API_KEY=<REDACTED>"},
+		{"AWS_SESSION_TOKEN=session-secret-value", "session-secret-value", "AWS_SESSION_TOKEN=<REDACTED>"},
+		{"MY_CUSTOM_PASSWORD=hunter2", "hunter2", "MY_CUSTOM_PASSWORD=<REDACTED>"},
+	}
+	for _, c := range cases {
+		got := SanitizeReport(c.in, SanitizeOptions{})
+		if strings.Contains(got, c.mustHide) {
+			t.Errorf("env-var credential leaked %q in %q: got %q", c.mustHide, c.in, got)
+		}
+		if !strings.Contains(got, c.mustShow) {
+			t.Errorf("env-var key shape lost: input %q expected %q in output, got %q", c.in, c.mustShow, got)
+		}
+	}
+}
+
+// SM-188: paths with spaces under a registered MirrorPath. Pre-fix,
+// `<mirror_0_path>/Project Alpha/Secret File.txt` reduced to
+// `<mirror_0_path>/<files> Alpha/Secret File.txt` — the trailing
+// filename leaked.
+func TestSanitizeReport_PathWithSpaces(t *testing.T) {
+	in := `sync failed path=C:\Data\Project Alpha\Secret File.txt`
+	got := SanitizeReport(in, SanitizeOptions{MirrorPaths: []string{`C:\Data`}})
+	for _, forbidden := range []string{"Project Alpha", "Secret File.txt", "Alpha", "Secret"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("path-with-spaces leaked %q in %q", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "<mirror_0_path>/<files>") {
+		t.Fatalf("expected `<mirror_0_path>/<files>` placeholder, got %q", got)
+	}
+}
+
+// SM-189: arbitrary absolute Windows paths NOT under any configured
+// prefix. Pre-fix, `error opening C:\Windows\System32\config\SAM`
+// passed through unchanged because no prefix substitution matched.
+func TestSanitizeReport_ArbitraryAbsoluteWindowsPath(t *testing.T) {
+	cases := []string{
+		`error opening C:\Windows\System32\config\SAM`,
+		`hook failed at D:\Backup\PrivateProject\quarterly.xlsx`,
+		`temp dir C:/Users/Alice/AppData/Local/Temp/xyz789`,
+	}
+	for _, in := range cases {
+		got := SanitizeReport(in, SanitizeOptions{})
+		// Drive letter root should survive in placeholder form.
+		if !strings.Contains(got, "<path>/<files>") {
+			t.Errorf("expected `<path>/<files>` placeholder in sanitized output of %q, got %q", in, got)
+		}
+		// None of these path component names should leak.
+		for _, forbidden := range []string{"Windows", "System32", "config", "SAM", "Backup", "PrivateProject", "quarterly.xlsx", "Alice", "AppData", "Temp", "xyz789"} {
+			if strings.Contains(got, forbidden) {
+				t.Errorf("absolute Windows path leaked %q in sanitized output of %q: got %q", forbidden, in, got)
+			}
+		}
+	}
+}
+
 func TestSanitizeReport_PathSubstitutionWindows(t *testing.T) {
 	home := "C:\\Users\\Alice"
 	cfg := "C:\\Users\\Alice\\.selectivemirror"
