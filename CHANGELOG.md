@@ -9,11 +9,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 The following findings are open against this version. Each is exercised by a test in `system-validation/`. The release pipeline (`.github/workflows/release.yml`) tolerates the named tests in its allowlist; everything else blocks. Plan: closed before v1.0.
 
-- **FIND-R4-1 (High for orchestration use)** — Per-file hooks fire on the live-watcher path only; batch sync (`sync-now`, startup reconciliation, `addmirror --initial-sync`, FR-SYNC-09 reconcile) bypasses them. Webhook listeners and post-process scripts do not see batch-synced files. Decision pending: per-file hooks via post-batch walk vs. project-level batch hooks (`pre_batch_sync_hook` / `post_batch_sync_hook`). Test: `system-validation/TestPanelR4_Hooks_EnvVarsActuallyExported`.
-- **OBS-R4-1 (Medium)** — Fresh `config.yaml` created by `smirror addmirror <path>` lands at mode 0666 (Go-reported); SEC-C5 baseline is 0600. Fix is a one-line plumbing of `writePreservingMode` into `cmdAddMirror`. Test: `system-validation/TestPanelR4_CLI_FreshConfig_FileMode`.
+- **OBS-R4-1 (Medium)** — Fresh `config.yaml` created by `smirror addmirror <path>` lands at mode 0666 (Go-reported); SEC-C5 baseline is 0600. Fix is a one-line plumbing of `writePreservingMode` into `cmdAddMirror`. Test: `system-validation/TestPanelR4_CLI_FreshConfig_FileMode` (uses `t.Logf`, not blocking).
 - **R4-PF-10 (Medium)** — Foreground (non-service) mode follows symlinks; the symlink-reject default is asymmetric with service mode (which rejects since SEC-H5 / PF-A3). A non-admin user's malicious `.syncignore` could plant a symlink to `%LOCALAPPDATA%\sensitive\file` and have it synced. Mitigation: keep monorepo-style configs out of foreground mode if you do not trust the directory tree. Fix: foreground default-reject + `--allow-symlinks` opt-in.
 
 A maintainer-readable view (severity, owner, planned remediation, target version) is in [docs/release-maturity.md](docs/release-maturity.md). Tests in this section are also tagged in CHANGELOG fix commits when closed.
+
+### Deferred from v1.0 — pre/post-sync hooks
+
+Per [docs/RESOLUTION-2026-04-29-hooks-deferred.md](docs/RESOLUTION-2026-04-29-hooks-deferred.md): the pre/post-sync hooks subsystem (`internal/hooks/`, `pre_sync_hook` / `post_sync_hook` config keys, FR-ASP-17, originally Phase 7) is **not** committed as a v1.0 capability. The implementation remains in tree and the config keys remain accepted; hooks are reclassified as **experimental** and **not a stability promise**. The decision was made on the strength of: (a) the "validation" use case is structurally false (errors are silenced), (b) FIND-R4-1 (batch-sync paths bypass hooks) closed as won't-fix under the new framing, (c) documented use cases overlap with `alert_webhook_url` (notification), `sync_log` (audit), `.syncignore` (gating), and remote-side event APIs (downstream triggers). Pre-1.0 is the right window because there is no installed base; carrying hooks into 1.0 would convert the maintenance cost into a permanent compatibility commitment. Re-opening conditions in §6 of the resolution.
+
+Side-effect doc updates that landed with this CHANGELOG entry: SRS FR-ASP-17 reclassified to DEFERRED with link; CLAUDE.md Phase 7 demoted from `[x]` to a footnote; user-manual.md §12 retitled "Hooks (experimental — not part of the v1.0 stability surface)" with truth-in-advertising language; release-maturity.md "Open Highs" row flipped to 🟢 (zero open Highs); `system-validation/TestPanelR4_Hooks_EnvVarsActuallyExported` skipped with a reference to the resolution; `release.yml`'s `$allowed` array empty.
 
 ### v1.0 readiness — open panel-finding fixes
 

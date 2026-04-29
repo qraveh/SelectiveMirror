@@ -99,9 +99,12 @@ jobs:
           }
           # Allowlist of known-RED tests. Each entry must also appear in
           # CHANGELOG `## Known issues` for the release to be tolerable.
-          $allowed = @(
-              'TestPanelR4_Hooks_EnvVarsActuallyExported' # FIND-R4-1: per-file hooks bypassed by batch sync; behavior decision (implement post-batch walk vs add project-level batch hooks) pending.
-          )
+          # As of 0.9.50-dev the allowlist is empty: BUG-R3-1 closed by
+          # decision (documented divergence), FIND-R4-1 closed by hooks
+          # deferral, BUG-R4-1 + BUG-R5-1 + NEW-R10-1 closed by
+          # implementation. Re-add an entry only with a matching
+          # CHANGELOG known-issues bullet.
+          $allowed = @()
           $events = @(Get-Content ../system-validation-results.json | ForEach-Object { $_ | ConvertFrom-Json })
           $failed = $events | Where-Object { $_.Action -eq 'fail' -and $_.Test } | ForEach-Object { ($_.Test -split '/')[0] } | Sort-Object -Unique
           $unexpected = @($failed | Where-Object { $allowed -notcontains $_ })

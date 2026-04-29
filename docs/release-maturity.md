@@ -16,9 +16,9 @@ This file is a **live snapshot** of the indicators that decide whether Selective
 | **MSI consent UI** | Three-tier radio dialog visible during install | Property + registry wired since v0.9.4-dev; dialog landing in v0.9.27 cycle (PR-S2) | 🟡 |
 | **winget submission** | Latest MSI submitted to microsoft/winget-pkgs | Manifest template up-to-date; CI auto-submission gated on `WINGET_SUBMIT_ENABLED=1`; first auto-submission with v0.9.27 | 🟡 |
 | **Pre-release dryrun** | release-dryrun.yml green within 24h of tag | Workflow added in v0.9.27 cycle; one full successful run required before next tag | 🟡 |
-| **system-validation gating** | All `panel_findings_*_test.go` green at release time, OR allowlisted with CHANGELOG known-issues entry | Wired in release.yml v0.9.27 cycle. 1 test on allowlist (BUG-R3-1, deferred to v1.0). | 🟢 |
+| **system-validation gating** | All `panel_findings_*_test.go` green at release time, OR allowlisted with CHANGELOG known-issues entry | Wired in release.yml v0.9.27 cycle. Allowlist now empty: BUG-R3-1 closed by decision (documented divergence), FIND-R4-1 closed by hooks deferral, BUG-R4-1 + BUG-R5-1 + NEW-R10-1 closed by implementation. | 🟢 |
 | **SLA smoke** | Latest scheduled run within 48h is green | Workflow added in v0.9.27 cycle; first scheduled run pending | 🟡 |
-| **Open Highs from latest panel review** | Zero open Highs against the about-to-tag commit | 2 open: BUG-R4-1 (concurrent addmirror), FIND-R4-1 (batch hooks). Both documented in CHANGELOG known issues. | 🟡 |
+| **Open Highs from latest panel review** | Zero open Highs against the about-to-tag commit | 0 open. BUG-R4-1 closed in 0.9.44-dev. FIND-R4-1 closed by hooks deferral 2026-04-29 (see docs/RESOLUTION-2026-04-29-hooks-deferred.md). | 🟢 |
 | **Open Mediums** | ≤ 3 open, all with planned fix versions | 4 open (OBS-R4-1..5, R4-PF-10). Planned for v0.9.x patches. | 🟡 |
 | **Telemetry health (last 7 days)** | Envelope rate steady, no recurring signature on the latest released version | First Phase-5-live release (v0.9.4-dev) data ingested; weekly digest sample-size still small | 🟡 |
 | **Report-bug PII smoke** | Release-time smoke green every release | `scripts/check-pii-leak.ps1` wired into release.yml + dryrun in v0.9.27 cycle | 🟢 |
@@ -68,9 +68,10 @@ The status table above is the dashboard. This section is what backs up each row 
 - **Remediation**: Provision the PAT, set the variable to 1, push next tag. First successful winget-pkgs PR closes this.
 - **Owner**: maintainer (PAT provisioning) + release pipeline (auto from then on).
 
-### 🟡 Open Highs (BUG-R4-1, FIND-R4-1)
-- **BUG-R4-1**: concurrent `addmirror` race — fix is OS-level lock + atomic-rename in `internal/config/edit.go`, reusing `internal/lock` primitive. Mostly mechanical. Plan: fold into next dev cycle.
-- **FIND-R4-1**: batch-sync hooks — needs a design decision (per-file post-batch walk vs. project-level batch hooks). Once decided, implementation is small. Plan: design discussion in next panel review, decision captured in CHANGELOG, implement in following cycle.
+### 🟢 Open Highs — none
+
+- **BUG-R4-1** (concurrent `addmirror` race): closed in 0.9.44-dev via `lock.AcquirePath` + `withConfigLock` in `internal/config/edit.go`.
+- **FIND-R4-1** (batch-sync hooks): closed 2026-04-29 by hooks deferral. Hooks are no longer counted toward v1.0 readiness; the integration use case (post-batch firing for AI-orchestration) is reachable via `alert_webhook_url` instead. See [RESOLUTION-2026-04-29-hooks-deferred.md](RESOLUTION-2026-04-29-hooks-deferred.md).
 
 ### 🟡 Telemetry health
 - **Why yellow**: Phase 5 live since v0.9.4-dev, but the audience is so small that "n is too small for analysis" is the honest read of the digest.

@@ -39,7 +39,17 @@ import (
 // SMIRROR_FILE, SMIRROR_REMOTE, SMIRROR_EVENT.
 //
 // Lock down what's ACTUALLY exposed and surface the V&V drift.
+//
+// FIND-R4-1 / hooks deferral (2026-04-29): hooks are no longer part of
+// the v1.0 stability surface — see docs/RESOLUTION-2026-04-29-hooks-deferred.md.
+// The implementation in internal/hooks/ remains in tree but is not
+// counted toward v1.0 readiness, so the FIND-R4-1 gap (batch-sync paths
+// bypass per-file hooks) is closed as won't-fix under the new framing.
+// This test is skipped until either (a) hooks are promoted back into
+// the v1.0 surface per §6 of the resolution, or (b) the hook
+// implementation is removed and the test goes with it.
 func TestPanelR4_Hooks_EnvVarsActuallyExported(t *testing.T) {
+	t.Skip("hooks deferred from v1.0 — see docs/RESOLUTION-2026-04-29-hooks-deferred.md")
 	t.Parallel()
 	if runtime.GOOS != "windows" {
 		t.Skip("hook test uses cmd.exe path")

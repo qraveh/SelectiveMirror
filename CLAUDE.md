@@ -245,7 +245,8 @@ Follows [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
 - [x] **Phase 4**: OSS polish — CONTRIBUTING, SECURITY, PR template, winget manifest, CHANGELOG
 - [x] **Phase 5**: Telemetry — opt-in analytics, update check (deployed 0.9.4-dev → 0.9.6-dev: Supabase schema, RLS, HMAC verify, MSI consent registry, Cloudflare Worker proxy, pg_cron rollups; in-installer consent dialog landed in current dev cycle)
 - [x] **Phase 6**: Anomaly detection — classification, recording, rotation, webhook alerts
-- [x] **Phase 7**: Hooks — pre/post-sync hook execution with environment variables
+
+> **Phase 7** (Pre/post-sync hooks) was originally implemented but **deferred from v1.0 on 2026-04-29** per [docs/RESOLUTION-2026-04-29-hooks-deferred.md](docs/RESOLUTION-2026-04-29-hooks-deferred.md). The implementation in `internal/hooks/` and the `pre_sync_hook` / `post_sync_hook` config keys remain in tree, but hooks are no longer counted toward v1.0 readiness, marketed as an extensibility seam, or treated as a stability promise. Supported notification / audit / gating paths are `alert_webhook_url`, `sync_log`, and `.syncignore` respectively.
 
 ---
 

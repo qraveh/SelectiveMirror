@@ -1266,9 +1266,21 @@ If your project directory is on a WSL filesystem (e.g., `\\wsl.localhost\Ubuntu\
 - Do not use symlinks that cross the WSL/Windows boundary in watched directories.
 
 
-# 12. Hooks
+# 12. Hooks (experimental — not part of the v1.0 stability surface)
 
-SelectiveMirror can run shell commands before and after each file sync. Hooks are useful for validation (lint before upload), transformation (compress), and notification (Slack, CI trigger).
+> **Status**: Pre/post-sync hooks were deferred from the v1.0 surface on 2026-04-29 — see [RESOLUTION-2026-04-29-hooks-deferred.md](RESOLUTION-2026-04-29-hooks-deferred.md) for the full decision record. The implementation remains in tree and the config keys remain accepted, but hooks are **experimental** and **not a stability promise** for v1.0. Future versions may change, restrict, or remove the feature.
+>
+> **Use the supported paths instead** for the documented use cases:
+>
+> - **Notification on sync events** — use `alert_webhook_url` (incident-based, sanitized, retried).
+> - **Audit / change history** — query the `sync_log` table in `state.db` (30-day retention).
+> - **Gating / per-file inclusion rules** — author a `.syncignore` file (last-pattern-wins).
+>
+> Hooks are documented below for users who already depend on them; new integrations should not adopt this seam.
+
+SelectiveMirror can run shell commands before and after each file sync.
+
+> **What hooks are NOT good for**: validation that blocks the sync (errors are silenced — `Hook errors are warnings, never block sync` per the execution model below); transformation pipelines (no contract that the transformed file is what gets uploaded); orchestration triggers on batch sync (`sync-now`, startup reconciliation, `addmirror --initial-sync`, periodic reconciliation all bypass hooks per FIND-R4-1, deferred along with this section).
 
 ## Configuring Hooks
 
