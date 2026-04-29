@@ -77,16 +77,22 @@ jobs:
             exit 1
           }
 
-      - name: Per-package coverage report (A-29119-12 evidence)
+      - name: Per-package coverage report + floor gate (A-29119-12 evidence; F-3/F-6)
         # A-29119-12: produce a per-package coverage table on every CI run
         # so it can be compared release-over-release. The artifact is
         # uploaded for the most-recent run; reviewers find drift here
         # rather than re-measuring each time.
+        #
+        # F-3/F-6 (ISO audit re-evaluation 2026-04-29): aggregate-only gate
+        # masked a 28-point regression in internal/lock when the GAP-9
+        # stale-PID path landed without proportional test growth. Added a
+        # per-package floor of 50% with an explicit waiver list. Waivers
+        # need a reason and a target version; CI surfaces them but does
+        # not gate. Anything outside the waiver list that drops below 50%
+        # blocks the merge.
         shell: pwsh
         run: |
           $covOut = & go tool cover "-func=$env:GITHUB_WORKSPACE\coverage.out"
-          # Group by package, compute per-package average from the
-          # function-level lines emitted by `go tool cover -func`.
           $lines = $covOut -split "`n"
           $byPkg = @{}
           foreach ($line in $lines) {
@@ -98,12 +104,36 @@ jobs:
               $byPkg[$pkg].n += 1
             }
           }
-          Write-Host "=== Per-package coverage (A-29119-12) ==="
+          # Waivers: package -> "reason; planned-fix-version".
+          # Add an entry only when the package legitimately can't be
+          # unit-tested (legacy integration-only code, trivial transitively-
+          # tested helpers, blocked-on-refactor like rclone).
+          $waivers = @{
+            'internal/fsutil'  = 'Trivial path helpers tested transitively via internal/sync; no direct caller path; v1.0.x no-op fix.';
+            'internal/service' = 'Windows SCM integration; integration-tested in test/run_tests.ps1, not unit-testable from a non-service host.';
+            'internal/rclone'  = 'Detect() needs interface mocks for proper unit coverage; X-04 follow-up; v1.0.1.';
+          }
+          $floor = 50.0
+          $failed = @()
+          Write-Host "=== Per-package coverage (A-29119-12; floor=${floor}%) ==="
           foreach ($pkg in ($byPkg.Keys | Sort-Object)) {
             $avg = [math]::Round($byPkg[$pkg].sum / $byPkg[$pkg].n, 1)
-            Write-Host ("{0,-30} {1,5}%" -f $pkg, $avg)
+            $marker = ''
+            if ($avg -lt $floor) {
+              if ($waivers.ContainsKey($pkg)) {
+                $marker = " WAIVED: $($waivers[$pkg])"
+              } else {
+                $marker = " *** BELOW FLOOR — gate fails ***"
+                $failed += "$pkg @ ${avg}%"
+              }
+            }
+            Write-Host ("{0,-30} {1,5}%{2}" -f $pkg, $avg, $marker)
           }
           Write-Host "=== End ==="
+          if ($failed.Count -gt 0) {
+            Write-Error ("Per-package floor breach: " + ($failed -join ', ') + ". Either restore coverage above ${floor}% or add a waiver entry to .github/workflows/ci.yml with a reason + target version.")
+            exit 1
+          }
 
       # Race detector. The previous comment said "CGO-free packages" but
       # CGO_ENABLED=1 is set on this very step (required by mattn/go-sqlite3).
