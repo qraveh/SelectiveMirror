@@ -1,5 +1,15 @@
 # `smirror telemetry` — three-tier consent management
 
+> **v2 architecture (2026-04-29).** Telemetry is stream-aggregate-and-
+> discard. There is no `forget` subcommand because there is no server-
+> side record to forget — every contribution is processed in a single
+> Postgres transaction and the payload is discarded with the
+> connection. The user-facing contract is in
+> [`PRIVACY.md`](./PRIVACY.md); the architecture is in
+> [`telemetry-architecture-v2.md`](./telemetry-architecture-v2.md).
+> Earlier versions of this document specified a `forget` subcommand;
+> it has been removed from the design.
+
 ## Purpose
 
 Lets the user view and change their telemetry tier at runtime, independently of the choice made during MSI installation. The tier governs what (if anything) smirror sends to the telemetry endpoint.
@@ -8,7 +18,7 @@ This command is the runtime counterpart to the MSI installer's tier selection. I
 
 ## Design context
 
-The user-facing contract for each tier is in `docs/PRIVACY.md`. This document specifies the CLI shape and persistence. Round-3 + round-4 panel decisions are captured in memory at `~/.claude/.../memory/reference_telemetry_tier_model.md`.
+The user-facing contract for each tier is in `docs/PRIVACY.md`. This document specifies the CLI shape and persistence. Round-3/4 panel decisions led to the three-tier model; round-5 (BMad panel, 2026-04-29) led to the v2 architecture above.
 
 **Default tier**: **None**. If the user never runs this command, smirror sends nothing.
 
@@ -17,14 +27,21 @@ The user-facing contract for each tier is in `docs/PRIVACY.md`. This document sp
 ```
 smirror telemetry status               Show current tier, last sent, queued
 smirror telemetry none                 Opt out completely
-smirror telemetry standard             Opt in to bug reports + install census
-smirror telemetry reliability          Opt in to all of the above + reliability deltas
+smirror telemetry standard             Opt in to install + bug counts
+smirror telemetry reliability          Opt in to all of the above + reliability counts
 smirror telemetry policy               Open docs/PRIVACY.md (or print path)
-smirror telemetry forget               Send signed deletion request for past server data
 smirror telemetry --help               Show help
 ```
 
 Exit codes: 0 on success, 1 on error, 2 if requested action requires admin privileges that aren't available.
+
+> **Removed**: `smirror telemetry forget`. Under v2 there is no
+> server-side record to delete; "withdraw consent" via `smirror
+> telemetry none` is the complete erasure path. Bug-report narratives
+> filed via `--browser` to GitHub Issues are deletable by the user via
+> their GitHub account or [GitHub's privacy
+> support](https://support.github.com/contact/privacy) — see
+> `PRIVACY.md` "Bug reports are not telemetry."
 
 ## Storage of the tier flag
 
@@ -143,11 +160,13 @@ Possible from: any tier.
 
 1. Update state DB: `meta.telemetry_tier = 'none'`, etc.
 2. **Drop all queued telemetry events from disk** (`~/.selectivemirror/telemetry-queue/` — both pending and dead-letter). Bug-report queue is kept ONLY if it contains items currently being processed; future bug-report attempts will be refused.
-3. Prompt the user (interactive only): `Also request deletion of past server data? [y/N]`
-   - On y: enqueue a single signed `forget` request with the install_id; submit immediately
-   - On n: leave server data as-is
-4. Print confirmation: `Tier set to None. Queued events dropped. {Server-deletion request sent | Server data unchanged.}`
-5. Exit 0
+3. Print confirmation: `Tier set to None. Queued events dropped.`
+4. Exit 0
+
+> **v2 change**: the v1 design prompted "Also request deletion of past
+> server data? [y/N]" and could enqueue a `forget` request. Under v2
+> there is no per-install server data to delete (the schema has only
+> aggregate counters), so the prompt is obsolete and removed.
 
 ## `smirror report-bug --submit` behavior at each tier
 
@@ -211,17 +230,31 @@ Plus the existing keys:
 | `last_upgrade_event` | RFC3339 timestamp of most recent upgrade send (NULL if never) |
 | `last_recorded_version` | Last `client_version` for which the upgrade-detection logic ran |
 
-## `smirror telemetry forget`
+## `smirror telemetry forget` — removed in v2
 
-Sends a signed deletion request for past server-side data keyed on the install_id. Behavior:
+This subcommand was specified in earlier drafts and is **removed in v2**.
+Rationale, per the round-5 BMad panel:
 
-1. Construct request body: `{"install_id": <uuid>, "requested_at": <utc>, "reason": "user_forget"}`
-2. Sign with the same HMAC scheme as other telemetry submissions
-3. POST to `<endpoint>/v1/forget`
-4. Print confirmation: `Forget request sent. Server-side deletion within 30 days.`
-5. Exit 0
+- Under v2 (stream-aggregate-and-discard), no server-side record of an
+  individual install ever exists. There is nothing to delete.
+- A `forget` command that printed "Forget request sent" while routing
+  to a no-op handler would be a public commitment the project couldn't
+  honor — exactly the failure mode the round-1 panel flagged as
+  "product malpractice."
+- Bug-report narratives filed via `--browser` to GitHub Issues are
+  outside SelectiveMirror's controllership; deletion is handled by the
+  user via their own GitHub account or via GitHub's DSAR process.
 
-This works at any tier (a user at None may still have legacy data on the server from before they switched).
+Migration notes for any existing builds that shipped the design:
+
+- The CLI rejects `smirror telemetry forget` with a clear pointer to
+  the new model: "Under SelectiveMirror v2, no per-install server data
+  exists; there is nothing to forget. Run `smirror telemetry none` to
+  stop contributing, and see `smirror telemetry policy` for the full
+  data-handling contract."
+- The Cloudflare Worker's `/v1/forget` endpoint (if it was ever wired
+  during migration) returns `410 Gone` with a JSON body pointing at
+  PRIVACY.md.
 
 ## Tests to add (when implementing)
 
@@ -231,7 +264,8 @@ This works at any tier (a user at None may still have legacy data on the server 
   - First-run migration: registry → state DB on first run only
   - Transition from `'none'` to `'standard'`/`'reliability'` enqueues `first_seen`
   - Transition to `'none'` purges queued events
-  - `forget` produces a properly-signed request
+  - `forget` subcommand → rejected with v2 migration message; no
+    network call attempted
 
 - `cmd/smirror/reportbug_test.go`:
   - `--submit` at None tier → triggers prompt in interactive mode
@@ -245,3 +279,6 @@ This works at any tier (a user at None may still have legacy data on the server 
 - Per-mirror tier granularity — telemetry is per-install, not per-mirror.
 - Centralized fleet management — n/a for SM's threat model.
 - Auto-upgrade-on-error from None to Standard.
+- Server-side erasure (`forget`) — removed in v2; see "removed in v2"
+  section above. There is no record to erase; v2's architecture is
+  the erasure.

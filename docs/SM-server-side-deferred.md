@@ -4,9 +4,37 @@
 needs a focused change set across multiple components and is
 intentionally NOT batched with the privacy-bug rounds.
 
+> **Updated 2026-04-29 for v2 architecture.** The adoption of
+> stream-aggregate-and-discard
+> ([`telemetry-architecture-v2.md`](./telemetry-architecture-v2.md))
+> retires or downgrades several items below. Status changes:
+>
+> - **SM-161 retired.** Under v2 there is no normalization step: the
+>   Worker calls `telemetry.contribute()`, which UPSERTs a counter
+>   in a single transaction. No queue, no `process_ingest()`, no
+>   trigger.
+> - **SM-162 downgraded** from medium-severity blocker to minor
+>   architectural debt. Replay can only over-count a monotonic
+>   counter; no exfiltration vector exists. See
+>   [`SM-162-hmac-envelope-binding-plan.md`](./SM-162-hmac-envelope-binding-plan.md).
+> - **SM-163 partially retired.** Daily-salted IP hash replaces raw
+>   IP in rate-limit KV; the atomic-counter / non-atomic-counter
+>   trade-off remains an open Worker design choice.
+> - **SM-168 unchanged in scope but lower urgency.** The MSI build
+>   still must embed the version-derived HMAC key for any
+>   contribution to be accepted, but it's not a privacy issue —
+>   without the key, the worst case is silent contribution rejection.
+
 ## SM-161 — Worker proxy → ingest/normalize flow
 
-**Severity**: major. **Component**: Cloudflare Worker + Supabase.
+**Status**: ~~major~~ **RETIRED in v2** (2026-04-29).
+**Component**: Cloudflare Worker + Supabase.
+
+> Retired by the v2 architecture. The Worker now calls one RPC
+> (`telemetry.contribute()`); there is no normalization step, no
+> ingest_envelope, no async classification. The "missing" flow this
+> bug described doesn't need to exist. Detail preserved below for
+> historical context.
 
 The Worker currently forwards a raw envelope into
 `telemetry.ingest_envelope` and stops. The architecture document

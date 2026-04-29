@@ -1,4 +1,23 @@
-# Telemetry Microserver Architecture
+# Telemetry Microserver Architecture (v1 — superseded)
+
+> **Superseded by [`telemetry-architecture-v2.md`](./telemetry-architecture-v2.md) (2026-04-29).**
+>
+> This document describes v1: a store-then-normalize-then-rollup pipeline
+> where raw events live on the server until the retention janitor purges
+> them at 90 days. The round-5 BMad panel led to a deeper reframe — under
+> v2, no personal data is ever stored: every contribution is processed in
+> a single Postgres transaction and the payload is discarded. There is no
+> retention window because there are no records, no `forget` command
+> because there is nothing to delete, and the audit story is the schema
+> dump itself.
+>
+> **Read this document for** the historical context and the migration
+> baseline. **Read v2** for the target architecture and the migration plan
+> from here.
+>
+> v1 remains operational during the migration window
+> (Phases A–C in the v2 doc); v1 tables are dropped in Phase D after the
+> 90-day retention window has aged out the last v1 row.
 
 ## Goal
 

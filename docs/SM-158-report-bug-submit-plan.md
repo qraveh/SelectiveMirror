@@ -3,6 +3,21 @@
 **Status**: surface implemented (flags parsed, help text, None-tier
 gate); submission pipeline deferred to a focused implementation
 session.
+
+> **Updated 2026-04-29 for v2 architecture.** Under v2 (stream-
+> aggregate-and-discard), the submit pipeline targets the
+> `telemetry.contribute()` RPC and contributes a single
+> `bug_report` bucket increment — `(bug_kind, bug_surface,
+> client_version, severity_hint, source, submitted_tier)`. **The
+> bug-report narrative does NOT travel through telemetry**; it is
+> filed via `--browser` to GitHub Issues, where the user retains
+> control. The two paths are independent: `--submit` contributes a
+> count; `--browser` files the narrative; combining them on the
+> same invocation does both.
+>
+> See [`telemetry-architecture-v2.md`](./telemetry-architecture-v2.md)
+> for the rationale and
+> [`PRIVACY.md`](./PRIVACY.md) "Bug reports are not telemetry."
 **Severity**: major
 **Author**: Raveh, in response to Codex Validation Report
 2026-04-28.

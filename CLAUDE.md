@@ -9,7 +9,7 @@
 
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (smirror@qodeh.com)
-**Status**: v0.9.x-dev (Phases 1, 1.5, 2, 2.5, 4, 5, 6, 7 complete; Phase 3 USN journal pending). v0.9.0 released 2026-04-18; v0.9.26 (2026-04-29) is the latest published tag. Phase 5 telemetry live since v0.9.4-dev (Supabase backend + Cloudflare Worker proxy); MSI consent **registry** wired since v0.9.4-dev — the in-installer tier-selection **dialog** is shipping in the current development cycle (was tracked as the "pending UI checkbox" in `installer/TelemetryConsent.wxi`).
+**Status**: v0.9.x-dev (Phases 1, 1.5, 2, 2.5, 4, 5, 6, 7 complete; Phase 3 USN journal pending). v0.9.0 released 2026-04-18; v0.9.26 (2026-04-29) is the latest published tag. Phase 5 telemetry live since v0.9.4-dev (Supabase backend + Cloudflare Worker proxy); MSI consent **registry** wired since v0.9.4-dev — the in-installer tier-selection **dialog** is shipping in the current development cycle (was tracked as the "pending UI checkbox" in `installer/TelemetryConsent.wxi`). **Telemetry architecture v2 (stream-aggregate-and-discard) adopted 2026-04-29** — see `docs/telemetry-architecture-v2.md` and `docs/telemetry-v2.sql`. Under v2, no personal data is stored on the telemetry server by construction; v1 schema remains operational during the migration window. `smirror telemetry forget` is removed from the design.
 **License**: MIT
 **Language**: Go 1.26+
 

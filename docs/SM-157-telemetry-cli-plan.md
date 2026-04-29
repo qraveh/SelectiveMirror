@@ -3,6 +3,15 @@
 **Status**: not yet implemented; design is locked in
 [`docs/cli-telemetry-command.md`](./cli-telemetry-command.md).
 **Severity**: major
+
+> **Updated 2026-04-29 for v2 architecture.** The `forget` subcommand
+> is **removed** from the design — under stream-aggregate-and-discard
+> there is no server-side record to delete. The v1 design contained
+> six subcommands (none / standard / reliability / status / policy /
+> forget); v2 has five (no `forget`). The CLI must reject `forget`
+> with a clear pointer to v2's reasoning. See
+> [`telemetry-architecture-v2.md`](./telemetry-architecture-v2.md).
+> All other plan items below remain valid.
 **Author**: Raveh, in response to Codex Validation Report
 2026-04-28.
 
@@ -40,7 +49,11 @@ The full surface is specified in
   reliability deltas.
 - `smirror telemetry policy` — open `docs/PRIVACY.md` (or print path
   if no browser).
-- `smirror telemetry forget` — send the signed deletion request.
+- ~~`smirror telemetry forget` — send the signed deletion request.~~
+  **REMOVED in v2.** The CLI rejects this subcommand with a v2
+  migration message. There is no server-side per-install record to
+  delete; "withdraw consent" via `smirror telemetry none` is the
+  complete erasure path.
 
 Persistence: state DB `meta.telemetry_tier`, `telemetry_tier_changed_at`,
 `telemetry_tier_source`. Ordered fallback: state DB → registry →
@@ -65,11 +78,19 @@ and the same "please review the contract" tone.
 
 ## When this lands
 
-Best ordering:
+Best ordering under v2:
 
-1. SM-162 (HMAC envelope binding plan) — locks the payload shape.
-2. SM-158 (submit pipeline) — provides the queue / sign / send helpers.
-3. SM-157 (`smirror telemetry`) — uses the helpers from (2).
+1. v2 schema deployed to Supabase (Phase A in
+   `telemetry-architecture-v2.md`) — provides the
+   `telemetry.contribute()` RPC the client targets.
+2. SM-158 (submit pipeline) — provides the queue / sign / send
+   helpers, now targeting `contribute()` instead of v1 normalize-and-
+   store endpoints.
+3. SM-157 (`smirror telemetry`) — uses the helpers from (2). No
+   `forget` subcommand to wire up.
+
+SM-162 (HMAC envelope binding) is downgraded under v2 — replay can
+only over-count an aggregate, not exfiltrate. No longer a blocker.
 
 ## Test plan
 

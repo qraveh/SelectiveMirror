@@ -1,4 +1,19 @@
--- SelectiveMirror telemetry: human-readable SQL views
+-- ============================================================================
+-- SUPERSEDED IN PART BY telemetry-v2.sql (2026-04-29).
+-- ============================================================================
+--
+-- These views read from the v1 individual-event tables. Under v2 those
+-- tables go away after Phase D (see docs/telemetry-architecture-v2.md);
+-- views that depend on bug_report / installation / installation_event will
+-- be dropped in the same migration. The k-anonymity-friendly views
+-- (version_dist, install_config_distribution, tier_distribution) gain v2
+-- equivalents in telemetry-v2.sql and the digest script.
+--
+-- New analytics queries should target the v2 rollup tables. Do NOT add new
+-- views here that depend on v1 individual-event tables.
+-- ============================================================================
+
+-- SelectiveMirror telemetry: human-readable SQL views (v1 — historical)
 --
 -- These views are denormalized for a single-maintainer workflow: the data
 -- you'd actually scan in the Supabase Studio query editor on a Monday

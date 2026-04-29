@@ -1,4 +1,25 @@
--- SelectiveMirror telemetry: pg_cron background workers
+-- ============================================================================
+-- SUPERSEDED IN PART BY telemetry-v2.sql (2026-04-29).
+-- ============================================================================
+--
+-- v2 architecture maintains rollup counters INLINE inside the
+-- telemetry.contribute() function, so the daily rollup-refresh job becomes
+-- obsolete after Phase C of the migration. The retention janitor
+-- (purge_old_envelopes) becomes obsolete in Phase D when the v1 ingest
+-- tables themselves are dropped.
+--
+-- During the migration:
+--   - Phase A/B: keep both jobs running so v1 dashboards stay current.
+--   - Phase C (cutover): rollup-refresh for v1 tables stops being useful;
+--     retention janitor still runs to age out old v1 rows.
+--   - Phase D (post-retention): drop both jobs along with the v1 tables.
+--
+-- See docs/telemetry-architecture-v2.md for the full plan. Do NOT add new
+-- jobs here that target v1 tables — under v2 there are no individual-event
+-- tables to roll up or purge.
+-- ============================================================================
+
+-- SelectiveMirror telemetry: pg_cron background workers (v1 — historical)
 --
 -- Defines two recurring jobs that run inside the Postgres database
 -- (no external service needed):

@@ -1,4 +1,22 @@
--- SelectiveMirror telemetry microserver schema
+-- ============================================================================
+-- SUPERSEDED BY telemetry-v2.sql (2026-04-29).
+-- ============================================================================
+--
+-- This is the v1 schema. It defines tables for individual events and raw
+-- payloads (bug_report, installation_event, ingest_envelope, ...). v1 stays
+-- operational only during the migration window; the target architecture is
+-- stream-aggregate-and-discard, where no personal data is ever stored.
+--
+-- See:
+--   - docs/telemetry-architecture-v2.md  — design rationale + migration plan
+--   - docs/telemetry-v2.sql              — replacement schema (additive)
+--   - docs/PRIVACY.md                    — user-facing v2 contract
+--
+-- Do NOT extend this file with new fields or tables. Any additions belong
+-- in v2's bucket-key tuples, not here.
+-- ============================================================================
+
+-- SelectiveMirror telemetry microserver schema (v1 — historical)
 -- Purpose: bug-report ingest (always per-event approval) and minimal opt-in
 -- installation telemetry (first_seen + upgrade only), with asynchronous
 -- taxonomy assignment, on PostgreSQL.

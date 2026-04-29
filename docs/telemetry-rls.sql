@@ -1,4 +1,21 @@
--- SelectiveMirror telemetry: Row-Level Security + CHECK constraints
+-- ============================================================================
+-- SUPERSEDED IN PART BY telemetry-v2.sql (2026-04-29).
+-- ============================================================================
+--
+-- This file's RLS policies cover the v1 individual-event tables
+-- (bug_report, installation_event, ingest_envelope, ...). Under v2, those
+-- tables are replaced by aggregate-counter rollups and the relevant RLS
+-- moves into telemetry-v2.sql. The HMAC verification function defined here
+-- (telemetry.verify_versioned_hmac) is RE-DECLARED identically in
+-- telemetry-v2.sql so v2 stays self-contained; the version here remains
+-- valid during the migration window.
+--
+-- See docs/telemetry-architecture-v2.md for the migration plan. After
+-- Phase D (drop v1 tables), the only RLS still relevant from this file is
+-- the HMAC verify function — which v2 will continue to call.
+-- ============================================================================
+
+-- SelectiveMirror telemetry: Row-Level Security + CHECK constraints (v1 — historical)
 --
 -- Purpose: Layer 1 defenses for the public ingest surface. Apply AFTER
 -- loading telemetry-microserver.sql (which creates the tables).

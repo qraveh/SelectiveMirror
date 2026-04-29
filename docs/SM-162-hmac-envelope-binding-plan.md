@@ -3,6 +3,24 @@
 **Status**: deferred to a focused implementation session.
 **Severity**: medium (architectural; not a current data-leak, but
 weakens the integrity guarantee of submitted telemetry).
+
+> **Downgraded 2026-04-29 for v2 architecture.** Under v2 (stream-
+> aggregate-and-discard), no envelope is stored. A captured signed
+> payload, replayed through a different proxy or with forged metadata,
+> can only **over-count an aggregate counter** — it cannot create a
+> spurious row, exfiltrate data, or impersonate a victim. Aggregate
+> counters are monotonic and rate-limited (Cloudflare Worker side).
+> The original threat model that motivated SM-162 (envelope-tampering
+> on stored ingest_envelope rows) does not apply to v2.
+>
+> SM-162 is therefore **downgraded from "must fix before v1.0" to
+> "minor architectural debt."** Either of the original two design
+> options (extra verify-fn parameter, or fold envelope into payload)
+> can land later as a defense-in-depth improvement. It is no longer
+> a blocker for the submit pipeline (SM-158) or the runtime CLI
+> (SM-157).
+>
+> The plan below is preserved for the future revisit.
 **Author**: Raveh, with input from Codex Validation Report 2026-04-27.
 
 ## The gap
