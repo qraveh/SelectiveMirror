@@ -69,6 +69,14 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # Tier-2 #21 (validation panel 2026-04-29): re-run go mod verify
+      # at release time. ci.yml runs it on branch pushes, but CI's
+      # branch trigger does not cross-link to this tag trigger — a tag
+      # pushed onto a commit whose go.sum diverges from go.mod could
+      # otherwise still ship. Re-run as a release gate.
+      - name: Verify module bytes match go.sum (SEC-C1 supply-chain gate)
+        run: go mod verify
+
       # Defense in depth: re-run the unit suite at release time. CI's
       # branch trigger does not cross-link to this tag trigger, so a tag
       # pushed onto a CI-failed commit would otherwise still ship.
@@ -192,6 +200,41 @@ jobs:
           if (-not $exe) { Write-Error "smirror.exe not found in dist/"; exit 1 }
           echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_OUTPUT
           Write-Host "Located: $($exe.FullName)"
+
+      # Tier-2 #23 (validation panel 2026-04-29): assert the built
+      # binary actually carries an HMAC build key. The Compute /
+      # Run GoReleaser steps above can succeed and leave the ldflag
+      # value empty (e.g., GoReleaser config drift, key var name
+      # typo) — the binary would then ship with telemetry submission
+      # silently disabled. `smirror version` reports the fingerprint;
+      # "none" means the ldflag never reached the binary. The
+      # RELEASE_ALLOW_NO_TELEMETRY_KEY=1 escape valve from PR-S3 still
+      # applies — when it is set, "none" is tolerated with a warning.
+      - name: Verify built binary carries telemetry HMAC build-key
+        shell: pwsh
+        env:
+          ALLOW_NO_KEY: ${{ vars.RELEASE_ALLOW_NO_TELEMETRY_KEY }}
+        run: |
+          $out = & "${{ steps.locate-exe.outputs.EXE_PATH }}" version
+          Write-Host "smirror version output:`n$out"
+          $line = $out -split "`n" | Where-Object { $_ -match "telemetry build-key:" } | Select-Object -First 1
+          if (-not $line) {
+            Write-Error "smirror version did not print 'telemetry build-key:' line — release cannot continue"
+            exit 1
+          }
+          $value = ($line -replace "telemetry build-key:\s*", "").Trim()
+          Write-Host "Detected build-key fingerprint: $value"
+          if ($value -eq "none") {
+            if ($env:ALLOW_NO_KEY -eq "1") {
+              Write-Host "::warning::Built binary has no telemetry HMAC key, but RELEASE_ALLOW_NO_TELEMETRY_KEY=1 is set — proceeding."
+            } else {
+              Write-Error "Built binary's telemetry build-key fingerprint is 'none' — the SMIRROR_TELEMETRY_DERIVED_KEY ldflag never reached the binary. Override with repository variable RELEASE_ALLOW_NO_TELEMETRY_KEY=1 only if shipping a no-telemetry build is intentional."
+              exit 1
+            }
+          } elseif ($value -eq "invalid") {
+            Write-Error "Built binary's telemetry build-key fingerprint is 'invalid' — the SMIRROR_TELEMETRY_DERIVED_KEY ldflag was set but is not valid hex."
+            exit 1
+          }
 
       - name: Upload smirror.exe artifact for msi job
         uses: actions/upload-artifact@v4
