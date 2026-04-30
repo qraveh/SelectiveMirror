@@ -236,3 +236,102 @@ func TestSanitizeReport_HomePlaceholderTrailing(t *testing.T) {
 		t.Errorf("expected ~/<files>, got: %q", got)
 	}
 }
+
+// SM-210: mirror-name redaction must be case-INSENSITIVE. Pre-fix,
+// `strings.ReplaceAll` only matched the user-typed casing, so a Windows
+// log line that emitted the same name in a different case (lowercase
+// from Go's slog default, uppercase from a third-party tool) leaked the
+// name through `--sanitize`.
+func TestSanitizeReport_MirrorNameCaseInsensitive(t *testing.T) {
+	in := "synced from MyMirror; lower form mymirror logged; upper form MYMIRROR errored"
+	got := SanitizeReport(in, SanitizeOptions{
+		MirrorNames: []string{"MyMirror"},
+	})
+	for _, forbidden := range []string{"MyMirror", "mymirror", "MYMIRROR"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("case variant %q leaked in sanitized output: %q", forbidden, got)
+		}
+	}
+	// Three distinct occurrences should all be replaced.
+	if n := strings.Count(got, "mirror_0"); n != 3 {
+		t.Errorf("expected 3 `mirror_0` substitutions, got %d in %q", n, got)
+	}
+}
+
+// SM-211: mirror-name redaction must NOT match inside other words.
+// Pre-fix, naive substring `strings.ReplaceAll` garbled English text
+// when a mirror name was a common substring (e.g. "log" inside
+// "logical", or even "m" inside "Some").
+func TestSanitizeReport_MirrorNameWordBoundary(t *testing.T) {
+	cases := []struct {
+		name      string
+		mirror    string
+		in        string
+		mustKeep  []string // substrings that must survive (the false-match victims)
+		mustHide  []string // standalone occurrences that must still be redacted
+		wantSubs  int      // expected number of `mirror_0` substitutions
+	}{
+		{
+			name:     "log substring not garbled",
+			mirror:   "log",
+			in:       "logical conclusion: catalog entry blogged from log",
+			mustKeep: []string{"logical", "catalog", "blogged"},
+			mustHide: []string{" log"}, // standalone trailing
+			wantSubs: 1,
+		},
+		{
+			name:     "test substring not garbled",
+			mirror:   "test",
+			in:       "testing the contest between fastest and test runner",
+			mustKeep: []string{"testing", "contest", "fastest"},
+			mustHide: []string{" test "},
+			wantSubs: 1,
+		},
+		{
+			name:     "name as path component still redacted",
+			mirror:   "MyDocs",
+			in:       "queue full for MyDocs at 12:34",
+			mustKeep: []string{"queue full", "12:34"},
+			mustHide: []string{"MyDocs"},
+			wantSubs: 1,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := SanitizeReport(c.in, SanitizeOptions{
+				MirrorNames: []string{c.mirror},
+			})
+			for _, keep := range c.mustKeep {
+				if !strings.Contains(got, keep) {
+					t.Errorf("over-redaction: substring %q vanished from %q", keep, got)
+				}
+			}
+			for _, hide := range c.mustHide {
+				if strings.Contains(got, hide) {
+					t.Errorf("standalone occurrence %q leaked in %q", hide, got)
+				}
+			}
+			if n := strings.Count(got, "mirror_0"); n != c.wantSubs {
+				t.Errorf("wanted %d `mirror_0` substitutions, got %d in %q", c.wantSubs, n, got)
+			}
+		})
+	}
+}
+
+// SM-211: mirror names shorter than 3 chars are skipped entirely
+// (too likely to spuriously match inside English/log text). The
+// path-prefix step already covers them when they appear in paths.
+// Validator's reproducer: name "m" garbled "Some text" into
+// "Somirror_0e text".
+func TestSanitizeReport_MirrorNameShortNameSkipped(t *testing.T) {
+	in := "Some text from m mirror"
+	got := SanitizeReport(in, SanitizeOptions{
+		MirrorNames: []string{"m"},
+	})
+	if !strings.Contains(got, "Some text") {
+		t.Errorf("short-name redaction garbled English text: %q", got)
+	}
+	if strings.Contains(got, "mirror_0") {
+		t.Errorf("short name (<3 chars) should be skipped, but substitution occurred: %q", got)
+	}
+}

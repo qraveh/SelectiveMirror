@@ -251,10 +251,18 @@ func SanitizeReport(report string, opts SanitizeOptions) string {
 	//    in step 2. Length-descending order avoids a name being a
 	//    prefix of another name (e.g., "Acme" replaced inside
 	//    "AcmeCorp").
+	//
+	//    SM-210/SM-211: matched case-INSENSITIVELY (Windows log lines
+	//    can emit a mirror name in any casing), with ASCII word
+	//    boundaries so a short / common-substring name (e.g. "log",
+	//    "test", or even "m") doesn't garble English text by matching
+	//    inside other words. Names shorter than 3 chars are skipped
+	//    entirely — too likely to spuriously match; the path-prefix
+	//    step (#2) already covers them when they appear in paths.
 	type nameSub struct{ name, repl string }
 	var nameSubs []nameSub
 	for i, n := range opts.MirrorNames {
-		if n == "" {
+		if n == "" || len(n) < 3 {
 			continue
 		}
 		nameSubs = append(nameSubs, nameSub{n, fmt.Sprintf("mirror_%d", i)})
@@ -263,7 +271,8 @@ func SanitizeReport(report string, opts SanitizeOptions) string {
 		return len(nameSubs[i].name) > len(nameSubs[j].name)
 	})
 	for _, s := range nameSubs {
-		report = strings.ReplaceAll(report, s.name, s.repl)
+		re := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(s.name) + `\b`)
+		report = re.ReplaceAllString(report, s.repl)
 	}
 
 	return report
