@@ -56,6 +56,15 @@ const (
 // CompatCheck returns the compatibility level and a human-readable message.
 func (info *Info) CompatCheck() (Compatibility, string) {
 	v := info.Version
+	// SM-159: refuse rclone 2.x and beyond outright. AtLeast(1, 73, 0)
+	// returns true for any major >= 2 (because 2 > 1), which would
+	// previously classify a hypothetical rclone 2.0 as CompatFull —
+	// claiming compatibility we have not verified. Until a future
+	// SelectiveMirror release explicitly tests against rclone 2.x,
+	// treat it as incompatible so the user is told to pin to 1.x.
+	if v.Major >= 2 {
+		return CompatNone, fmt.Sprintf("rclone %s — incompatible: untested major version (this build of SelectiveMirror is verified against rclone 1.x only). Pin to a 1.x release until SelectiveMirror declares 2.x compatibility.", v)
+	}
 	if v.AtLeast(1, 73, 0) {
 		return CompatFull, fmt.Sprintf("rclone %s — full compatibility", v)
 	}

@@ -1,6 +1,7 @@
 package rclone
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -91,6 +92,30 @@ func TestCompatCheck_None(t *testing.T) {
 	compat, _ := info.CompatCheck()
 	if compat != CompatNone {
 		t.Errorf("1.40.0 should be CompatNone, got %d", compat)
+	}
+}
+
+// SM-159: rclone 2.x and beyond must be classified CompatNone, not
+// CompatFull. Pre-fix, AtLeast(1, 73, 0) returned true for any
+// major >= 2 (because 2 > 1), so a hypothetical rclone 2.0 was
+// labeled CompatFull — claiming compatibility we have not verified.
+func TestCompatCheck_FutureMajorIsNone(t *testing.T) {
+	cases := []Version{
+		{2, 0, 0, ""},
+		{2, 5, 12, ""},
+		{3, 0, 0, ""},
+	}
+	for _, v := range cases {
+		info := &Info{Version: v}
+		compat, msg := info.CompatCheck()
+		if compat != CompatNone {
+			t.Errorf("%s should be CompatNone, got %d (msg=%q)", v, compat, msg)
+		}
+		// The message should hint at the untested-major reason so the
+		// user knows to pin to 1.x rather than chase a non-existent bug.
+		if !strings.Contains(msg, "untested major version") && !strings.Contains(msg, "1.x") {
+			t.Errorf("expected msg to explain the untested-major reason; got %q", msg)
+		}
 	}
 }
 
