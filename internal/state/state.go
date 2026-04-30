@@ -47,10 +47,18 @@ CREATE TABLE IF NOT EXISTS meta (
 // migrations is the ordered list of schema migrations. Each function is
 // idempotent (safe to re-run). The framework tracks which migrations have
 // been applied via the "schema_version" key in the meta table.
-var migrations = []func(db *sql.DB) error{
+// SM-214: each migration runs in its own transaction so a partial
+// failure (one ALTER succeeds, the next fails) leaves the schema
+// either fully migrated to version N+1 or unchanged at N — never in
+// a mixed state. SQLite supports DDL inside transactions, unlike
+// most other RDBMS. The migration functions take *sql.Tx (not
+// *sql.DB) so the contract is enforced at the type level: a future
+// migration author can't accidentally execute against the connection
+// pool and bypass the transaction.
+var migrations = []func(tx *sql.Tx) error{
 	// Migration 0: add mtime_ns column (was manual ALTER TABLE in v0.3.x)
-	func(db *sql.DB) error {
-		_, err := db.Exec(`ALTER TABLE sync_state ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`)
+	func(tx *sql.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE sync_state ADD COLUMN mtime_ns INTEGER NOT NULL DEFAULT 0`)
 		if err != nil {
 			errMsg := err.Error()
 			if strings.Contains(errMsg, "duplicate column name") || strings.Contains(errMsg, "already exists") {
@@ -63,14 +71,14 @@ var migrations = []func(db *sql.DB) error{
 	// Migration 1: add remote verification columns (SM-083 trust model).
 	// Distinguishes local-wishful (synced_at = "we ran rclone") from
 	// remote-verified (remote_verified_at = "lsjson confirmed file exists").
-	func(db *sql.DB) error {
+	func(tx *sql.Tx) error {
 		cols := []string{
 			`ALTER TABLE sync_state ADD COLUMN remote_verified_at TEXT DEFAULT ''`,
 			`ALTER TABLE sync_state ADD COLUMN remote_hash TEXT DEFAULT ''`,
 			`ALTER TABLE sync_state ADD COLUMN remote_size INTEGER DEFAULT 0`,
 		}
 		for _, stmt := range cols {
-			if _, err := db.Exec(stmt); err != nil {
+			if _, err := tx.Exec(stmt); err != nil {
 				errMsg := err.Error()
 				if strings.Contains(errMsg, "duplicate column name") || strings.Contains(errMsg, "already exists") {
 					continue
@@ -271,7 +279,9 @@ func (s *Store) MarkDaemonStartup() {
 
 // runMigrations applies pending schema migrations. Reads the current version
 // from the meta table, runs all migrations from currentVersion onward, and
-// updates the version. Each migration is idempotent.
+// updates the version. Each migration is idempotent AND transactional
+// (SM-214): if a migration body returns an error, the transaction is rolled
+// back, leaving the schema untouched at the prior version.
 func runMigrations(db *sql.DB) error {
 	currentVersion := 0
 
@@ -283,8 +293,16 @@ func runMigrations(db *sql.DB) error {
 	}
 
 	for i := currentVersion; i < len(migrations); i++ {
-		if err := migrations[i](db); err != nil {
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("migration %d begin: %w", i, err)
+		}
+		if err := migrations[i](tx); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("migration %d: %w", i, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("migration %d commit: %w", i, err)
 		}
 	}
 
@@ -330,7 +348,16 @@ func (s *Store) VacuumIfStale() (bool, error) {
 	if _, err := s.db.Exec("VACUUM"); err != nil {
 		return false, err
 	}
-	s.SetMeta("last_vacuum_at", time.Now().UTC().Format(time.RFC3339))
+	// SM-215: persist the last-vacuum timestamp; if SetMeta fails (transient
+	// DB error, disk full), surface the error so the caller can stop
+	// re-running VACUUM on every heartbeat. Without this, an unhandled
+	// SetMeta failure leaves last_vacuum_at unchanged and the next call
+	// runs VACUUM again immediately — turning into a tight loop of
+	// VACUUM-every-heartbeat under disk pressure (the same condition that
+	// made SetMeta fail).
+	if err := s.SetMeta("last_vacuum_at", time.Now().UTC().Format(time.RFC3339)); err != nil {
+		return true, fmt.Errorf("recording last_vacuum_at: %w", err)
+	}
 	return true, nil
 }
 

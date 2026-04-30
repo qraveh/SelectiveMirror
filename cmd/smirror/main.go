@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.79-dev"
+var version = "0.9.80-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -80,11 +80,37 @@ func main() {
 	//    is everyone by default).
 	earlyLogPath := earlyLogTarget(service.IsWindowsService())
 	if earlyLogPath != "" {
-		_ = os.MkdirAll(filepath.Dir(earlyLogPath), 0700)
+		earlyDir := filepath.Dir(earlyLogPath)
+		_ = os.MkdirAll(earlyDir, 0700)
+
+		// SM-213: lock down the service data directory ACL on Windows
+		// before any state file is written. The 0700 mode passed above is
+		// SILENTLY IGNORED on Windows; without an explicit DACL the
+		// directory inherits %ProgramData%\'s default (BUILTIN\Users:R&X),
+		// exposing state.db, status.json, anomalies/*.jsonl, early.log
+		// and service-crash.log to every user on a multi-user host. We
+		// reset the DACL to SYSTEM+Administrators only on every service-
+		// mode startup (idempotent; re-tightens after any ad-hoc change).
+		// User-mode invocations skip this — %LOCALAPPDATA% is already
+		// per-user by default.
+		//
+		// Failures here are logged to the early-log line below but not
+		// fatal: a non-functional service is worse than a degraded-
+		// privacy one for v1.0. The first ACL audit (`smirror service
+		// status` round-trip + `icacls`) will flag the regression.
+		var aclErr error
+		if service.IsWindowsService() {
+			aclErr = config.RestrictDirToSystemAndAdmins(earlyDir)
+		}
+
 		earlyLog, _ := os.OpenFile(earlyLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 		if earlyLog != nil {
 			fmt.Fprintf(earlyLog, "%s main() entered pid=%d isSvc=%v args=%v\n",
 				time.Now().Format(time.RFC3339), os.Getpid(), service.IsWindowsService(), os.Args)
+			if aclErr != nil {
+				fmt.Fprintf(earlyLog, "%s SM-213 RestrictDirToSystemAndAdmins(%s) failed: %v\n",
+					time.Now().Format(time.RFC3339), earlyDir, aclErr)
+			}
 			earlyLog.Close()
 		}
 	}

@@ -21,3 +21,12 @@ func IsAdminOwnedPath(path string) (bool, error) {
 	}
 	return stat.Uid == 0, nil
 }
+
+// RestrictDirToSystemAndAdmins is a no-op on non-Windows. The POSIX
+// 0700 directory mode supplied to os.MkdirAll is honored by the kernel
+// (unlike Windows, where mode bits are silently ignored), so the
+// equivalent "system+root only" restriction is already in effect by
+// the time the directory is created. SM-213.
+func RestrictDirToSystemAndAdmins(path string) error {
+	return nil
+}

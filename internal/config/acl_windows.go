@@ -124,3 +124,88 @@ func IsAdminOwnedPath(path string) (bool, error) {
 
 	return true, nil
 }
+
+// RestrictDirToSystemAndAdmins replaces the DACL on path with one that
+// grants only LocalSystem and BUILTIN\Administrators full access (with
+// container+object inheritance for child files/dirs), and disables
+// inheritance from the parent directory. Used at service-mode startup
+// to lock down %ProgramData%\SelectiveMirror so state.db, status.json,
+// anomaly logs, early.log and service-crash.log are not world-readable
+// on multi-user Windows hosts (SM-213).
+//
+// The Go file-mode bits (0700, 0600) supplied to os.MkdirAll / os.OpenFile
+// are SILENTLY IGNORED on Windows — they don't translate to ACLs — so
+// %ProgramData%\<app>\ inherits the default %ProgramData%\ DACL, which
+// grants BUILTIN\Users:(R&X). On multi-user systems (corporate file-
+// servers, shared-build agents, RDP hosts) every standard user could
+// then read every path the service ever touched.
+//
+// This call is idempotent: re-applying the same DACL is a no-op. The
+// service-mode entry path calls it on every startup so that an
+// administrator who deliberately loosened the DACL (e.g. to attach a
+// debugger) gets it re-tightened automatically; an admin who needs the
+// looser permissions persistently can stop the service before changing.
+//
+// Caller policy: failures here are logged but not fatal. Privacy
+// degradation is preferable to a non-starting service. The intent is
+// belt-and-braces, not a hard gate.
+func RestrictDirToSystemAndAdmins(path string) error {
+	systemSID, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return fmt.Errorf("WinLocalSystemSid: %w", err)
+	}
+	adminSID, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return fmt.Errorf("WinBuiltinAdministratorsSid: %w", err)
+	}
+
+	// SUB_CONTAINERS_AND_OBJECTS_INHERIT = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE.
+	// Means: this ACE applies to the directory itself AND is inherited by
+	// every file (object) and subdirectory (container) created inside it.
+	const inherit = uint32(windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+
+	eas := []windows.EXPLICIT_ACCESS{
+		{
+			AccessPermissions: windows.GENERIC_ALL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Inheritance:       inherit,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  windows.TRUSTEE_IS_USER,
+				TrusteeValue: windows.TrusteeValueFromSID(systemSID),
+			},
+		},
+		{
+			AccessPermissions: windows.GENERIC_ALL,
+			AccessMode:        windows.GRANT_ACCESS,
+			Inheritance:       inherit,
+			Trustee: windows.TRUSTEE{
+				TrusteeForm:  windows.TRUSTEE_IS_SID,
+				TrusteeType:  windows.TRUSTEE_IS_GROUP,
+				TrusteeValue: windows.TrusteeValueFromSID(adminSID),
+			},
+		},
+	}
+
+	dacl, err := windows.ACLFromEntries(eas, nil)
+	if err != nil {
+		return fmt.Errorf("ACLFromEntries: %w", err)
+	}
+
+	// PROTECTED_DACL_SECURITY_INFORMATION clears the SE_DACL_AUTO_INHERITED
+	// bit and prevents future inheritance from parent — without it, a
+	// future change to %ProgramData%\ could re-add Users:R via inherited
+	// ACEs.
+	const secInfo = windows.DACL_SECURITY_INFORMATION |
+		windows.PROTECTED_DACL_SECURITY_INFORMATION
+
+	if err := windows.SetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		secInfo,
+		nil, nil, dacl, nil,
+	); err != nil {
+		return fmt.Errorf("SetNamedSecurityInfo(%q): %w", path, err)
+	}
+	return nil
+}
