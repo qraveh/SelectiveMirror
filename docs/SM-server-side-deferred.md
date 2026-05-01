@@ -20,10 +20,21 @@ intentionally NOT batched with the privacy-bug rounds.
 > - **SM-163 partially retired.** Daily-salted IP hash replaces raw
 >   IP in rate-limit KV; the atomic-counter / non-atomic-counter
 >   trade-off remains an open Worker design choice.
-> - **SM-168 unchanged in scope but lower urgency.** The MSI build
->   still must embed the version-derived HMAC key for any
->   contribution to be accepted, but it's not a privacy issue —
->   without the key, the worst case is silent contribution rejection.
+> - **SM-168 SHIPPED** (verified 0.9.82-dev tip). `release.yml`
+>   computes `HMAC-SHA256(master_key, version)` from the
+>   `SMIRROR_TELEMETRY_MASTER_KEY` secret, exports it to GoReleaser
+>   as `SMIRROR_TELEMETRY_DERIVED_KEY`. `.goreleaser.yaml` ldflag
+>   `-X .../internal/telemetry.buildKey={{.Env.SMIRROR_TELEMETRY_DERIVED_KEY}}`
+>   bakes it into the binary. `internal/telemetry/hmac.go` exposes
+>   `BuildKeyFingerprint()` (returns `"none"` / `"invalid"` /
+>   8-hex-char fingerprint). `cmd/smirror/main.go` prints
+>   `telemetry build-key:` line in `smirror version`. release.yml
+>   has a verification gate that fails the release if the binary
+>   reports `"none"` (with `RELEASE_ALLOW_NO_TELEMETRY_KEY=1` repo-
+>   variable escape valve for intentional no-telemetry builds).
+>   Marek's panel concern (round-3, 2026-04-30) was based on
+>   outdated context; SM-168 was wired in an earlier commit batch
+>   not yet visible to the panel summary.
 
 ## SM-161 — Worker proxy → ingest/normalize flow
 
@@ -88,7 +99,10 @@ Three flaws documented in the validation report; current status of each:
 
 ## SM-168 — MSI build pipeline + telemetry signing key
 
-**Severity**: major. **Component**: installer + release.yml.
+**Status**: ✅ **SHIPPED** (verified at 0.9.82-dev tip; see status
+banner above for full details). **Severity**: was major. **Component**:
+installer + release.yml. The plan documented below is preserved for
+historical context; the implementation is in place.
 
 The release workflow (`.github/workflows/release.yml`) calls
 `installer/build-msi.ps1` to produce the per-platform MSI. The build

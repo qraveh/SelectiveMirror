@@ -41,7 +41,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.82-dev"
+var version = "0.9.83-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -292,6 +292,9 @@ func cliMain() {
 		cmdTask(configPath, cmdArgs)
 	case "service":
 		cmdService(configPath, cmdArgs)
+	case "telemetry":
+		// SM-157: runtime tier management.
+		cmdTelemetry(configPath, cmdArgs)
 	case "version":
 		fmt.Printf("smirror %s\n", version)
 		fmt.Println("Copyright (c) 2026 Raveh Neeman")
@@ -339,6 +342,8 @@ Commands:
   service <action...>        Windows Service: install [start], stop, uninstall [--clean] [--yes]
                              Compound: "service install start", "service stop uninstall [--clean]"
                              ("run as administrator" elevated cmd/PowerShell required; advanced 24/7 mode)
+  telemetry <action>         View / change telemetry tier (see 'smirror telemetry --help')
+                             Actions: status, none, standard, reliability, policy, inspect
   version                    Show version
 
 Options:
