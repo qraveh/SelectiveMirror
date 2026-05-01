@@ -426,6 +426,34 @@ func lineContaining(s string, offset int) string {
 }
 
 // ---------------------------------------------------------------------------
+// Drift detection — bug_unknown_share view (Mary's round-3 panel fix)
+// ---------------------------------------------------------------------------
+//
+// Under v2 the client picks bug_kind from a closed taxonomy at submit
+// time. If a binary version misclassifies (or hits genuinely novel
+// failure modes), the unknown share for that version is the leading
+// indicator. The bug_unknown_share view lets the maintainer query for
+// versions whose unknown_pct is high — schedule a taxonomy update or
+// revoke the version.
+
+func TestTelemetryV2Schema_HasBugUnknownShareView(t *testing.T) {
+	t.Parallel()
+	coverage.Record("telemetry_v2_schema_drift_view")
+
+	sql := readV2SQL(t)
+
+	if !strings.Contains(sql, "CREATE OR REPLACE VIEW telemetry.bug_unknown_share") {
+		t.Errorf("v2 SQL must define the bug_unknown_share view (Mary's drift-detection)")
+	}
+	// The view must apply the k-anon floor (>= 5 reports per version)
+	// before exposing rows. We grep for the literal as the simplest
+	// invariant check; if the floor changes, this test breaks loudly.
+	if !strings.Contains(sql, "HAVING SUM(reports) >= 5") {
+		t.Errorf("bug_unknown_share view must apply k-anon floor of 5 reports per version")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Sanity: docs/telemetry-v2.sql is at the expected path
 // ---------------------------------------------------------------------------
 

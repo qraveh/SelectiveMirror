@@ -821,6 +821,7 @@ var coverage = &coverageTracker{
 		"telemetry_v2_artifacts_no_narrative_quotes": {Description: "Telemetry v2: no quoted bug-report text in published artifacts", Required: 1},
 		"telemetry_v2_cli_forget_rejected":         {Description: "Telemetry v2: smirror telemetry forget exits with v2 migration message", Required: 1},
 		"telemetry_v2_cli_inspect_works":           {Description: "Telemetry v2: smirror telemetry inspect prints structured payload", Required: 1},
+		"telemetry_v2_schema_drift_view":            {Description: "Telemetry v2: bug_unknown_share view exists for drift detection", Required: 1},
 	},
 }
 

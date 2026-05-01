@@ -1,26 +1,39 @@
 #!/usr/bin/env python3
 """
-SelectiveMirror telemetry weekly digest generator.
+SelectiveMirror telemetry weekly digest generator (v2).
 
-Produces a single Markdown file summarizing the week's telemetry data:
-install events, bug reports, version distribution, action items.
+Produces a single Markdown file summarizing the week's telemetry
+data: install events, bug-categorical counts, version distribution,
+reliability snapshots, action items.
+
+Targets the v2 schema (`docs/telemetry-v2.sql`):
+  - installation_daily_rollup
+  - bug_daily_rollup
+  - reliability_daily_rollup
+  - telemetry.version_dist (view)
+
+Under v2 (stream-aggregate-and-discard), the schema holds aggregate
+counters only — there are no per-event rows. The digest queries the
+rollup tables directly. Several v1-era sections are intentionally
+absent under v2:
+
+  - Recurring bug signatures: there are no signatures stored (no
+    per-event rows). The kind × surface × version count rollup
+    replaces it.
+  - Backend mix: backend_types isn't a v2 dimension.
+  - Per-report install_id prefix: never published (always was
+    forbidden; v2 makes it structurally impossible).
+
+A new section appears under v2: bucketed reliability snapshot
+patterns (anomaly_count_bucket × leading anomaly kind × version),
+when Reliability-tier contributions are present.
 
 Designed for a single-maintainer project at low volume — the report
-gracefully degrades to "n is too small for analysis; pipeline is alive"
-when there's not enough data to draw conclusions.
+gracefully degrades to "n is too small for analysis; pipeline is
+alive" when there's not enough data to draw conclusions.
 
-Form factor and design: see panel review (Mary the Analyst, 2026-04-28)
-and docs/telemetry-architecture-v2.md.
-
-NOTE (2026-04-29): the queries below still target the v1 row-per-event
-tables (bug_report, installation_event, ingest_envelope, ...). Under
-the v2 architecture (stream-aggregate-and-discard) those tables don't
-exist — data lives only in the v2 rollup tables (installation_daily_rollup,
-bug_daily_rollup, reliability_daily_rollup) with denormalized
-bucket-key tuples. A v2 rewrite of this script is pending; until then,
-this script will produce empty/stale output against a v2-only
-database. The maintainer can fall back to the manual SQL queries in
-docs/operations/telemetry-ops.md.
+Form factor and design: see panel review (Mary the Analyst,
+2026-04-28; rounds 3-5) and docs/telemetry-architecture-v2.md.
 
 Usage:
     # Set DATABASE_URL to your Supabase connection string:
@@ -40,8 +53,10 @@ Output: Markdown to stdout. Exit code 0 on success, 1 on database error,
 2 on missing DATABASE_URL.
 
 Privacy note: the script connects with the service_role key (or the
-postgres user) so it sees all rows. It writes only aggregated counts and
-sanitized signatures to the report — never raw report_text or install_id.
+postgres user) so it sees all rollup rows. By construction (v2
+architecture) there are no raw payloads on disk, no install_ids, no
+narratives — only aggregate counts. The script applies an additional
+k-anonymity floor of 5 before publishing.
 """
 
 import os
@@ -95,171 +110,148 @@ def k_anon_filter(rows, count_field: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# SQL queries — v1-era. Pending v2 rewrite to query the v2 rollup tables.
+# SQL queries — v2 rollup-only.
 # ---------------------------------------------------------------------------
+#
+# All queries hit the three rollup tables:
+#   - installation_daily_rollup (first_seen + upgrade events)
+#   - bug_daily_rollup (categorical bug-report counts)
+#   - reliability_daily_rollup (Reliability-tier snapshots)
+# Plus the v2 view:
+#   - telemetry.version_dist (30-day version distribution)
+#
+# Under v2 there is no install_id retention, so "active in last 30
+# days as a distinct install count" doesn't exist. The replacement is
+# event_volume_30d — the total number of installation events over the
+# window. Different number; same maintainer-question.
 
 Q_HEADLINE = """
 WITH wk AS (
   SELECT date_trunc('week', now() AT TIME ZONE 'UTC')::date AS this_wk
 )
 SELECT
-  (SELECT COUNT(*) FROM telemetry.bug_report
-   WHERE reported_at >= wk.this_wk
-     AND reported_at <  wk.this_wk + INTERVAL '7 days') AS bugs_this_wk,
-  (SELECT COUNT(*) FROM telemetry.bug_report
-   WHERE reported_at >= wk.this_wk - INTERVAL '7 days'
-     AND reported_at <  wk.this_wk) AS bugs_prev_wk,
-  (SELECT COUNT(*) FROM telemetry.bug_report
-   WHERE reported_at >= wk.this_wk - INTERVAL '28 days'
-     AND reported_at <  wk.this_wk) AS bugs_4wk,
-  (SELECT COUNT(*) FROM telemetry.installation_event
-   WHERE event_name = 'first_seen'
-     AND reported_at >= wk.this_wk
-     AND reported_at <  wk.this_wk + INTERVAL '7 days') AS new_installs_this_wk,
-  (SELECT COUNT(*) FROM telemetry.installation_event
-   WHERE event_name = 'upgrade'
-     AND reported_at >= wk.this_wk
-     AND reported_at <  wk.this_wk + INTERVAL '7 days') AS upgrades_this_wk,
-  (SELECT COUNT(DISTINCT install_id) FROM telemetry.installation_event
-   WHERE reported_at >= now() - INTERVAL '30 days') AS active_30d,
-  (SELECT COUNT(DISTINCT install_id) FROM telemetry.installation) AS installs_total,
+  COALESCE((SELECT SUM(reports)::bigint FROM telemetry.bug_daily_rollup, wk
+            WHERE rollup_date >= wk.this_wk
+              AND rollup_date <  wk.this_wk + INTERVAL '7 days'), 0) AS bugs_this_wk,
+  COALESCE((SELECT SUM(reports)::bigint FROM telemetry.bug_daily_rollup, wk
+            WHERE rollup_date >= wk.this_wk - INTERVAL '7 days'
+              AND rollup_date <  wk.this_wk), 0) AS bugs_prev_wk,
+  COALESCE((SELECT SUM(reports)::bigint FROM telemetry.bug_daily_rollup, wk
+            WHERE rollup_date >= wk.this_wk - INTERVAL '28 days'
+              AND rollup_date <  wk.this_wk), 0) AS bugs_4wk,
+  COALESCE((SELECT SUM(count)::bigint FROM telemetry.installation_daily_rollup, wk
+            WHERE event_name = 'first_seen'
+              AND rollup_date >= wk.this_wk
+              AND rollup_date <  wk.this_wk + INTERVAL '7 days'), 0) AS new_installs_this_wk,
+  COALESCE((SELECT SUM(count)::bigint FROM telemetry.installation_daily_rollup, wk
+            WHERE event_name = 'upgrade'
+              AND rollup_date >= wk.this_wk
+              AND rollup_date <  wk.this_wk + INTERVAL '7 days'), 0) AS upgrades_this_wk,
+  -- v2 has no install_id retention; this is total event volume,
+  -- a proxy for "is the project alive."
+  COALESCE((SELECT SUM(count)::bigint FROM telemetry.installation_daily_rollup
+            WHERE rollup_date >= now() - INTERVAL '30 days'), 0) AS event_volume_30d,
   wk.this_wk AS week_start
 FROM wk;
 """
 
-# SM-166 + SM-178: bug-this-week breakdown.
-# - install_id (and any prefix of it) is NEVER published. The previous
-#   query exposed a 4-char prefix; even at sub-1% collision risk, it
-#   directly contradicts PRIVACY.md's "no install_id" promise for the
-#   public digest.
-# - The taxonomy joins use the same per-dimension pre-aggregation as
-#   refresh_bug_daily_rollup so a single multi-tag report doesn't
-#   appear as multiple rows.
+# Bug-this-week breakdown by categorical bucket. Direct read of
+# bug_daily_rollup; no joins needed — the rollup is already
+# pre-aggregated by (bug_kind, bug_surface, client_version, ...).
 Q_BUGS_THIS_WEEK = """
 WITH wk AS (
   SELECT date_trunc('week', now() AT TIME ZONE 'UTC')::date AS this_wk
-),
-kind_per_report AS (
-  SELECT a.bug_report_id, MIN(t.slug) AS slug
-  FROM telemetry.bug_report_taxonomy_assignment a
-  JOIN telemetry.taxonomy_term t ON t.id = a.term_id
-  WHERE t.namespace = 'bug.kind'
-  GROUP BY a.bug_report_id
-),
-surface_per_report AS (
-  SELECT a.bug_report_id, MIN(t.slug) AS slug
-  FROM telemetry.bug_report_taxonomy_assignment a
-  JOIN telemetry.taxonomy_term t ON t.id = a.term_id
-  WHERE t.namespace = 'bug.surface'
-  GROUP BY a.bug_report_id
 )
 SELECT
-  COALESCE(kind_per_report.slug,    'unknown') AS bug_kind,
-  COALESCE(surface_per_report.slug, 'unknown') AS bug_surface,
-  COALESCE(br.client_version,       'unknown') AS client_version,
-  COUNT(*)                                     AS reports
-FROM telemetry.bug_report br, wk
-LEFT JOIN kind_per_report    ON kind_per_report.bug_report_id    = br.id
-LEFT JOIN surface_per_report ON surface_per_report.bug_report_id = br.id
-WHERE br.reported_at >= wk.this_wk
-  AND br.reported_at <  wk.this_wk + INTERVAL '7 days'
-GROUP BY kind_per_report.slug, surface_per_report.slug, br.client_version
+  bug_kind,
+  bug_surface,
+  client_version,
+  SUM(reports)::bigint AS reports
+FROM telemetry.bug_daily_rollup, wk
+WHERE rollup_date >= wk.this_wk
+  AND rollup_date <  wk.this_wk + INTERVAL '7 days'
+GROUP BY bug_kind, bug_surface, client_version
 ORDER BY reports DESC, bug_kind, bug_surface, client_version;
 """
 
-Q_SIGNATURE_RECURRENCE = """
-SELECT
-  signature,
-  COUNT(DISTINCT install_id) AS distinct_installs,
-  COUNT(*)                   AS total_reports,
-  MIN(reported_at)::date     AS first_seen,
-  MAX(reported_at)::date     AS last_seen,
-  ARRAY_AGG(DISTINCT client_version ORDER BY client_version) AS versions
-FROM telemetry.bug_report
-WHERE signature IS NOT NULL
-  AND reported_at >= now() - INTERVAL '90 days'
-GROUP BY signature
-HAVING COUNT(*) >= 2
-ORDER BY distinct_installs DESC, total_reports DESC
-LIMIT 10;
-"""
-
+# 12-week sparkline for bug-report volume.
 Q_BUG_SPARKLINE = """
 SELECT
-  date_trunc('week', reported_at)::date AS wk,
-  COUNT(*)                              AS bugs
-FROM telemetry.bug_report
-WHERE reported_at >= now() - INTERVAL '12 weeks'
+  date_trunc('week', rollup_date)::date AS wk,
+  SUM(reports)::bigint AS bugs
+FROM telemetry.bug_daily_rollup
+WHERE rollup_date >= now() - INTERVAL '12 weeks'
 GROUP BY 1 ORDER BY 1;
 """
 
+# Version distribution from the materialized v2 view. Renames
+# events_30d → installs for backwards compat with the digest's
+# render_versions() function.
 Q_VERSION_DIST = """
-WITH active AS (
-  SELECT DISTINCT ON (install_id) install_id, client_version
-  FROM telemetry.installation_event
-  WHERE reported_at >= now() - INTERVAL '30 days'
-  ORDER BY install_id, reported_at DESC
-)
 SELECT
   client_version,
-  COUNT(*)                                                     AS installs,
-  ROUND(100.0 * COUNT(*) / NULLIF(SUM(COUNT(*)) OVER (), 0), 1) AS pct
-FROM active
-GROUP BY client_version
-ORDER BY installs DESC, client_version DESC;
+  events_30d AS installs,
+  pct
+FROM telemetry.version_dist;
 """
 
+# Install-channel mix over the last 30 days.
 Q_INSTALL_CHANNEL = """
 SELECT
-  COALESCE(current_install_method, 'unknown') AS channel,
-  COUNT(*)                                    AS installs
-FROM telemetry.installation
-GROUP BY current_install_method
+  COALESCE(install_method, 'unknown') AS channel,
+  SUM(count)::bigint AS installs
+FROM telemetry.installation_daily_rollup
+WHERE rollup_date >= now() - INTERVAL '30 days'
+GROUP BY install_method
 ORDER BY installs DESC;
 """
 
-Q_BACKEND_MIX = """
+# Reliability-tier snapshot patterns — NEW under v2. Reports the
+# combination of (version, leading anomaly kind, anomaly count
+# bucket) that has been most-contributed-to over the last 30 days.
+# Empty result means no Reliability-tier contributions yet.
+Q_RELIABILITY_PATTERNS = """
 SELECT
-  bt              AS backend,
-  COUNT(DISTINCT i.install_id) AS installs
-FROM telemetry.installation i,
-     UNNEST(i.current_backend_types) AS bt
-WHERE i.current_backend_types IS NOT NULL
-  AND array_length(i.current_backend_types, 1) > 0
-GROUP BY bt
-ORDER BY installs DESC;
+  client_version,
+  COALESCE(most_common_anomaly_kind::text, 'none') AS leading_anomaly,
+  anomaly_count_bucket::text AS anomaly_bucket,
+  SUM(count)::bigint AS snapshots
+FROM telemetry.reliability_daily_rollup
+WHERE rollup_date >= now() - INTERVAL '30 days'
+GROUP BY client_version, most_common_anomaly_kind, anomaly_count_bucket
+ORDER BY snapshots DESC, client_version DESC
+LIMIT 20;
 """
 
+# Hygiene: free-tier ceiling + last ingest activity.
 Q_HYGIENE = """
 SELECT
-  (SELECT COUNT(*) FROM telemetry.bug_report
-   WHERE taxonomy_state IN ('pending','needs_review')) AS unclassified_pending,
-  (SELECT MAX(EXTRACT(epoch FROM (now() - br.reported_at))/3600)::int
-   FROM telemetry.bug_report br
-   WHERE taxonomy_state IN ('pending','needs_review')) AS oldest_pending_hours,
   pg_size_pretty(pg_database_size(current_database())) AS db_size,
-  (SELECT MAX(received_at) FROM telemetry.ingest_envelope) AS last_ingest;
+  GREATEST(
+    (SELECT MAX(rollup_date) FROM telemetry.bug_daily_rollup),
+    (SELECT MAX(rollup_date) FROM telemetry.installation_daily_rollup),
+    (SELECT MAX(rollup_date) FROM telemetry.reliability_daily_rollup)
+  ) AS last_rollup_date;
 """
 
+# "What nobody hit this week" — bug_kind values from the documented
+# closed taxonomy that DON'T appear in this week's rollup. Under v2
+# the taxonomy is a fixed Python list (matched to PRIVACY.md); v1's
+# taxonomy_term table is gone.
 Q_QUIET_KINDS = """
 WITH wk AS (
   SELECT date_trunc('week', now() AT TIME ZONE 'UTC')::date AS this_wk
 )
-SELECT t.display_name AS bug_kind
-FROM telemetry.taxonomy_term t, wk
-WHERE t.target = 'bug_report'
-  AND t.namespace = 'bug.kind'
-  AND t.active
-  AND NOT EXISTS (
-    SELECT 1
-    FROM telemetry.bug_report_taxonomy_assignment a
-    JOIN telemetry.bug_report br ON br.id = a.bug_report_id
-    WHERE a.term_id = t.id
-      AND br.reported_at >= wk.this_wk
-      AND br.reported_at <  wk.this_wk + INTERVAL '7 days'
-  )
-ORDER BY t.ordinal;
+SELECT DISTINCT bug_kind
+FROM telemetry.bug_daily_rollup, wk
+WHERE rollup_date >= wk.this_wk
+  AND rollup_date <  wk.this_wk + INTERVAL '7 days';
 """
+
+# Closed taxonomy — must match docs/telemetry-architecture-v2.md
+# "bug_kind" enumeration and PRIVACY.md "Tier 2 — Standard / bug_report
+# event". Update both in lockstep with any change here.
+KNOWN_BUG_KINDS = ["sync", "rclone", "watcher", "config", "service", "fs", "auth"]
 
 # ---------------------------------------------------------------------------
 # Render helpers
@@ -428,38 +420,47 @@ def render_header(headline, week_start):
     end = week_start + timedelta(days=6)
     iso_year, iso_wk, _ = week_start.isocalendar()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    n_total = headline["installs_total"]
+    # v2: there is no "total opted-in installs ever" number — install_id
+    # isn't retained. event_volume_30d is the closest proxy.
+    event_volume_30d = headline["event_volume_30d"]
     return (
         render_honesty_banner()
         + f"# SelectiveMirror Telemetry Digest — Week {iso_year}-W{iso_wk:02d}\n\n"
         + f"**Window**: {week_start} to {end} UTC. Generated {now}.\n\n"
-        + f"> Total opted-in installs ever: **{n_total}**. "
-        + f"Trends are anecdote until n>20.\n"
+        + f"> Installation events in last 30 days: **{event_volume_30d}**. "
+        + f"Trends are anecdote until weekly volume > 20.\n"
     )
 
 
 def render_pipeline_alive_only(headline, hygiene, sparkline_values):
     """Degenerate (low-n) week — output is intentionally short."""
-    n_total = headline["installs_total"]
+    event_volume_30d = headline["event_volume_30d"]
     bugs_ever = sum(sparkline_values) if sparkline_values else 0
-    last_ingest = hygiene[0]["last_ingest"] or "(never)"
+    last_rollup = hygiene[0]["last_rollup_date"] or "(never)"
     db_size = hygiene[0]["db_size"]
     return (
         "## State of telemetry\n\n"
-        f"- Total opted-in installs ever: **{n_total}**\n"
-        f"- Active in last 30 days: **{headline['active_30d']}**\n"
+        f"- Installation events in last 30 days: **{event_volume_30d}**\n"
         f"- Bug reports this week: **{headline['bugs_this_wk']}**\n"
         f"- Bug reports last 12 weeks: **{bugs_ever}**\n\n"
         "> Sample size is too small for analysis. This file confirms the "
-        "pipeline is running and the database is alive. Come back when n>10.\n\n"
+        "pipeline is running and the database is alive. Come back when "
+        "weekly volume > 10.\n\n"
         "## Hygiene\n\n"
         f"- Free-tier DB usage: **{db_size}** (cap: 500 MB)\n"
-        f"- Last successful ingest: **{last_ingest}**\n"
-        f"- Unclassified backlog: {hygiene[0]['unclassified_pending']}\n"
+        f"- Last rollup activity: **{last_rollup}**\n"
     )
 
 
 def render_headline(headline, sparkline_values):
+    """v2 headline numbers.
+
+    The "Installs emitting any event/30d" row from v1 was a
+    distinct-install count (impossible under v2). It's replaced by
+    "Installation events / 30d" — total event volume, which answers
+    the same maintainer question ("is the project alive") without
+    needing install_id retention.
+    """
     rows = [
         {
             "Metric": "Bug reports submitted",
@@ -480,8 +481,8 @@ def render_headline(headline, sparkline_values):
             "4-wk avg": "—",
         },
         {
-            "Metric": "Installs emitting any event/30d",
-            "This week": headline["active_30d"],
+            "Metric": "Installation events / 30d",
+            "This week": headline["event_volume_30d"],
             "Prev week": "—",
             "4-wk avg": "—",
         },
@@ -498,17 +499,24 @@ def render_headline(headline, sparkline_values):
     )
 
 
-def render_bugs_section(bugs_this_week, recurrence, quiet_kinds):
-    """SM-166: per-report rows with low-n privacy.
+def render_bugs_section(bugs_this_week, quiet_kinds_seen):
+    """v2 bug section.
 
-    Rows are now aggregated by (kind, surface, client_version) at the
-    SQL layer with a row count. We then apply the k-anonymity floor:
-    cells with fewer than K_ANONYMITY_FLOOR reports are suppressed
-    entirely (a "<5"-shaped placeholder would still leak the existence
-    of a unique combination).
+    Rows are aggregated by (kind, surface, client_version) at the SQL
+    layer with a count. The k-anonymity floor is applied here: cells
+    with fewer than K_ANONYMITY_FLOOR reports are suppressed entirely
+    (a "<5"-shaped placeholder would still leak the existence of a
+    unique combination).
 
-    Recurring signatures get their own k-anon-bounded section below
-    (it requires distinct_installs >= K).
+    The v1 "Recurring signatures" section is REMOVED under v2 — there
+    are no signatures stored, since per-event rows don't exist.
+    Recurrence is approximated by the kind × surface × version rollup
+    aggregated over a longer window, but that's a different shape;
+    keeping just the weekly rollup until we have signal.
+
+    quiet_kinds_seen is a list of bug_kind values that DID appear this
+    week; we compute the complement against KNOWN_BUG_KINDS to get
+    "what nobody hit."
     """
     out = ["## Bug reports — this week\n"]
     if not bugs_this_week:
@@ -545,63 +553,17 @@ def render_bugs_section(bugs_this_week, recurrence, quiet_kinds):
                 )
         out.append("")
 
-    # SM-166: apply k-anonymity to recurrence rows. A signature seen by
-    # only 1-4 distinct installs identifies those installs (they're
-    # the only ones in that bucket); only show signatures that 5+
-    # different users have hit.
-    visible_recurrence = [
-        r for r in recurrence
-        if (r.get("distinct_installs") or 0) >= K_ANONYMITY_FLOOR
-    ]
-    suppressed_recurrence = len(recurrence) - len(visible_recurrence)
-    out.append(
-        f"\n### Recurring signatures "
-        f"(last 90 days, distinct installs ≥ {K_ANONYMITY_FLOOR})\n"
-    )
-    if not visible_recurrence:
-        msg = "_No signature has been hit by enough distinct installs to publish."
-        if suppressed_recurrence:
-            msg += (
-                f" Suppressed {suppressed_recurrence} signature(s) "
-                f"below k={K_ANONYMITY_FLOOR}."
-            )
-        msg += "_\n"
-        out.append(msg)
-    else:
-        out.append(
-            md_table(
-                [
-                    {
-                        "Signature": r["signature"][:48],
-                        "Distinct installs": r["distinct_installs"],
-                        "Total reports": r["total_reports"],
-                        "First seen": r["first_seen"],
-                        "Last seen": r["last_seen"],
-                        "Versions": ", ".join(r["versions"][:4]),
-                    }
-                    for r in visible_recurrence
-                ],
-                ["Signature", "Distinct installs", "Total reports",
-                 "First seen", "Last seen", "Versions"],
-                aligns=["left", "right", "right", "left", "left", "left"],
-            )
-        )
-        if suppressed_recurrence:
-            out.append(
-                f"\n_({suppressed_recurrence} additional signature(s) "
-                f"below k={K_ANONYMITY_FLOOR} suppressed.)_"
-            )
-
     out.append("\n### What nobody hit this week\n")
-    if not quiet_kinds:
-        out.append("_All bug.kind categories saw at least one report._\n")
+    seen_kinds = {q["bug_kind"] for q in quiet_kinds_seen}
+    quiet = [k for k in KNOWN_BUG_KINDS if k not in seen_kinds]
+    if not quiet:
+        out.append("_All known bug.kind categories saw at least one report._\n")
     else:
-        names = ", ".join(q["bug_kind"] for q in quiet_kinds)
-        out.append(f"No reports for: {names}\n")
+        out.append(f"No reports for: {', '.join(quiet)}\n")
     return "\n".join(out)
 
 
-def render_versions(version_dist, install_channels, backend_mix):
+def render_versions(version_dist, install_channels):
     out = ["## Version distribution (active installs / 30d)\n"]
     # K-anonymity: suppress versions with fewer than K installs entirely
     # (showing "<5" would still leak the version's existence).
@@ -652,44 +614,55 @@ def render_versions(version_dist, install_channels, backend_mix):
         if suppressed_channels:
             out.append(f"\n_({suppressed_channels} channel(s) suppressed below k={K_ANONYMITY_FLOOR}.)_")
 
-    out.append("\n## Backend mix (current installation snapshot)\n")
-    visible_backends = k_anon_filter(backend_mix, "installs")
-    suppressed_backends = len(backend_mix) - len(visible_backends)
-    if not backend_mix:
-        out.append("_No backends recorded yet. (Note: `backend_types` is "
-                   "captured on `upgrade` events; `first_seen` typically has "
-                   "an empty array.)_\n")
-    elif not visible_backends:
-        out.append(f"_All backend cells below k-anonymity floor "
-                   f"({K_ANONYMITY_FLOOR}). Suppressed: {suppressed_backends}._\n")
-    else:
+    # Backend mix is removed under v2 — `backend_types` is not a v2
+    # bucket dimension. Re-add only after a re-consent cycle adds the
+    # field to PRIVACY.md and the rollup schema.
+    return "\n".join(out)
+
+
+def render_reliability(reliability_patterns):
+    """v2-only: bucketed reliability snapshot patterns."""
+    out = ["## Reliability snapshot patterns (last 30 days)\n"]
+    if not reliability_patterns:
+        out.append("_No Reliability-tier contributions in the last 30 days._\n")
+        return "\n".join(out)
+    visible = k_anon_filter(reliability_patterns, "snapshots")
+    suppressed = len(reliability_patterns) - len(visible)
+    if not visible:
         out.append(
-            md_table(
-                [{"Backend": b["backend"], "Installs reporting": b["installs"]}
-                 for b in visible_backends],
-                ["Backend", "Installs reporting"],
-                aligns=["left", "right"],
-            )
+            f"_All reliability cells below k-anonymity floor "
+            f"({K_ANONYMITY_FLOOR}). Suppressed: {suppressed} pattern(s)._\n"
         )
-        if suppressed_backends:
-            out.append(f"\n_({suppressed_backends} backend(s) suppressed below k={K_ANONYMITY_FLOOR}.)_")
+        return "\n".join(out)
+    out.append(
+        md_table(
+            [
+                {
+                    "Version": r["client_version"],
+                    "Leading anomaly": r["leading_anomaly"],
+                    "Anomaly bucket": r["anomaly_bucket"],
+                    "Snapshots": r["snapshots"],
+                }
+                for r in visible
+            ],
+            ["Version", "Leading anomaly", "Anomaly bucket", "Snapshots"],
+            aligns=["left", "left", "left", "right"],
+        )
+    )
+    if suppressed:
+        out.append(
+            f"\n_({suppressed} additional pattern(s) below k={K_ANONYMITY_FLOOR} suppressed.)_"
+        )
     return "\n".join(out)
 
 
 def render_hygiene(hygiene):
     h = hygiene[0]
-    last = h["last_ingest"] or "(never)"
-    pending = h["unclassified_pending"]
-    oldest_h = h["oldest_pending_hours"]
-    if pending and oldest_h:
-        pending_str = f"{pending} (oldest: {oldest_h}h)"
-    else:
-        pending_str = str(pending or 0)
+    last = h["last_rollup_date"] or "(never)"
     return (
         "## Hygiene\n\n"
         f"- Free-tier DB usage: **{h['db_size']}** (cap: 500 MB)\n"
-        f"- Unclassified backlog: **{pending_str}**\n"
-        f"- Last successful ingest: **{last}**\n"
+        f"- Last rollup activity: **{last}**\n"
     )
 
 
@@ -715,11 +688,10 @@ def main():
     try:
         headline = fetch_all(conn, Q_HEADLINE)[0]
         bugs = fetch_all(conn, Q_BUGS_THIS_WEEK)
-        recurrence = fetch_all(conn, Q_SIGNATURE_RECURRENCE)
         sparkline_rows = fetch_all(conn, Q_BUG_SPARKLINE)
         version_dist = fetch_all(conn, Q_VERSION_DIST)
         install_channels = fetch_all(conn, Q_INSTALL_CHANNEL)
-        backend_mix = fetch_all(conn, Q_BACKEND_MIX)
+        reliability_patterns = fetch_all(conn, Q_RELIABILITY_PATTERNS)
         hygiene = fetch_all(conn, Q_HYGIENE)
         quiet_kinds = fetch_all(conn, Q_QUIET_KINDS)
     except Exception as e:
@@ -731,11 +703,12 @@ def main():
     sparkline_values = [int(r["bugs"]) for r in sparkline_rows]
     week_start = headline["week_start"]
 
-    # Degenerate-week heuristic: if all of (a) total installs, (b) bugs this
-    # week, (c) bugs in last 12 weeks are tiny, render the short version.
-    n_total = headline["installs_total"] or 0
+    # Degenerate-week heuristic under v2: low 30-day event volume +
+    # zero bugs this week + nearly-zero 12-week bug volume → render
+    # the short pipeline-alive form.
+    event_volume_30d = headline["event_volume_30d"] or 0
     bugs_ever = sum(sparkline_values)
-    if n_total < 5 and headline["bugs_this_wk"] == 0 and bugs_ever < 3:
+    if event_volume_30d < 5 and headline["bugs_this_wk"] == 0 and bugs_ever < 3:
         print(render_header(headline, week_start))
         print(render_pipeline_alive_only(headline, hygiene, sparkline_values))
         return
@@ -744,9 +717,11 @@ def main():
     print(render_header(headline, week_start))
     print(render_headline(headline, sparkline_values))
     print()
-    print(render_bugs_section(bugs, recurrence, quiet_kinds))
+    print(render_bugs_section(bugs, quiet_kinds))
     print()
-    print(render_versions(version_dist, install_channels, backend_mix))
+    print(render_versions(version_dist, install_channels))
+    print()
+    print(render_reliability(reliability_patterns))
     print()
     print(render_hygiene(hygiene))
 

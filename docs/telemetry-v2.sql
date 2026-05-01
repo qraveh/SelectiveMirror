@@ -529,6 +529,51 @@ COMMENT ON VIEW telemetry.version_dist IS
 
 
 -- ============================================================================
+-- Public read view: bug_unknown_share (drift detection)
+-- ============================================================================
+--
+-- Mary's drift fix (round-3 panel, 2026-04-30): if a particular release
+-- is misclassifying bug reports — picking 'unknown' from the closed
+-- taxonomy when a real category exists, or hitting genuinely novel
+-- failure modes that the taxonomy doesn't cover — the unknown share
+-- per client_version is the leading indicator.
+--
+-- Under v2 the client picks bug_kind from a fixed taxonomy at submit
+-- time. Each binary release ships with the taxonomy it was built
+-- against, so client_version is effectively a proxy for taxonomy
+-- version. A version with high unknown share signals either:
+--   1. A failure mode that doesn't fit any known kind (legitimate;
+--      schedule a taxonomy update for the next release).
+--   2. A buggy classifier in that binary (revoke / advise upgrade).
+--
+-- Maintainer review trigger: any version with unknown_pct ≥ 5% and
+-- total_reports ≥ 5 (k-anon floor) is worth investigating.
+
+CREATE OR REPLACE VIEW telemetry.bug_unknown_share AS
+WITH per_version AS (
+    SELECT
+        client_version,
+        SUM(reports) FILTER (WHERE bug_kind = 'unknown') AS unknown_reports,
+        SUM(reports)                                     AS total_reports
+    FROM telemetry.bug_daily_rollup
+    WHERE rollup_date >= CURRENT_DATE - INTERVAL '30 days'
+    GROUP BY client_version
+    HAVING SUM(reports) >= 5         -- k-anon floor
+)
+SELECT
+    client_version,
+    unknown_reports,
+    total_reports,
+    ROUND(100.0 * unknown_reports / NULLIF(total_reports, 0), 1) AS unknown_pct
+FROM per_version
+WHERE unknown_reports > 0
+ORDER BY unknown_pct DESC, client_version DESC;
+
+COMMENT ON VIEW telemetry.bug_unknown_share IS
+'Bug-kind drift detection (Mary, round-3 panel). Per-version unknown_pct over the last 30 days, restricted to versions with ≥ 5 reports (k-anon floor). Flag any row with unknown_pct ≥ 5% for taxonomy review.';
+
+
+-- ============================================================================
 -- Smoke test: synthetic contribution (manual; commented out)
 -- ============================================================================
 --

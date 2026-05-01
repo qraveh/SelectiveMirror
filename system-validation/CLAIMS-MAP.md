@@ -17,7 +17,7 @@ A claim is **GREEN** when the linked test exists, runs in CI (or the smoke harne
 | **C-03** | "9 structural fields per first_seen / upgrade event" (mirror_count_bucket, background_mode, delete_policy, has_hooks, has_filters, has_alert_webhook, has_bandwidth_limit, rclone_version, plus version + install_method + os_family) | PRIVACY.md "Tier 2 — Standard" | `cmd/smirror/cmd_telemetry_test.go` + `system-validation/telemetry_v2_cli_claims_test.go` | `TestTelemetryInspect_FirstSeen_ProducesValidJSON` + `TestTelemetryV2CLI_InspectProducesJSONForFirstSeen` | GREEN | 2026-04-30 |
 | **C-04** | "Reliability snapshot: 7 bucketed dimensions" (anomaly_count_bucket, most_common_anomaly_kind, sync_attempts_bucket, sync_failures_bucket, restart_count_bucket, max_queue_depth_bucket, dead_letter_count_bucket, state_db_size_bucket — note PRIVACY.md says 7, schema has 8 dimensions; reconcile in next pass) | PRIVACY.md "Tier 3 — Reliability" | `cmd/smirror/cmd_telemetry_test.go` | `TestTelemetryInspect_Reliability_AddsReliabilityFields` | GREEN | 2026-04-30 |
 | **C-05** | "Bug-report bucket: kind, surface, version, severity_hint, source, submitted_tier" | PRIVACY.md "bug_report event" | (PENDING) | `TestContributePayload_BugReport_ExactlyDocumentedFields` | RED | (deferred to SM-158; bug-report payload is built by submit pipeline, not inspect) |
-| **C-06** | "k-anonymity floor of 5 in published digests" (cells with count < 5 suppressed) | PRIVACY.md "Forward commitment" | `scripts/telemetry-report.py::k_anon_filter` | `TestKAnonFilter_SuppressesBelowFloor` | AMBER | (Python unit test pending; logic exists) |
+| **C-06** | "k-anonymity floor of 5 in published digests" (cells with count < 5 suppressed) | PRIVACY.md "Forward commitment" | `scripts/test_telemetry_report.py` | `test_k_anon_filter_*` (5 cases: below floor, missing field, empty input, all-below, k_anon_guard) | GREEN | 2026-04-30 |
 | **C-07** | "No heartbeats, ever." (only `first_seen` and `upgrade` events on install-telemetry channel) | PRIVACY.md "Forward commitment" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_EventKindEnumNoHeartbeat` | GREEN | 2026-04-30 |
 | **C-08** | "No accumulated counts." (no bytes-mirrored, files-synced, uptime, error-counts continuous metrics in any rollup) | PRIVACY.md "Forward commitment" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_NoAccumulatedCountColumns` | GREEN | 2026-04-30 |
 | **C-09** | "No geography." (no timezone, locale, language, IP-derived data anywhere in payload or storage) | PRIVACY.md "Forward commitment" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_NoGeoFields` | GREEN | 2026-04-30 |
@@ -43,20 +43,23 @@ A claim is **GREEN** when the linked test exists, runs in CI (or the smoke harne
 | **A-06** | "Schema violation (bad enum value) rejected with `schema_violation*` error code." | architecture-v2 "telemetry.contribute() pseudocode" | `scripts/telemetry-v2-smoke-test.py` | `case_schema_violation` | GREEN | (smoke test) |
 | **A-07** | "Aggregate counters are monotonic — counts only go up." (UPSERT increments, never decrements) | architecture-v2 "Threat model: replay" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_CountersMonotonic` | GREEN | 2026-04-30 |
 | **A-08** | "Bug-report narratives are NOT a telemetry event." (only categorical bucket, no narrative column) | architecture-v2 "What we moved off the telemetry path" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_NoNarrativeColumns` | GREEN | 2026-04-30 |
-| **A-09** | "5 acceptance cases pass: bad HMAC, good HMAC, schema violation, unknown event, retired forget." | architecture-v2 "Logging guards" + smoke test | `scripts/telemetry-v2-smoke-test.py` | all five `case_*` | GREEN | (smoke test in CI: pending CI workflow) |
+| **A-09** | "5 acceptance cases pass: bad HMAC, good HMAC, schema violation, unknown event, retired forget." | architecture-v2 "Logging guards" + smoke test | `scripts/telemetry-v2-smoke-test.py` | all five `case_*` | GREEN | (smoke test wired in `.github/workflows/telemetry-emulation.yml`, 2026-04-30) |
+| **A-10** | "Bug-kind drift detection: per-version unknown share is queryable." | (new — Mary's round-3 panel fix) | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_HasBugUnknownShareView` | GREEN | 2026-04-30 |
 
 ---
 
-## Status summary (as of 0.9.84-dev — round-3 panel work)
+## Status summary (as of 0.9.85-dev — round-3 panel completion)
 
 | Bucket | Count | % |
 |--------|-------|---|
-| GREEN | 19 | 70% |
-| AMBER | 2 | 7% |
-| RED | 6 | 22% |
-| **Total claims** | 27 | 100% |
+| GREEN | 21 | 75% |
+| AMBER | 1 | 4% |
+| RED | 6 | 21% |
+| **Total claims** | 28 | 100% |
 
-Up from 6 GREEN / 19 RED at CLAIMS-MAP creation (a one-day delta of +13 GREEN). The schema-conformance tests in `telemetry_schema_claims_test.go` closed C-02 / C-07 / C-08 / C-09 / C-10 / C-11 / C-12 / A-02 / A-07 / A-08 in one file (10 claims). The CLI tests in `telemetry_v2_cli_claims_test.go` closed C-15 / C-17 / C-18 plus added a black-box ratification of inspect's payload (also covered by C-03).
+Two-day deltas:
+- 2026-04-30 morning (commit db309a6): 6 GREEN → 19 GREEN (+13 from schema-claims + CLI tests).
+- 2026-04-30 afternoon (this commit): 19 GREEN → 21 GREEN (+1 from C-06 Python unit test moving AMBER→GREEN; +1 NEW A-10 drift-detection view added GREEN). One claim added (A-10).
 
 Remaining RED (in v1.0-blocker priority order):
 
@@ -68,8 +71,7 @@ Remaining RED (in v1.0-blocker priority order):
 
 Remaining AMBER:
 
-6. **C-06** — k-anon filter. Logic exists in `scripts/telemetry-report.py`; needs a Python unit test that confirms `count < 5` → suppressed.
-7. **C-13** — IP-hash-not-stored. The Go-level test asserts no raw IP in KV key code; doesn't assert against live KV.
+6. **C-13** — IP-hash-not-stored. The Go-level test asserts no raw IP in KV key code; doesn't assert against live KV.
 
 ---
 
@@ -89,7 +91,7 @@ All other RED rows above. As of 0.9.84-dev, that's:
 
 Plus migrating the two AMBER rows (C-06 k-anon, C-13 IP-hash) to GREEN with proper tests. Estimated: one focused validation session.
 
-**Current state**: 19/27 GREEN = **70.4%**. Quincy's gate is **≥ 90% of non-deferred claims** GREEN. With A-01 + A-03 deferred (so denominator becomes 25), 19/25 = **76.0%**. Six more closures to clear the gate.
+**Current state**: 21/28 GREEN = **75.0%**. Quincy's gate is **≥ 90% of non-deferred claims** GREEN. With A-01 + A-03 deferred (so denominator becomes 26), 21/26 = **80.8%**. Three more closures to clear the gate.
 
 ---
 
