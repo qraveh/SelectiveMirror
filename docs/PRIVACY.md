@@ -2,7 +2,7 @@
 
 **Audience**: end users of SelectiveMirror.
 **Plain-language version of**: `docs/telemetry-architecture-v2.md` (the technical spec).
-**Last updated**: 2026-04-29 (v2 — stream-aggregate-and-discard).
+**Last updated**: 2026-04-29.
 
 ---
 
@@ -224,11 +224,11 @@ This contributes one bug-report count with explicit per-event consent. Your tier
 
 - **Backend**: Supabase PostgreSQL, hosted in West EU (Ireland). Account owned by Raveh Neeman personally.
 - **Edge proxy**: Cloudflare Worker at `smirror-telemetry.selectivemirror.workers.dev`, free tier.
-- **What's on the database disk**: only the rollup tables (`installation_daily_rollup`, `bug_daily_rollup`, `reliability_daily_rollup`) plus the closed-taxonomy lookup. Schema dump in `docs/telemetry-v2.sql`.
+- **What's on the database disk**: only the rollup tables (`installation_daily_rollup`, `bug_daily_rollup`, `reliability_daily_rollup`). Schema dump in `docs/telemetry-v2.sql`.
 - **What is NOT on disk**: raw payloads (no table for them), `install_id` (verified and discarded), IP addresses (hashed and unrelated to storage), bug-report narratives (GitHub Issues only).
 - **Retention**: aggregate counts are retained indefinitely. There are no raw payloads to retain or strip.
 
-The choice of EU region means data is subject to GDPR by default. Under v2, that translates to "the schema satisfies GDPR by storing no personal data."
+The choice of EU region means data is subject to GDPR by default. The schema satisfies GDPR by storing no personal data.
 
 ---
 

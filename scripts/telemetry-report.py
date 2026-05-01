@@ -10,7 +10,17 @@ gracefully degrades to "n is too small for analysis; pipeline is alive"
 when there's not enough data to draw conclusions.
 
 Form factor and design: see panel review (Mary the Analyst, 2026-04-28)
-and docs/telemetry-microserver-architecture.md.
+and docs/telemetry-architecture-v2.md.
+
+NOTE (2026-04-29): the queries below still target the v1 row-per-event
+tables (bug_report, installation_event, ingest_envelope, ...). Under
+the v2 architecture (stream-aggregate-and-discard) those tables don't
+exist — data lives only in the v2 rollup tables (installation_daily_rollup,
+bug_daily_rollup, reliability_daily_rollup) with denormalized
+bucket-key tuples. A v2 rewrite of this script is pending; until then,
+this script will produce empty/stale output against a v2-only
+database. The maintainer can fall back to the manual SQL queries in
+docs/operations/telemetry-ops.md.
 
 Usage:
     # Set DATABASE_URL to your Supabase connection string:
@@ -85,7 +95,7 @@ def k_anon_filter(rows, count_field: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# SQL queries — keep in lockstep with docs/telemetry-views.sql when possible
+# SQL queries — v1-era. Pending v2 rewrite to query the v2 rollup tables.
 # ---------------------------------------------------------------------------
 
 Q_HEADLINE = """

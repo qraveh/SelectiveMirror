@@ -45,8 +45,7 @@ provenance the attacker chose for the envelope columns.
 
 A correct fix touches four places in lockstep:
 
-1. **Schema** (`docs/telemetry-microserver.sql`,
-   `docs/telemetry-rls.sql`): the verify function
+1. **Schema** (`docs/telemetry-v2.sql`): the verify function
    `telemetry.verify_versioned_hmac` currently takes
    `(canonical_payload, claimed_version, claimed_hmac_hex)`. To bind
    the envelope, the function must take additional parameters for any
@@ -165,7 +164,7 @@ and have been addressed; SM-162 needs its own change set.
 ---
 
 Cross-references:
-- `docs/telemetry-microserver-architecture.md` — current HMAC scheme
+- `docs/telemetry-architecture-v2.md` — current HMAC scheme
 - `internal/telemetry/canonical.go` — Go canonical JSON
 - `test/telemetry-validation.py` — Python reference implementation
 - `worker/src/index.ts` — Cloudflare Worker

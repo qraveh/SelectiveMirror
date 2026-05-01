@@ -22,14 +22,10 @@ Supabase directly via `qkspigvkniiiwxggdvbr.supabase.co`).
 
 | Path | Target | Status |
 |------|--------|--------|
-| `POST /v1/bug-reports`          | Supabase `ingest_envelope` (v1) | Deprecated; remains operational during the v2 migration window. |
-| `POST /v1/installations/report` | Supabase `ingest_envelope` (v1) | Deprecated; remains operational during the v2 migration window. |
-| `POST /v1/contribute`           | Supabase `telemetry.contribute()` RPC (v2) | **Current.** Stream-aggregate-and-discard. |
-| `POST /v1/forget`               | (none) — returns `410 Gone` | **Retired.** No server-side per-install record exists under v2; nothing to delete. See `docs/PRIVACY.md`. |
-
-The v1 paths are dropped in Phase D of the migration (see
-`docs/operations/deploy-telemetry-v2.md`) — 90+ days after Phase C
-(client cutover).
+| `POST /v1/contribute` | Supabase `telemetry.contribute()` RPC | **Active.** The only ingest path. Stream-aggregate-and-discard. |
+| `POST /v1/forget`     | (none) — returns `410 Gone` | **Retired.** No server-side per-install record exists; nothing to delete. See `docs/PRIVACY.md`. |
+| `POST /v1/bug-reports` | (none) — returns `410 Gone` | **Retired (legacy v1).** Never wired client-side after SM-160 (0.9.18-dev) deleted SendReport. Removed from Worker in 0.9.7x-dev. |
+| `POST /v1/installations/report` | (none) — returns `410 Gone` | **Retired (legacy v1).** Same status as `/v1/bug-reports`. |
 
 ## What it does NOT do
 

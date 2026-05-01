@@ -4,8 +4,10 @@
 v1 architecture in `telemetry-microserver-architecture.md`.
 **Adopted**: 2026-04-29, after the round-2 BMad panel review of
 `smirror telemetry forget`.
-**Implementation status**: schema in `telemetry-v2.sql`; v1 schema
-remains operational until cutover (Phase C below).
+**Implementation status**: schema in `telemetry-v2.sql`. The earlier
+v1 schema is a server-side leftover (never wired to a live client
+post-SM-160) and is dropped by `docs/operations/sql/drop-v1-leftover.sql`
+as part of the standard deploy. See `Deployment` below.
 
 ---
 
@@ -352,72 +354,38 @@ This addresses SM-163's "raw IP in KV key" concern.
 
 ---
 
-## Migration plan from v1
+## Deployment
 
-The v1 schema (`telemetry-microserver.sql` + RLS + worker SQL) is
-deployed and live as of 0.9.4-dev. Cutover is incremental.
+v2 is the current and only telemetry architecture. The earlier v1
+schema (raw `ingest_envelope` → normalized `bug_report` /
+`installation_event` → nightly rollup) was a leftover: SM-160
+(0.9.18-dev) deleted the client-side `SendReport`, so no released
+binary has posted to v1 endpoints since then. The Cloudflare Worker
+no longer exposes v1 paths (0.9.7x-dev).
 
-### Phase A — Deploy v2 alongside v1 (additive, low-risk)
+Deployment is a single operator session:
 
-In a single migration:
+1. Apply `docs/operations/sql/drop-v1-leftover.sql` to drop the v1
+   tables / functions / views / cron jobs that exist on Supabase
+   from earlier deploys. Idempotent (`DROP IF EXISTS` everywhere);
+   skips silently if the project is fresh.
+2. Apply `docs/telemetry-v2.sql` to create the v2 rollup tables,
+   ENUMs, `telemetry.contribute()` RPC, and the
+   `verify_versioned_hmac` shared function.
+3. Set `RATE_LIMIT_SALT_SECRET` on the Worker (`npx wrangler secret
+   put RATE_LIMIT_SALT_SECRET`) and `npx wrangler deploy` from
+   `worker/`.
+4. Run `python3 scripts/telemetry-v2-smoke-test.py --via-worker` to
+   verify the four standard cases (bad HMAC / good HMAC / schema
+   violation / unknown event / retired forget).
 
-1. Run `telemetry-v2.sql` to create:
-   - `installation_daily_rollup`
-   - `bug_daily_rollup` (rename if v1 already has one — check)
-   - `reliability_daily_rollup`
-   - `taxonomy_term` (already exists in v1; no-op)
-   - `version_dist` materialized view
-   - `telemetry.contribute()` function
-   - Helper bump functions
-2. Existing v1 tables remain untouched.
-3. v1 client traffic continues to land in v1 ingest path.
-4. Verify: call `contribute()` from a test harness with synthetic
-   payloads; assert rollup increments.
+The full step-by-step is in
+[`docs/operations/deploy-telemetry-v2.md`](./operations/deploy-telemetry-v2.md).
 
-No client change. No user-visible change. Reversible.
-
-### Phase B — Dual-write for verification
-
-Update the Worker to:
-- Continue forwarding to v1 ingest (`/v1/installations/report`,
-  `/v1/bug-reports`).
-- ALSO call `telemetry.contribute()` with the same payload.
-- Compare rollup outputs for one week.
-
-Discrepancies reveal bucket-key bugs before they're load-bearing.
-
-### Phase C — Cutover client to v2 endpoint
-
-Once dual-write is validated (one full week, all event kinds
-observed):
-
-1. Worker drops the v1 forward; routes everything through
-   `telemetry.contribute()`.
-2. Client behavior unchanged — payload shape stays the same; the
-   server routing is what changes.
-
-The v1 tables stop receiving new rows. Old rows still exist; SM-172's
-retention janitor empties them on its 90-day schedule.
-
-### Phase D — Drop v1 (after retention window)
-
-After 90+ days from cutover (so any v1 row has aged through the
-janitor):
-
-1. `DROP TABLE telemetry.bug_report CASCADE;`
-2. `DROP TABLE telemetry.installation CASCADE;`
-3. `DROP TABLE telemetry.installation_event CASCADE;`
-4. `DROP TABLE telemetry.installation_reliability_snapshot CASCADE;`
-5. `DROP TABLE telemetry.ingest_envelope CASCADE;`
-6. `DROP TABLE telemetry.bug_report_taxonomy_assignment CASCADE;`
-7. `DROP FUNCTION telemetry.purge_old_envelopes;` (obsolete — no
-   raw to purge).
-8. `DROP FUNCTION telemetry.refresh_install_daily_rollup;` /
-   `telemetry.refresh_bug_daily_rollup;` (obsolete — counters
-   maintained inline by `contribute()` instead of nightly rollups).
-
-After Phase D, the schema dump IS the privacy story. No further
-documentation lift needed.
+There is no soak window, no cutover, no scheduled drop. v1 was
+never wired to a live client; treating its server-side residue as
+"leftover" rather than "running" collapses what was a four-phase
+runbook into one operator session.
 
 ---
 
@@ -429,7 +397,7 @@ documentation lift needed.
 | **SM-162** (HMAC envelope binding) | Critical, deferred | **Downgraded to minor.** Replay can only over-count an aggregate; counters are monotonic and rate-limited. No exfiltration vector. |
 | **SM-163** (Worker rate-limit raw-IP) | Open | **Partially retired.** Daily-salted IP hash replaces raw IP. Still need atomic-counter or accept-the-slack decision. |
 | **SM-168** (MSI build embeds telemetry key) | Open | **Unchanged in scope but lower urgency.** Still needs to ship for the submit path to work; without it, contributions get silently HMAC-rejected. |
-| **SM-172** (retention janitor purges normalized text) | Shipped 0.9.18-dev | **Becomes obsolete after Phase D.** Will be removed when v1 tables are dropped. |
+| **SM-172** (retention janitor purges normalized text) | Shipped 0.9.18-dev | **Obsolete.** v1 tables are dropped by `drop-v1-leftover.sql` as part of the standard deploy; v2 has nothing to purge (no raw stored). |
 | `smirror telemetry forget` (SM-157 sub-design) | Designed | **Deleted from design.** No record to forget. |
 
 ---
@@ -534,15 +502,19 @@ PostgREST RPC is normalized; payload values are not captured.
 ## Files of record
 
 - **This file**: `docs/telemetry-architecture-v2.md` — design.
-- **Schema**: `docs/telemetry-v2.sql` — applied AFTER existing v1 SQL
-  during Phase A.
-- **User-facing contract**: `docs/PRIVACY.md` — rewritten to match.
+- **Schema**: `docs/telemetry-v2.sql` — the v2 rollup tables, ENUMs,
+  `telemetry.contribute()` RPC, and `verify_versioned_hmac`.
+- **v1 cleanup**: `docs/operations/sql/drop-v1-leftover.sql` — drops
+  the v1 server-side residue. Run before `telemetry-v2.sql` on any
+  Supabase project that pre-dates v2.
+- **Deploy runbook**: `docs/operations/deploy-telemetry-v2.md` —
+  step-by-step operator session (drop v1, apply v2, deploy Worker,
+  smoke test).
+- **User-facing contract**: `docs/PRIVACY.md` — plain-language version
+  of this design.
 - **CLI design**: `docs/cli-telemetry-command.md` — `forget`
-  subcommand removed.
-- **v1 docs marked superseded**: `docs/telemetry-microserver.sql`,
-  `docs/telemetry-microserver-architecture.md`,
-  `docs/telemetry-rls.sql` — header notes pointing here.
-- **Deferral plans updated**: `docs/SM-157-telemetry-cli-plan.md`,
+  subcommand is not in the surface (no record to forget).
+- **Deferral plans**: `docs/SM-157-telemetry-cli-plan.md`,
   `docs/SM-158-report-bug-submit-plan.md`,
   `docs/SM-162-hmac-envelope-binding-plan.md`,
   `docs/SM-server-side-deferred.md`.

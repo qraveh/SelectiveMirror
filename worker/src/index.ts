@@ -11,13 +11,18 @@
  *     *.supabase.co directly
  *
  * Paths:
- *   - /v1/bug-reports          → POST to Supabase ingest_envelope (v1)
- *   - /v1/installations/report → POST to Supabase ingest_envelope (v1)
- *   - /v1/contribute           → RPC to telemetry.contribute()       (v2)
+ *   - POST /v1/contribute  → telemetry.contribute() RPC (the only ingest)
+ *   - POST /v1/forget      → 410 Gone (intentional; v2 has no per-install
+ *                            record to delete; see docs/PRIVACY.md)
  *
- * v1 paths remain operational during the v2 migration window (Phases
- * A-C of docs/telemetry-architecture-v2.md). After Phase D they will
- * be removed.
+ * Background:
+ *   v1 endpoints (/v1/bug-reports, /v1/installations/report) existed in
+ *   earlier deploys (0.9.4-dev … 0.9.18-dev). They were never wired to a
+ *   live client posting path because SM-160 (0.9.18-dev) deleted the
+ *   client-side SendReport before the server was ready. Under v2
+ *   (stream-aggregate-and-discard) the architecture has converged on
+ *   one ingest function and no per-event tables; the v1 paths were
+ *   removed from the Worker surface in 0.9.7x-dev.
  *
  * Deploy:
  *   1. npm install -g wrangler   (one-time)
@@ -62,18 +67,12 @@ const BODY_SIZE_CAP_BYTES = 100_000;
 const RATE_LIMIT_REQUESTS_PER_MINUTE = 30;
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 
-// v1 ingest paths (deprecated; remain operational during the v2
-// migration). All map to the same ingest_envelope table.
-const V1_PATHS_TO_TABLE: Record<string, string> = {
-    "/v1/bug-reports":           "ingest_envelope",
-    "/v1/installations/report":  "ingest_envelope",
-};
-
-// v2 ingest path — calls the telemetry.contribute() RPC. The function
-// verifies the HMAC, dispatches by event_kind, UPSERTs the matching
-// rollup counter, and returns. No raw event row is ever persisted.
-const V2_RPC_PATH = "/v1/contribute";
-const V2_RPC_FUNCTION = "contribute";
+// The single ingest path — calls the telemetry.contribute() RPC. The
+// function verifies the HMAC, dispatches by event_kind, UPSERTs the
+// matching rollup counter, and returns. No raw event row is ever
+// persisted.
+const RPC_PATH = "/v1/contribute";
+const RPC_FUNCTION = "contribute";
 
 // Forget endpoint — explicitly NOT supported under v2. The CLI design
 // removed `smirror telemetry forget` (see docs/cli-telemetry-command.md);
@@ -81,11 +80,17 @@ const V2_RPC_FUNCTION = "contribute";
 // a pointer to the new policy. This is intentional and durable.
 const RETIRED_PATHS = new Set([
     "/v1/forget",
+    // v1 ingest paths, retired in 0.9.7x-dev when the v1 schema was
+    // dropped. Returning 410 (rather than 404) so any straggler
+    // pre-0.9.18 client gets a clear "endpoint gone" signal. There
+    // shouldn't be any such clients (SM-160 cut the wire); this is
+    // belt-and-braces.
+    "/v1/bug-reports",
+    "/v1/installations/report",
 ]);
 
 const ALLOWED_PATHS = new Set([
-    ...Object.keys(V1_PATHS_TO_TABLE),
-    V2_RPC_PATH,
+    RPC_PATH,
 ]);
 
 export default {
@@ -160,19 +165,10 @@ export default {
             });
         }
 
-        // Dispatch to v1 vs v2 upstream.
+        // Forward to PostgREST RPC. The body is forwarded verbatim;
+        // the Postgres function expects parameter-bound JSONB.
         const supabaseBase = `https://${env.SUPABASE_PROJECT_REF}.supabase.co`;
-
-        let upstreamURL: string;
-        if (url.pathname === V2_RPC_PATH) {
-            // v2: call PostgREST RPC. The body is forwarded verbatim;
-            // the Postgres function expects parameter-bound JSONB.
-            upstreamURL = `${supabaseBase}/rest/v1/rpc/${V2_RPC_FUNCTION}`;
-        } else {
-            // v1: forward to ingest_envelope as before.
-            const targetTable = V1_PATHS_TO_TABLE[url.pathname];
-            upstreamURL = `${supabaseBase}/rest/v1/${targetTable}`;
-        }
+        const upstreamURL = `${supabaseBase}/rest/v1/rpc/${RPC_FUNCTION}`;
 
         const upstreamRequest = new Request(upstreamURL, {
             method: "POST",
@@ -189,9 +185,10 @@ export default {
         try {
             const upstreamResponse = await fetch(upstreamRequest);
             // Pass through status and body (don't expose Supabase
-            // headers). For v2, the function returns 200 with
-            // {"ok": false, ...} on rejection — we forward that
-            // verbatim so the client can read the rejection reason.
+            // headers). The function returns 200 with
+            // {"ok": false, "error": ...} on rejection — we forward
+            // that verbatim so the client can read the rejection
+            // reason.
             return new Response(upstreamResponse.body, {
                 status: upstreamResponse.status,
                 headers: {

@@ -1,182 +1,154 @@
 # Telemetry operations runbook
 
-**Audience**: maintainer (Raveh, anyone with admin access to the Supabase backend).
-**Companion to**: `docs/telemetry-microserver-architecture.md` (the spec) and `docs/PRIVACY.md` (user-facing).
+**Audience**: maintainer (Raveh, anyone with admin access to the
+Supabase backend).
+**Companion to**: [`telemetry-architecture-v2.md`](../telemetry-architecture-v2.md)
+(the spec) and [`PRIVACY.md`](../PRIVACY.md) (user-facing).
+**Initial deploy**: see [`deploy-telemetry-v2.md`](./deploy-telemetry-v2.md).
 
-This runbook tells you how to read the data, what to check on what cadence, and what to do when something goes wrong.
+This runbook tells you how to read v2 telemetry data, what to check on
+what cadence, and what to do when something goes wrong.
 
 ---
 
 ## Daily — nothing
 
-By design. There is no daily check; the system is too low-volume for that to be useful and you will burn out staring at zeros.
+By design. There is no daily check; the system is too low-volume for
+that to be useful and you will burn out staring at zeros.
 
 ---
 
 ## Weekly — read the auto-generated digest
 
-A GitHub Action runs every Sunday at 03:00 UTC and opens a PR with a Markdown digest at `docs/telemetry/weekly-YYYY-WWNN.md`. Read it on your phone in the GitHub mobile app, or in your morning email.
+A GitHub Action runs every Sunday at 03:00 UTC and opens a PR with a
+Markdown digest at `docs/telemetry/weekly-YYYY-WWNN.md`. Read it on
+your phone in the GitHub mobile app, or in your morning email.
 
 What to look for in priority order:
 
-1. **Action prompt sections** — the digest calls out anything worth acting on (recurring signatures, unclassified backlog age, version-distribution shifts).
-2. **"What nobody hit"** — stability streaks. If a category that's been quiet for weeks suddenly fires, that's news.
-3. **Hygiene line** — confirms `pg_cron` jobs ran, DB usage is below the free-tier ceiling, last ingest is recent.
+1. **Action prompt sections** — the digest calls out anything worth
+   acting on (recurring kind/surface buckets, version-distribution
+   shifts, anomaly-kind spikes on the latest release).
+2. **"What nobody hit"** — stability streaks. If a bucket that's been
+   quiet for weeks suddenly fires, that's news.
+3. **Hygiene line** — confirms recent ingest activity and DB usage is
+   below the free-tier ceiling.
 
 If a week looks like "n is too small for analysis," it is. Move on.
+
+> **Note**: as of 0.9.7x-dev, `scripts/telemetry-report.py` still
+> queries the v1 row-per-event tables. Under v2 those tables don't
+> exist; the rollup tables are denormalized counters. The digest
+> script is being rewritten for v2 — tracked as a follow-up. Until
+> then, the weekly PR may produce stale or empty output. Fall back
+> to the manual SQL queries below.
 
 ---
 
 ## Monthly — sanity checks
 
-Run these in Supabase SQL Editor (the views are in `docs/telemetry-views.sql`):
+Run these in Supabase SQL Editor against the v2 rollup tables.
 
 ```sql
--- 1. DB free-tier headroom
-SELECT pg_size_pretty(pg_database_size(current_database())) AS db_size;
--- If approaching 400 MB (80% of 500 MB free-tier ceiling), tighten retention.
+-- 30-day version distribution (what's running in the wild)
+SELECT * FROM telemetry.version_dist;
+-- Aggregate counts only; the view applies the events-30d window.
+-- The digest filter additionally suppresses cells with < 5 contributors.
 
--- 2. pg_cron job health
-SELECT jobid, jobname, schedule, active
-FROM cron.job
-WHERE jobname LIKE 'telemetry-%';
-
--- 3. Recent cron run history
-SELECT jobid, status, start_time, end_time, return_message
-FROM cron.job_run_details
-WHERE jobid IN (SELECT jobid FROM cron.job WHERE jobname LIKE 'telemetry-%')
-ORDER BY end_time DESC LIMIT 10;
--- All recent runs should be 'succeeded'.
-
--- 4. Dead-letter (server side: should always be 0; we don't queue server-side)
--- Client side: users with stuck telemetry would have files in
--- ~/.selectivemirror/telemetry-queue/dead-letter/. Not visible to us.
-```
-
----
-
-## Quarterly — taxonomy + key rotation
-
-### Taxonomy curation
-
-Open `telemetry.taxonomy_term` in Supabase Studio. Look at the recently-classified bug reports:
-
-```sql
-SELECT bug_kind, COUNT(*)
+-- Bug-rollup activity over the last 30 days
+SELECT bug_kind, bug_surface, client_version,
+       SUM(reports) AS total_reports
 FROM telemetry.bug_daily_rollup
-WHERE rollup_date >= now() - INTERVAL '90 days'
-GROUP BY bug_kind ORDER BY COUNT(*) DESC;
+WHERE rollup_date >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY bug_kind, bug_surface, client_version
+ORDER BY total_reports DESC, bug_kind, bug_surface;
+
+-- Reliability snapshot patterns (Reliability tier only)
+SELECT client_version, anomaly_count_bucket, most_common_anomaly_kind,
+       SUM(count) AS snapshots
+FROM telemetry.reliability_daily_rollup
+WHERE rollup_date >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY client_version, anomaly_count_bucket, most_common_anomaly_kind
+ORDER BY snapshots DESC;
+
+-- Free-tier database usage
+SELECT pg_size_pretty(pg_database_size(current_database())) AS db_size;
+-- Threshold: 500 MB (Supabase free tier). v2 schema is small —
+-- only counters, no raw payloads. Should stay well under 100 MB
+-- indefinitely.
 ```
-
-If `unknown` is more than ~20% of classifications, the taxonomy is missing terms. Add them:
-
-```sql
-INSERT INTO telemetry.taxonomy_term (target, namespace, slug, display_name, description, ordinal)
-VALUES ('bug_report', 'bug.kind', 'new_kind', 'New Kind', 'Description.', 200);
-```
-
-(Don't change ordinals of existing terms; just append.)
-
-### HMAC key rotation (optional)
-
-The master HMAC key in Supabase Vault doesn't expire. Rotate only if:
-- A binary's derived key has been observably abused (you see traffic from a version_hmac that shouldn't exist)
-- A team member leaves and had access to the master key
-- General hygiene (annual is fine)
-
-To rotate:
-1. Generate new key: `openssl rand -hex 32` (locally; never paste anywhere).
-2. Update in Bitwarden + Supabase Vault (`telemetry_master_key`).
-3. Update GitHub Actions repository secret `SMIRROR_TELEMETRY_MASTER_KEY`.
-4. Cut a new release. Old binaries will continue to verify (their derived keys are based on the old master) — wait, no, that's wrong. **Rotating the master invalidates ALL existing derived keys.** Old shipped binaries will silently fail to submit telemetry until users upgrade. Plan accordingly.
-
-### What happens if `SMIRROR_TELEMETRY_MASTER_KEY` is absent at release time
-
-PR-S3 (panel review pre-release 2026-04-28). Before this batch, an absent secret produced a binary with an empty derived key — silent telemetry-disabled state, no alarm. After this batch, the release pipeline **fails by default** when the secret is missing. The release proceeds only when the maintainer has explicitly opted out.
-
-Override: set the **repository variable** (not secret) `RELEASE_ALLOW_NO_TELEMETRY_KEY=1` under repo Settings → Secrets and variables → Actions → Variables. Then re-run the workflow. The build will produce a binary that cannot submit telemetry; the release body should reflect that fact.
-
-Use the override when:
-- You're cutting a security hot-fix on a fork or in a paired session where access to the production master key is not available.
-- You're deliberately shipping a build whose telemetry surface should be disabled (e.g., a test release for a controlled environment).
-
-Do NOT use the override for normal releases. The `release.yml` step will print a `::warning::` annotation when the override is active so weekly-digest readers can see which release(s) had telemetry off.
 
 ---
 
-## Incident: a bad version reported in the wild
+## Bad-version recovery
 
-When you see a recurring signature on a specific `client_version` and need to stop more reports of the same thing:
+A bug ships in version X. Telemetry shows X has growing share. Steps:
 
-```sql
--- Option A: deny all telemetry from that version (drastic; clients see 401s)
-ALTER POLICY anon_insert_with_hmac ON telemetry.ingest_envelope
-WITH CHECK (
-    -- ... existing checks ...
-    AND client_version != '0.9.5'  -- <-- block this version
-    AND telemetry.verify_versioned_hmac(...)
-);
-
--- Option B: just patch the bug, ship a release, let upgrade events resolve it.
--- Usually the right answer.
-```
-
-Recovery: revert the policy change after the bad version is no longer in the wild (you can tell from `version_dist` view).
+1. **Confirm the spike**: query `telemetry.version_dist` and the
+   bug_daily_rollup for the 24h since X went out.
+2. **Pull** the release: `gh release delete vX --yes` (or mark as
+   pre-release in Studio).
+3. **Restore** the prior version as `latest` so `selfupdate --check`
+   pulls users back: edit the release that should be latest, click
+   "Set as latest release."
+4. **Watch the rollup decline** over the next 7 days as users run
+   selfupdate.
+5. **Document** in `CHANGELOG.md` why X was withdrawn.
 
 ---
 
-## Going dark: how to disable ingest if compromised
+## Health checks (when telemetry seems wrong)
 
-If the master HMAC key leaks or someone's flooding the endpoint:
+| Symptom | Probable cause | Quick check |
+|---|---|---|
+| All recent contributions rejected | HMAC master key missing or rotated | `SELECT name FROM vault.decrypted_secrets WHERE name = 'telemetry_master_key';` |
+| `contribute()` returns 4xx | RPC permissions broken | `SELECT has_function_privilege('service_role', 'telemetry.contribute(jsonb,text,text)', 'EXECUTE');` |
+| Worker returns 502 | Supabase project paused/down | `curl -I https://<project>.supabase.co` |
+| Aggregate counts stalled | Worker not deployed or wrong project | `npx wrangler tail` to watch live requests |
+| Smoke test fails on canonical-JSON parity | client/server canonicalizer drift | Compare output of `internal/telemetry/canonical.go` to PG `JSONB::TEXT` |
 
-```sql
--- Disable the policy; no more anon inserts will succeed.
-ALTER TABLE telemetry.ingest_envelope DISABLE ROW LEVEL SECURITY;
-ALTER TABLE telemetry.ingest_envelope ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS anon_insert_with_hmac ON telemetry.ingest_envelope;
--- Now anon has no policy → all anon inserts fail.
-```
-
-To restore: re-run `docs/telemetry-rls.sql`.
-
-For an immediate edge-layer block (faster than re-loading SQL):
-- Update Cloudflare Worker to return 503 unconditionally
-- `wrangler deploy` — propagates in <30 seconds
+The smoke-test script (`scripts/telemetry-v2-smoke-test.py
+--via-worker`) exercises the four standard rejection paths and one
+acceptance path. Re-run it any time Supabase or the Worker has been
+touched.
 
 ---
 
-## Storage growing fast
+## What changed from v1
 
-If `pg_database_size(...)` is climbing toward 400 MB, the retention janitor isn't keeping up. Options:
+Under v1 (now retired) operations included:
+- A nightly `pg_cron` rollup-refresh job — gone (counters are inline)
+- A 90-day retention janitor — gone (no raw stored)
+- Multiple denormalized human-friendly views — gone (rollups ARE the
+  data)
+- `bug_report_human` / `bug_report_clusters` for re-classification —
+  gone (taxonomy is client-side at submit time)
 
-1. Tighten retention: edit `docs/telemetry-worker.sql`, change `retention_days INTEGER DEFAULT 90` to `30`, re-load.
-2. Truncate old envelopes manually:
-   ```sql
-   UPDATE telemetry.ingest_envelope
-   SET payload = '{}'::jsonb
-   WHERE received_at < now() - INTERVAL '30 days'
-     AND classification_state = 'classified';
-   ```
-3. Strip large columns on `bug_report` after classification (currently NOT in the retention janitor — see panel review):
-   ```sql
-   UPDATE telemetry.bug_report
-   SET report_text = '<purged>',
-       anomaly_summary = '{}'::jsonb,
-       status_snapshot = '{}'::jsonb
-   WHERE classified_at < now() - INTERVAL '30 days';
-   ```
+Anything you remembered from the v1 ops runbook that touched
+`bug_report`, `installation_event`, `ingest_envelope`, `taxonomy_term`,
+or `purge_old_envelopes` is no longer applicable. The v1 schema was a
+leftover; it was dropped via `docs/operations/sql/drop-v1-leftover.sql`
+during the v2 deploy.
 
 ---
 
-## What to use when
+## Glossary
 
-| Situation | Tool |
-|-----------|------|
-| Weekly review | The auto-generated digest at `docs/telemetry/weekly-*.md` |
-| Ad-hoc query | Supabase SQL Editor + the views in `docs/telemetry-views.sql` |
-| Investigating a specific bug report | `SELECT * FROM telemetry.bug_report_human WHERE id = '...'` |
-| Triaging recurring signatures | `SELECT * FROM telemetry.bug_report_clusters` |
-| Checking install base | `SELECT * FROM telemetry.install_summary` |
-| Single-row health snapshot | `SELECT * FROM telemetry.weekly_health` |
-| Monthly hygiene | the queries above |
-| Post-incident report | inline in CHANGELOG (see `docs/PRIVACY.md` and the panel review on transparency norms) |
+| Term | Where it lives |
+|---|---|
+| `installation_daily_rollup` | v2 rollup table for first_seen + upgrade events |
+| `bug_daily_rollup` | v2 rollup table for bug_report contributions |
+| `reliability_daily_rollup` | v2 rollup table for Reliability-tier snapshots |
+| `telemetry.contribute()` | the only RPC client-callers ever invoke |
+| `telemetry.verify_versioned_hmac()` | shared HMAC verifier (called by contribute) |
+| `version_dist` | view: 30-day version distribution from installation_daily_rollup |
+| `RATE_LIMIT_SALT_SECRET` | Worker secret; salts the IP→KV-key HMAC |
+
+| Tool | Where it lives |
+|---|---|
+| Live data | Supabase Studio → Database → Tables → telemetry schema |
+| Schema source | [`docs/telemetry-v2.sql`](../telemetry-v2.sql) |
+| Worker source | [`worker/src/index.ts`](../../worker/src/index.ts) |
+| Smoke test | [`scripts/telemetry-v2-smoke-test.py`](../../scripts/telemetry-v2-smoke-test.py) |
+| Digest script | [`scripts/telemetry-report.py`](../../scripts/telemetry-report.py) — pending v2 rewrite |
+| Deploy runbook | [`deploy-telemetry-v2.md`](./deploy-telemetry-v2.md) |

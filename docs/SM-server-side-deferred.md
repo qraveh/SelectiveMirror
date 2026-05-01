@@ -66,29 +66,25 @@ Not duplicated here; cross-reference only.
 
 ## SM-163 — Worker rate-limiter security
 
-**Severity**: major. **Component**: Cloudflare Worker.
+**Status**: 2/3 sub-items shipped in 0.9.71-dev. **Severity**: minor
+remainder. **Component**: Cloudflare Worker.
 
-Three flaws documented in the validation report:
+Three flaws documented in the validation report; current status of each:
 
-1. **Raw client IP stored in KV key**: `rl:${ip}` lets the KV value
-   double as a per-IP record. Privacy posture should be that IPs
-   never persist anywhere; replace with a salted HMAC of
-   `(ip, tenant)` so the same client coalesces to the same key but
-   the key is not reversible.
-2. **Body-size cap trusts `Content-Length`**: a chunked-transfer
-   request without a Content-Length header bypasses the 100 KB cap.
-   The fix is `request.clone().arrayBuffer()` (or similar) to
-   enforce the cap on the actual body bytes.
-3. **Non-atomic `kv.get()` then `kv.put()`**: parallel same-IP
-   requests both read the pre-increment counter and both write
-   back N+1 instead of N+2. KV doesn't support atomic increment, so
-   we either accept the slack (probably fine — counter is best-
-   effort) or move to Durable Objects. Documented choice goes here
-   when made.
-
-Each fix is a small change to `worker/src/index.ts`, but the trio
-needs a coordinated review pass (the rate-limit semantics shift
-visible to clients) and is therefore deferred to its own session.
+1. **Raw client IP stored in KV key** — ✅ **FIXED** in 0.9.71-dev.
+   `rl:${ip}` is replaced with `rl:HMAC-SHA256(salt_secret, ip + ":" + utc_date)[:16]`,
+   so KV at rest is non-reversible to IPs without the deploy-time
+   secret. Same IP within a UTC day → same key (counter accumulates);
+   across days → different keys (linkability broken at 24h boundary).
+2. **Body-size cap trusts `Content-Length`** — ✅ **FIXED** in 0.9.71-dev.
+   The Worker now reads `await request.arrayBuffer()` and checks
+   `byteLength`, so chunked-transfer can't bypass the 100 KB cap.
+3. **Non-atomic `kv.get()` then `kv.put()`** — open. Parallel same-IP
+   requests can each read the pre-increment counter and write back
+   N+1 instead of N+2. KV doesn't support atomic increment; the
+   choice is accept-the-slack (counter is best-effort; ±10% over
+   the rate limit is fine) or move to Durable Objects. Default
+   posture: accept-the-slack until measured abuse appears.
 
 ## SM-168 — MSI build pipeline + telemetry signing key
 
