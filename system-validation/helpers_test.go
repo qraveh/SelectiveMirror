@@ -822,6 +822,11 @@ var coverage = &coverageTracker{
 		"telemetry_v2_cli_forget_rejected":         {Description: "Telemetry v2: smirror telemetry forget exits with v2 migration message", Required: 1},
 		"telemetry_v2_cli_inspect_works":           {Description: "Telemetry v2: smirror telemetry inspect prints structured payload", Required: 1},
 		"telemetry_v2_schema_drift_view":            {Description: "Telemetry v2: bug_unknown_share view exists for drift detection", Required: 1},
+
+		// SM-157 round-3 panel — Worker structural claims (C-13/C-14/C-16)
+		"telemetry_v2_worker_no_raw_ip":             {Description: "Telemetry v2: Worker never puts raw IP in KV key (CLAIMS-MAP C-13)", Required: 1},
+		"telemetry_v2_worker_rate_limit_linkability": {Description: "Telemetry v2: rateLimitKey same-IP-day linkability + cross-day unlinkability (C-14)", Required: 1},
+		"telemetry_v2_worker_retired_paths":          {Description: "Telemetry v2: legacy + forget paths return 410 Gone (CLAIMS-MAP C-16)", Required: 1},
 	},
 }
 
