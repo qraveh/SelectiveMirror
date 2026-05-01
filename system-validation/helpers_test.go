@@ -806,6 +806,21 @@ var coverage = &coverageTracker{
 		"telemetry_rollup_taxonomy_join":      {Description: "Telemetry: rollup taxonomy joins avoid cross-products", Required: 1},
 		"telemetry_validation_harness":        {Description: "Telemetry: validation coverage does not mask failed tests", Required: 1},
 		"telemetry_validation_rclone_gate":    {Description: "Telemetry: static validation checks do not require rclone", Required: 1},
+
+		// SM-157 / round-3 panel — schema-conformance for v2 architecture
+		"telemetry_v2_schema_no_personal_data":     {Description: "Telemetry v2: only rollup tables exist (no personal data on disk)", Required: 1},
+		"telemetry_v2_schema_no_narrative":         {Description: "Telemetry v2: no narrative-shaped columns in schema", Required: 1},
+		"telemetry_v2_schema_no_heartbeat":         {Description: "Telemetry v2: event_kind ENUM has no heartbeat variant", Required: 1},
+		"telemetry_v2_schema_no_accumulated_counts": {Description: "Telemetry v2: no accumulated-metric columns", Required: 1},
+		"telemetry_v2_schema_no_geo":               {Description: "Telemetry v2: no geography fields", Required: 1},
+		"telemetry_v2_schema_no_hw_fingerprint":    {Description: "Telemetry v2: no hardware fingerprint fields", Required: 1},
+		"telemetry_v2_schema_bucketized_numerics":  {Description: "Telemetry v2: every numeric column is a bucket ENUM", Required: 1},
+		"telemetry_v2_schema_no_install_id":        {Description: "Telemetry v2: install_id never appears as a column", Required: 1},
+		"telemetry_v2_schema_replay_overcount_only": {Description: "Telemetry v2: INSERT only into rollup tables (replay can only over-count)", Required: 1},
+		"telemetry_v2_schema_counters_monotonic":   {Description: "Telemetry v2: counters are monotonic (no decrement path)", Required: 1},
+		"telemetry_v2_artifacts_no_narrative_quotes": {Description: "Telemetry v2: no quoted bug-report text in published artifacts", Required: 1},
+		"telemetry_v2_cli_forget_rejected":         {Description: "Telemetry v2: smirror telemetry forget exits with v2 migration message", Required: 1},
+		"telemetry_v2_cli_inspect_works":           {Description: "Telemetry v2: smirror telemetry inspect prints structured payload", Required: 1},
 	},
 }
 

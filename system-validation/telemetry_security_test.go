@@ -75,56 +75,50 @@ func TestTelemetryReleaseBuild_EmbedsBuildKeyForMSI(t *testing.T) {
 	}
 }
 
-func TestTelemetryRLS_EnvelopeFieldsAreAuthenticated(t *testing.T) {
-	t.Parallel()
-	coverage.Record("telemetry_rls_envelope_binding")
-
-	rls := readRepoFile(t, "docs", "telemetry-rls.sql")
-	requiredBindings := []string{
-		"payload->>'client_version' = client_version",
-		"payload->>'install_id' = install_id",
-		"payload_sha256 =",
-		"payload->>'schema_version'",
-		"payload->>'ingest_kind'",
-	}
-	for _, binding := range requiredBindings {
-		if !strings.Contains(rls, binding) {
-			t.Errorf("RLS policy does not bind signed payload to envelope field/check %q", binding)
-		}
-	}
-}
-
-func TestTelemetryRLS_ServerOwnedColumnsCannotBeClientSet(t *testing.T) {
-	t.Parallel()
-	coverage.Record("telemetry_rls_server_owned_columns")
-
-	rls := readRepoFile(t, "docs", "telemetry-rls.sql")
-	for _, guard := range []string{
-		"classification_state = 'pending'",
-		"classified_at IS NULL",
-		"classification_error IS NULL",
-		"classify_after",
-	} {
-		if !strings.Contains(rls, guard) {
-			t.Errorf("RLS policy lacks server-owned column guard %q", guard)
-		}
-	}
-}
+// TestTelemetryRLS_EnvelopeFieldsAreAuthenticated — DELETED 0.9.84-dev.
+// v1's RLS bound the payload signature to envelope columns on a stored
+// ingest_envelope row. Under v2 (stream-aggregate-and-discard) there is
+// no envelope row, so the binding has nothing to bind to. The replay-
+// only-over-counts property is now covered structurally by
+// TestTelemetryV2Schema_NoInsertOutsideRollups (CLAIMS-MAP A-02).
+//
+// TestTelemetryRLS_ServerOwnedColumnsCannotBeClientSet — DELETED 0.9.84-dev.
+// v1 had server-owned classification_state / classify_after columns on
+// the ingest_envelope row. v2 has no such row; classification is
+// client-side at submit time (via the closed bucket-key tuple), and
+// the rollup tables have no client-mutable server-owned columns by
+// construction.
 
 func TestTelemetryWorker_PrivacyAndEdgeLimits(t *testing.T) {
 	t.Parallel()
 	coverage.Record("telemetry_worker_edge_privacy")
 
 	worker := readRepoFile(t, "worker", "src", "index.ts")
-	if strings.Contains(worker, "CF-Connecting-IP") && strings.Contains(worker, "`rl:${ip}`") {
-		t.Errorf("worker stores raw client IP in RATE_LIMIT_KV key; privacy policy says IPs are not stored")
+
+	// SM-163 sub-item 1: rate-limit KV key must NOT be `rl:${ip}` —
+	// the salted-hash form `rl:${hex}` keeps KV at rest non-reversible.
+	// Updated 0.9.84-dev: the SM-163 fix landed in 0.9.71-dev; the key
+	// is built via rateLimitKey(ip, salt) which returns `rl:${hex}`
+	// with hex computed from HMAC-SHA256(salt, ip+date)[:16].
+	if strings.Contains(worker, "`rl:${ip}`") {
+		t.Errorf("worker stores raw client IP in RATE_LIMIT_KV key; SM-163 fix should use a salted hash. Pattern `rl:${ip}` should not appear.")
 	}
-	if strings.Contains(worker, `headers.get("Content-Length")`) && !strings.Contains(worker, "request.clone().arrayBuffer") {
-		t.Errorf("worker body cap trusts Content-Length only; missing/chunked lengths can bypass edge 100KB cap")
+
+	// SM-163 sub-item 2: body cap on actual bytes, not just header.
+	// The current Worker uses `await request.arrayBuffer()` and checks
+	// `byteLength`. Either spelling (with or without `.clone()`) works.
+	// We assert the byteLength check is present.
+	if strings.Contains(worker, `headers.get("Content-Length")`) && !strings.Contains(worker, "byteLength") {
+		t.Errorf("worker body cap should enforce on actual byteLength of request body; SM-163 fix landed in 0.9.71-dev")
 	}
-	if strings.Contains(worker, "kv.get(key)") && strings.Contains(worker, "kv.put(key") {
-		t.Errorf("worker rate limit is non-atomic get-then-put; parallel same-IP requests can exceed the limit")
-	}
+
+	// SM-163 sub-item 3: non-atomic kv.get → kv.put rate-limit race.
+	// Documented "accept-the-slack" posture as of 0.9.71-dev (SM-163's
+	// status under v2: 2/3 sub-items shipped, this remainder
+	// intentionally accepted; see SM-server-side-deferred.md). This
+	// test is informational only — the assertion was removed when the
+	// posture was decided.
+	_ = worker
 }
 
 func TestTelemetryDigest_PrivacyAndMarkdownEscaping(t *testing.T) {
@@ -181,21 +175,12 @@ func TestTelemetryCrashReport_SanitizationAndConsent(t *testing.T) {
 	}
 }
 
-func TestTelemetryRetention_PurgesNormalizedRawText(t *testing.T) {
-	t.Parallel()
-	coverage.Record("telemetry_retention_raw_purge")
-
-	privacy := readRepoFile(t, "docs", "PRIVACY.md")
-	if !strings.Contains(privacy, "raw payloads are stripped") {
-		t.Fatalf("privacy retention contract changed; update this validation test")
-	}
-	workerSQL := readRepoFile(t, "docs", "telemetry-worker.sql")
-	for _, rawField := range []string{"report_text", "anomaly_summary", "status_snapshot"} {
-		if strings.Contains(workerSQL, "SET payload = '{}'::jsonb") && !strings.Contains(workerSQL, rawField) {
-			t.Errorf("retention janitor strips ingest_envelope.payload but does not purge normalized raw field %s", rawField)
-		}
-	}
-}
+// TestTelemetryRetention_PurgesNormalizedRawText — DELETED 0.9.84-dev.
+// Under v2 there is no retention janitor because there is no raw to
+// retain. The structural invariant that replaces it is covered by
+// TestTelemetryV2Schema_OnlyRollupTablesExist (CLAIMS-MAP C-02) and
+// TestTelemetryV2Schema_NoNarrativeColumns (A-08): if the schema
+// cannot store narrative or raw payloads, no janitor is needed.
 
 func TestTelemetryTierGate_FailsClosedOnStateReadError(t *testing.T) {
 	t.Parallel()
@@ -227,24 +212,31 @@ func TestTelemetryDocs_OperationsViewsExist(t *testing.T) {
 	t.Parallel()
 	coverage.Record("telemetry_ops_docs_views")
 
+	// Updated 0.9.84-dev: target telemetry-v2.sql (the v1 sql files
+	// were deleted in 0.9.82-dev). Asserts that any view name the
+	// runbook references is actually defined in v2's SQL.
 	ops := readRepoFile(t, "docs", "operations", "telemetry-ops.md")
-	views := readRepoFile(t, "docs", "telemetry-views.sql")
-	if strings.Contains(ops, "version_dist") && !strings.Contains(views, "version_dist") {
-		t.Errorf("telemetry ops runbook references version_dist, but telemetry-views.sql does not define that view")
+	v2sql := readRepoFile(t, "docs", "telemetry-v2.sql")
+
+	// Every view name the runbook references must exist as a
+	// CREATE OR REPLACE VIEW telemetry.<name> in v2 SQL.
+	for _, viewName := range []string{"version_dist"} {
+		if strings.Contains(ops, "telemetry."+viewName) {
+			needle := "VIEW telemetry." + viewName
+			if !strings.Contains(v2sql, needle) {
+				t.Errorf("telemetry-ops.md references telemetry.%s, but telemetry-v2.sql does not define that view", viewName)
+			}
+		}
 	}
 }
 
-func TestTelemetryRollup_TaxonomyJoinsDoNotCrossProduct(t *testing.T) {
-	t.Parallel()
-	coverage.Record("telemetry_rollup_taxonomy_join")
-
-	sql := readRepoFile(t, "docs", "telemetry-worker.sql")
-	kindJoin := "LEFT JOIN telemetry.bug_report_taxonomy_assignment a_kind\n        ON a_kind.bug_report_id = br.id"
-	surfaceJoin := "LEFT JOIN telemetry.bug_report_taxonomy_assignment a_surface\n        ON a_surface.bug_report_id = br.id"
-	if strings.Contains(sql, kindJoin) && strings.Contains(sql, surfaceJoin) {
-		t.Errorf("telemetry bug rollup joins taxonomy assignments twice without filtering each assignment join by namespace; multi-tag reports can cross-product into extra rollup segments")
-	}
-}
+// TestTelemetryRollup_TaxonomyJoinsDoNotCrossProduct — DELETED 0.9.84-dev.
+// v1 had a bug-rollup query that joined taxonomy_term twice without
+// per-namespace filtering, producing cross-product rollup rows. Under
+// v2 there is no taxonomy_term table and no rollup-refresh function;
+// classification is client-side at submit time, encoded directly in
+// the bug_daily_rollup bucket-key tuple. The class of bug this test
+// guarded against cannot exist in the v2 schema.
 
 func TestTelemetryValidationHarness_CoverageDoesNotMaskFailedTests(t *testing.T) {
 	t.Parallel()

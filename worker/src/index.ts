@@ -127,9 +127,12 @@ export default {
 
         // Per-IP rate limit (best-effort; per-edge-PoP, not global). The
         // KV key is a salted hash of the IP — see SM-163 fix in the
-        // header comment.
+        // header comment. If RATE_LIMIT_SALT_SECRET is not configured,
+        // rate-limiting is SKIPPED rather than fall back to a raw-IP
+        // key (which would violate the privacy claim). Cloudflare's
+        // built-in DDoS protection still applies as the floor.
         const clientIP = request.headers.get("CF-Connecting-IP") || "unknown";
-        if (env.RATE_LIMIT_KV) {
+        if (env.RATE_LIMIT_KV && env.RATE_LIMIT_SALT_SECRET) {
             const allowed = await checkRateLimit(
                 env.RATE_LIMIT_KV,
                 clientIP,
@@ -141,6 +144,13 @@ export default {
                     message: `Rate limit: ${RATE_LIMIT_REQUESTS_PER_MINUTE}/min per IP. Back off.`,
                 }, { "Retry-After": String(RATE_LIMIT_WINDOW_SECONDS) });
             }
+        } else if (env.RATE_LIMIT_KV && !env.RATE_LIMIT_SALT_SECRET) {
+            // KV is bound but the salt secret is missing. Don't fall
+            // back to raw-IP keys — that would store IPs in KV. Log
+            // and skip rate-limiting; operator must set the secret.
+            console.warn(
+                "RATE_LIMIT_SALT_SECRET is not set; per-IP rate limiting is DISABLED to avoid storing raw IPs in KV. Set the secret to enable it.",
+            );
         }
 
         // Body size cap on actual bytes (NOT the Content-Length header,
@@ -206,7 +216,7 @@ export default {
 };
 
 /**
- * Rate-limit check with salted-IP-hash key (SM-163 partial fix).
+ * Rate-limit check with salted-IP-hash key (SM-163 fix).
  *
  * The key shape is:
  *   rl:HMAC-SHA256(salt_secret, ip + ":" + utc_date_yyyymmdd)[:32]
@@ -219,14 +229,15 @@ export default {
  *   - No rotating-salt storage required; unlinkability comes from the
  *     date in the HMAC input
  *
- * If the secret is missing (deployed without it), we fall back to
- * the legacy raw-IP key shape with a console warning so the
- * regression is observable.
+ * Caller must verify saltSecret is non-empty before calling — if it
+ * isn't, rate-limiting should be skipped entirely (see fetch handler
+ * above) rather than fall back to a raw-IP key, which would violate
+ * the "no IPs in storage" privacy claim.
  */
 async function checkRateLimit(
     kv: KVNamespace,
     ip: string,
-    saltSecret: string | undefined,
+    saltSecret: string,
 ): Promise<boolean> {
     const key = await rateLimitKey(ip, saltSecret);
     const current = parseInt((await kv.get(key)) || "0", 10);
@@ -238,16 +249,7 @@ async function checkRateLimit(
     return true;
 }
 
-async function rateLimitKey(
-    ip: string,
-    saltSecret: string | undefined,
-): Promise<string> {
-    if (!saltSecret) {
-        // Fallback to the legacy shape so a misconfigured deploy still
-        // rate-limits, just without the SM-163 protection.
-        console.warn("RATE_LIMIT_SALT_SECRET is not set; using raw-IP key (SM-163 protection disabled)");
-        return `rl:${ip}`;
-    }
+async function rateLimitKey(ip: string, saltSecret: string): Promise<string> {
     const utcDate = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     const message = `${ip}:${utcDate}`;
     const enc = new TextEncoder();
