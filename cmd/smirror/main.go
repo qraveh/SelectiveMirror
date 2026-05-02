@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -41,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.88-dev"
+var version = "0.9.89-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -2287,40 +2286,39 @@ covering each submit / browser / one-shot path.`)
 		}
 	}
 
-	// SM-158 (partial): --submit at tier None. The full per-tier
-	// submission pipeline (preview → approve → enqueue → send) is
-	// still deferred (see docs/SM-158-report-bug-submit-plan.md), but
-	// the surface needs to exist now so:
-	//   1. Users discover it without hitting "unknown flag"
-	//   2. None-tier non-interactive callers get a consistent failure
-	//      with a pointer to --one-shot
-	// When the full pipeline lands, this branch will route through
-	// the stuck-user prompt for interactive callers and the actual
-	// submission code for tier == standard / reliability.
+	// SM-158 — pre-decision for --submit. We figure out whether the
+	// submit pipeline should run, and under what tier label, BEFORE
+	// the bundle is built. The actual contribute() call happens later
+	// (after sanitization) so the classifier sees the same bytes the
+	// user sees. Three outcomes here:
+	//
+	//   submitDecision == "submit"    → run telemetry.Contribute after sanitize
+	//   submitDecision == "save_only" → do not submit; still file-write/print
+	//   submitDecision == "cancel"    → return (user declined entirely)
+	//
+	// On non-interactive None tier without --one-shot, we exit 1 with
+	// a hint rather than spinning a prompt that nothing will answer.
+	submitDecision := "no_submit"
+	currentTier := telemetry.Tier("none")
 	if submitFlag {
-		tier := readReportBugTier(configPath)
-		if tier == telemetry.TierNone && !oneShot {
+		currentTier = readReportBugTier(configPath)
+		switch {
+		case currentTier == telemetry.TierNone && !oneShot && !isInteractive():
 			fmt.Fprintln(os.Stderr,
 				"bug submission requires telemetry tier 'standard' or 'reliability', "+
 					"or pass --one-shot for per-event consent.")
-			fmt.Fprintln(os.Stderr,
-				"View options:  smirror telemetry policy")
+			fmt.Fprintln(os.Stderr, "View options:  smirror telemetry policy")
 			os.Exit(ExitError)
+		case currentTier == telemetry.TierNone && !oneShot && isInteractive():
+			// The actual prompt runs AFTER the bundle is built (so the
+			// [v] view-bundle option has something to show). Mark the
+			// decision as deferred for now.
+			submitDecision = "prompt"
+		default:
+			// Standard / Reliability tiers, or any tier with --one-shot.
+			submitDecision = "submit"
 		}
-		// At Standard / Reliability, or with --one-shot, the submit
-		// pipeline is not yet wired; emit a clear "not yet implemented"
-		// pointer rather than silently doing nothing.
-		fmt.Fprintln(os.Stderr,
-			"Note: --submit pipeline is not yet wired in this build. "+
-				"Use --stdout to inspect the report locally, or --browser to "+
-				"open a pre-filled GitHub issue.")
-		fmt.Fprintln(os.Stderr,
-			"Tracking: docs/SM-158-report-bug-submit-plan.md")
-		// Continue to print/save the report so users still get value;
-		// don't exit-1 because at Standard/Reliability the user isn't
-		// blocked on consent — they're blocked on us shipping the code.
 	}
-	_ = oneShot // referenced by the conditional above
 
 	var b strings.Builder
 	tz := time.Now().Format("-07:00")
@@ -2454,6 +2452,44 @@ covering each submit / browser / one-shot path.`)
 	}
 	report = telemetry.SanitizeReport(report, sanOpts)
 
+	// SM-158 — submit pipeline. Runs BEFORE the output branches so the
+	// telemetry contribution lands regardless of how the bundle is
+	// presented (stdout / clipboard / browser / file). The always-print
+	// URL rule (docs/SM-158-report-bug-submit-plan.md, 2026-05-02) is
+	// satisfied by printSubmitOutcome, which writes the GitHub-issue
+	// URL to stderr after a contribute() success or failure.
+	if submitDecision == "prompt" {
+		// None tier + interactive + !oneShot. Now that the bundle is
+		// built, the user can [v]iew it before deciding.
+		choice := stuckUserPrompt(report)
+		switch choice {
+		case "one_shot":
+			oneShot = true
+			submitDecision = "submit"
+		case "upgrade_to_standard":
+			if err := upgradeToStandardForSubmit(configPath); err != nil {
+				fmt.Fprintf(os.Stderr, "Could not change tier to Standard: %v\n", err)
+				fmt.Fprintln(os.Stderr, "Falling back to one-shot submission for this report only.")
+				oneShot = true
+			} else {
+				currentTier = telemetry.TierStandard
+				fmt.Fprintln(os.Stderr, "Telemetry tier set to Standard.")
+			}
+			submitDecision = "submit"
+		case "save_only":
+			submitDecision = "save_only"
+		case "cancel":
+			fmt.Fprintln(os.Stderr, "Cancelled.")
+			return
+		}
+	}
+	if submitDecision == "submit" {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		cls, submitErr := submitBugReport(ctx, report, currentTier, oneShot)
+		cancel()
+		printSubmitOutcome(cls, currentTier, oneShot, prefilledIssueURL(report), submitErr)
+	}
+
 	if toStdout {
 		fmt.Print(report)
 		return
@@ -2499,51 +2535,7 @@ covering each submit / browser / one-shot path.`)
 		}
 
 		fmt.Println("\n--- Opening browser ---")
-
-		// Split report into environment and logs for separate form fields
-		envReport := report
-		logReport := ""
-		if idx := strings.Index(report, "\n--- Recent Logs"); idx >= 0 {
-			envReport = report[:idx]
-			rest := report[idx+1:]
-			if nl := strings.Index(rest, "\n"); nl >= 0 {
-				logReport = rest[nl+1:]
-			}
-		}
-
-		// Pre-fill title, environment, and logs as separate form fields
-		title := fmt.Sprintf("smirror %s (%s/%s): ", version, runtime.GOOS, runtime.GOARCH)
-		issueURL := issueBugURL +
-			"&title=" + url.QueryEscape(title) +
-			"&environment=" + url.QueryEscape(envReport)
-		if logReport != "" {
-			issueURL += "&logs=" + url.QueryEscape(logReport)
-		}
-
-		// Smart per-field truncation if URL exceeds browser/OS limits (~8KB)
-		const maxURL = 8000
-		if len(issueURL) > maxURL {
-			truncEnv := envReport
-			if len(truncEnv) > 3000 {
-				truncEnv = truncEnv[:3000] + "\n... (truncated, run: smirror report-bug --stdout)"
-			}
-			truncLog := logReport
-			if len(truncLog) > 1500 {
-				truncLog = truncLog[:1500] + "\n... (truncated)"
-			}
-			issueURL = issueBugURL +
-				"&title=" + url.QueryEscape(title) +
-				"&environment=" + url.QueryEscape(truncEnv) +
-				"&logs=" + url.QueryEscape(truncLog)
-			// If still too long, drop logs entirely
-			if len(issueURL) > maxURL {
-				issueURL = issueBugURL +
-					"&title=" + url.QueryEscape(title) +
-					"&environment=" + url.QueryEscape(truncEnv)
-			}
-		}
-
-		_ = openBrowserURL(issueURL)
+		_ = openBrowserURL(prefilledIssueURL(report))
 		return
 	}
 

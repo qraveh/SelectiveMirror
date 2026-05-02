@@ -1,8 +1,18 @@
 # SM-158 — `report-bug --submit` / `--one-shot` / `--browser` pipeline
 
-**Status**: surface implemented (flags parsed, help text, None-tier
-gate); submission pipeline deferred to a focused implementation
-session.
+**Status**: **shipped 2026-05-02 (0.9.89-dev)**. `--submit` posts a
+`bug_report` event to `telemetry.contribute()` via the live Cloudflare
+Worker; classifier produces `(bug_kind, bug_surface, severity_hint)`
+from the sanitized bundle; stuck-user prompt added for None-tier
+interactive callers; always-print-URL rule honored on every
+`--submit` outcome (success or failure). End-to-end verified against
+the live `smirror-telemetry.selectivemirror.workers.dev` deploy:
+`smirror report-bug --submit --one-shot --stdout` produced the
+expected `('config','config','0.9.89-dev','error','report_bug','one_shot',1)`
+row in `bug_daily_rollup`. Implementation in
+`internal/telemetry/contribute.go`, `internal/telemetry/classify.go`,
+`cmd/smirror/issueurl.go`, `cmd/smirror/cmd_report_bug_submit.go`,
+plus the wire-through changes in `cmd/smirror/main.go::cmdReportBug`.
 
 > **Updated 2026-04-29 for v2 architecture.** Under v2 (stream-
 > aggregate-and-discard), the submit pipeline targets the
