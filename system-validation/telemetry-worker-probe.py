@@ -150,29 +150,65 @@ def check_contribute_bad_hmac(url: str) -> tuple[bool, str]:
     return expect_json_field(resp, "error", "rejected", "contribute-bad-hmac")
 
 
-def check_response_came_from_cloudflare_worker(url: str) -> tuple[bool, str]:
-    """Round-2 follow-up (recommendation 3): assert that responses come
-    from the Cloudflare edge (and therefore went through OUR Worker
-    rather than landing on a misrouted/unreachable hostname). Every
-    Cloudflare-served response carries a `cf-ray` header. If the probe
-    URL is mistyped or DNS/CDN config drifted, the response would
-    likely come from a different origin and lack this header — which
-    we would otherwise see as "all checks pass" because retired/
-    unknown paths can be faked by any 4xx-emitting server.
+def check_response_came_from_cloudflare_sm_worker(url: str) -> tuple[bool, str]:
+    """Round-3 fix (NEW-FINDING 13): assert that responses come from
+    the SelectiveMirror Worker SPECIFICALLY, not just from any
+    Cloudflare-fronted server. The earlier round-2 implementation only
+    checked the `cf-ray` header — but every Cloudflare customer's
+    domain carries that header, including parked domains, the wrong
+    workers.dev account, and example.com. So the round-2 check would
+    pass for any catastrophic misroute that happened to land on
+    Cloudflare's edge, defeating its stated purpose.
 
-    Anchored to the contribute-good-bad-hmac path (the most-tested
-    surface) so any catastrophic misroute fails this gate clearly."""
-    body = {
-        "payload": {"event_kind": "first_seen", "client_version": "0.0.0-probe"},
-        "claimed_version": "0.0.0-probe",
-        "claimed_hmac_hex": "deadbeef" * 8,
-    }
-    resp = post(url, "/v1/contribute", body)
+    The fix layers two assertions:
+
+      1. `cf-ray` header present  — confirms the response originated
+         on Cloudflare's edge (not, e.g., a 4xx-emitting non-CF
+         server).
+      2. SelectiveMirror Worker's distinctive 400 body fingerprint
+         — POSTing a body with the wrong shape ({"foo":"bar"}) hits
+         the Worker's `isValidContributeBody` path, which returns
+         400 with `{"code":"bad_request","message":"Body must be a
+         JSON object with exactly the keys ..."}`. That code+message
+         shape is unique to our Worker; any other Cloudflare-fronted
+         service would respond differently to the same probe.
+
+    Together these two pin both the edge AND the worker identity.
+    Run first in the probe sequence so a misroute fails immediately
+    and the rest of the run isn't a confusing pattern of shape-
+    mismatch failures."""
+    # The wrong-shape body deliberately exercises the Worker's
+    # FINDING-1 body-shape validator. We pick a body that's parseable
+    # JSON (so we get past the JSON parser and into the validator)
+    # but doesn't have any of the three expected keys.
+    resp = post(url, "/v1/contribute", {"foo": "bar"})
+
     if "cf-ray" not in (h.lower() for h in resp.headers):
         return False, (
-            "response is missing the cf-ray header — the probe URL may "
-            "be misrouted (not hitting Cloudflare's edge / not hitting "
-            "our Worker). Verify URL: " + url)
+            "response is missing the cf-ray header — the probe URL is "
+            "not on Cloudflare's edge. Probe URL: " + url)
+
+    if resp.status_code != 400:
+        return False, (
+            f"expected HTTP 400 from SM Worker on bad body shape, got "
+            f"{resp.status_code}. Probe URL is on Cloudflare's edge "
+            f"but it's not the SelectiveMirror Worker. Verify URL: " + url)
+
+    try:
+        body = resp.json()
+    except Exception:
+        return False, (
+            "expected JSON body from SM Worker on bad body shape, got "
+            "non-JSON. Probe URL may be a Cloudflare-fronted non-SM "
+            "server. Verify URL: " + url)
+
+    if body.get("code") != "bad_request":
+        return False, (
+            f"expected SM Worker's 400 fingerprint code='bad_request', "
+            f"got body={body!r}. Probe URL is on Cloudflare's edge but "
+            f"the response shape doesn't match the SelectiveMirror "
+            f"Worker. Verify URL: " + url)
+
     return True, ""
 
 
@@ -287,7 +323,7 @@ def main() -> int:
     args = ap.parse_args()
 
     checks: list[tuple[str, Check]] = [
-        ("response_came_from_cloudflare",      check_response_came_from_cloudflare_worker),
+        ("response_came_from_sm_worker",       check_response_came_from_cloudflare_sm_worker),
         ("contribute_bad_hmac",                check_contribute_bad_hmac),
         ("forget_returns_410_with_v2_message", check_forget_410),
         ("bug_reports_returns_410_v1_msg",     check_bug_reports_410),
