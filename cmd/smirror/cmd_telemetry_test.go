@@ -230,10 +230,15 @@ func TestTelemetryInspect_FirstSeen_ProducesValidJSON(t *testing.T) {
 	}
 
 	// Every documented PRIVACY.md field must appear. This is the
-	// claims-conformance check from CLAIMS-MAP.md (C-03).
+	// claims-conformance check from CLAIMS-MAP.md (C-03). FINDING 3
+	// (round-3 panel, 2026-05-02): the payload must contain ONLY the
+	// installation_daily_rollup bucket-key columns (plus the small
+	// envelope set every signed payload carries). `os_detail` is NOT
+	// in the rollup table and was removed from the payload — sending
+	// it would mean transmitting a field the server never reads.
 	requiredFields := []string{
 		"event_kind", "schema_version", "install_id", "client_version",
-		"reported_at", "install_method", "os_family", "os_detail",
+		"reported_at", "install_method", "os_family",
 		"mirror_count_bucket", "background_mode", "delete_policy",
 		"has_hooks", "has_filters", "has_alert_webhook",
 		"has_bandwidth_limit", "rclone_version",
@@ -241,6 +246,19 @@ func TestTelemetryInspect_FirstSeen_ProducesValidJSON(t *testing.T) {
 	for _, field := range requiredFields {
 		if _, ok := parsed[field]; !ok {
 			t.Errorf("first_seen inspect output is missing required field %q", field)
+		}
+	}
+
+	// FINDING 3 invariant: forbidden fields that exist in the v1 design
+	// but were excluded from v2's installation_daily_rollup. Their
+	// absence from the wire payload is what makes the discard contract
+	// byte-tight.
+	forbiddenFields := []string{
+		"os_detail", // medium-cardinality OS fingerprint; not in rollup
+	}
+	for _, field := range forbiddenFields {
+		if _, ok := parsed[field]; ok {
+			t.Errorf("first_seen inspect output contains forbidden field %q (FINDING 3: client must transmit only what installation_daily_rollup consumes)", field)
 		}
 	}
 
@@ -276,6 +294,9 @@ func TestTelemetryInspect_Reliability_AddsReliabilityFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &parsed); err != nil {
 		t.Fatalf("inspect output is not valid JSON: %v", err)
 	}
+	// reliability_daily_rollup bucket-key columns. FINDING 2: every
+	// value here must be a LEGITIMATE bucket value from the matching
+	// ENUM in docs/telemetry-v2.sql, not a placeholder string.
 	requiredFields := []string{
 		"anomaly_count_bucket", "most_common_anomaly_kind",
 		"sync_attempts_bucket", "sync_failures_bucket",
@@ -286,6 +307,100 @@ func TestTelemetryInspect_Reliability_AddsReliabilityFields(t *testing.T) {
 		if _, ok := parsed[field]; !ok {
 			t.Errorf("reliability_snapshot inspect output is missing %q", field)
 		}
+	}
+
+	// FINDING 3: reliability_snapshot payload must NOT carry
+	// installation-event fields. The two rollup tables don't share
+	// any bucket-key column beyond client_version. Transmitting
+	// install_method / os_family / has_hooks / etc. for a reliability
+	// snapshot would mean the server discards them — wire surface
+	// without rollup consumption.
+	forbiddenFields := []string{
+		"install_method", "os_family", "os_detail",
+		"mirror_count_bucket", "background_mode", "delete_policy",
+		"has_hooks", "has_filters", "has_alert_webhook",
+		"has_bandwidth_limit", "rclone_version",
+	}
+	for _, field := range forbiddenFields {
+		if _, ok := parsed[field]; ok {
+			t.Errorf("reliability_snapshot inspect output contains forbidden field %q (FINDING 3: client must transmit only what reliability_daily_rollup consumes)", field)
+		}
+	}
+
+	// FINDING 2: bucket values must be ENUM-valid, not placeholder
+	// strings. Spot-check three representative fields against their
+	// ENUM domain.
+	enumChecks := map[string][]string{
+		"anomaly_count_bucket":     {"0", "1-5", "6-25", "26-100", "100+"},
+		"sync_attempts_bucket":     {"<100", "100-1k", "1k-10k", "10k-100k", "100k+"},
+		"restart_count_bucket":     {"0", "1-5", "6-25", "26-100", "100+"},
+		"dead_letter_count_bucket": {"0", "1-10", "11-100", "100+"},
+	}
+	for field, allowed := range enumChecks {
+		got, ok := parsed[field].(string)
+		if !ok {
+			continue // already flagged above
+		}
+		valid := false
+		for _, a := range allowed {
+			if got == a {
+				valid = true
+				break
+			}
+		}
+		if !valid {
+			t.Errorf("FINDING 2: %s = %q is not a legitimate bucket ENUM value (allowed: %v) — would fail server-side schema_violation if shipped",
+				field, got, allowed)
+		}
+	}
+}
+
+// FINDING 5 (round-3 panel, 2026-05-02): telemetry status + inspect
+// must work on a fresh install with no mirrors yet. Pre-fix, both
+// commands exited with config-validation error "no mirrors defined";
+// a privacy-conscious user couldn't even check that they're at None
+// tier on a new install. Lenient loader path now allows degraded
+// operation on missing/incomplete config.
+func TestTelemetryStatus_WorksWithoutMirrors(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	// Write a config with no mirrors. config.Load() rejects this with
+	// "no mirrors defined"; openConfigAndStateLenient should accept.
+	body := "log_file: " + filepath.Join(dir, "smirror.log") + "\n" +
+		"state_db: " + filepath.Join(dir, "state.db") + "\n" +
+		"mirrors: []\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write test config: %v", err)
+	}
+	out := captureStdout(t, func() {
+		cmdTelemetryStatus(cfgPath, nil)
+	})
+	if !strings.Contains(out, "tier:") {
+		t.Errorf("status output does not contain 'tier:' line; output:\n%s", out)
+	}
+	if !strings.Contains(out, "build-key:") {
+		t.Errorf("status output does not contain 'build-key:' line; output:\n%s", out)
+	}
+}
+
+func TestTelemetryInspect_WorksWithoutMirrors(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	body := "log_file: " + filepath.Join(dir, "smirror.log") + "\n" +
+		"state_db: " + filepath.Join(dir, "state.db") + "\n" +
+		"mirrors: []\n"
+	if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write test config: %v", err)
+	}
+	out := captureStdout(t, func() {
+		cmdTelemetryInspect(cfgPath, []string{"first_seen"})
+	})
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &parsed); err != nil {
+		t.Fatalf("inspect output is not valid JSON: %v\noutput:\n%s", err, out)
+	}
+	if parsed["mirror_count_bucket"] != "0" {
+		t.Errorf("with empty config, mirror_count_bucket = %v, want \"0\"", parsed["mirror_count_bucket"])
 	}
 }
 

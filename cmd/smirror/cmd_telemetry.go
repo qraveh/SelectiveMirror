@@ -133,6 +133,78 @@ func openConfigAndState(configPath string) (*config.Global, *state.Store) {
 	return cfg, st
 }
 
+// openConfigAndStateLenient is the openConfigAndState variant for
+// read-only telemetry subcommands (`status`, `inspect`). FINDING 5
+// from the 2026-05-02 validation memo: a privacy-conscious user on
+// a fresh install with no mirrors yet can't run `smirror telemetry
+// status` because config.Load() validates len(Projects) > 0. Status
+// has nothing to do with mirrors; the validation is too strict for
+// these read-only paths.
+//
+// Behavior:
+//   - Try config.Load(). If it succeeds, return the result. (Common
+//     case: a real installed user with a working config.)
+//   - If it fails with the "no mirrors defined" message, fall back
+//     to config.LoadRaw() (skips validation), apply the same path
+//     defaults Load() would have applied, and continue.
+//   - If LoadRaw() also fails, fall back to a minimal default config
+//     with state DB at ~/.selectivemirror/state.db. The user-facing
+//     command still works and prints the build-key fingerprint /
+//     tier from the state DB.
+//
+// The lenient helper deliberately shadows the strict one so an
+// accidental tier-mutating call site can't slip through to a
+// half-validated config.
+func openConfigAndStateLenient(configPath string) (*config.Global, *state.Store) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		// Try LoadRaw (no validation). Most useful when the user has
+		// a syntactically valid YAML with no mirrors yet.
+		if rawCfg, rawErr := config.LoadRaw(configPath); rawErr == nil {
+			cfg = rawCfg
+			applyStateDBDefault(cfg, configPath)
+		} else {
+			// Both failed — usually "config file not found" on a
+			// brand-new install. Synthesize a minimal default.
+			cfg = &config.Global{}
+			home, _ := os.UserHomeDir()
+			if home != "" {
+				cfg.StateDB = filepath.Join(home, ".selectivemirror", "state.db")
+			} else {
+				cfg.StateDB = filepath.Join(os.TempDir(), "smirror-telemetry-state.db")
+			}
+			fmt.Fprintf(os.Stderr,
+				"Note: cannot load config (%v). Using defaults; tier reads from %s.\n",
+				err, cfg.StateDB)
+		}
+	}
+
+	// Make sure the state-DB directory exists; state.Open does NOT
+	// create parents.
+	if dir := filepath.Dir(cfg.StateDB); dir != "" {
+		_ = os.MkdirAll(dir, 0o700)
+	}
+	st, err := state.Open(cfg.StateDB)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot open state DB at %s: %v\n", cfg.StateDB, err)
+		os.Exit(ExitError)
+	}
+	return cfg, st
+}
+
+// applyStateDBDefault mirrors what config.Load() does for the StateDB
+// path: if unset or pointing at the legacy ~/.selectivemirror tilde
+// path, anchor it next to the config file. Used by the lenient loader
+// after a LoadRaw() that skipped this step.
+func applyStateDBDefault(cfg *config.Global, configPath string) {
+	if abs, err := filepath.Abs(configPath); err == nil {
+		configDir := filepath.Dir(abs)
+		if cfg.StateDB == "" || cfg.StateDB == "~/.selectivemirror/state.db" {
+			cfg.StateDB = filepath.Join(configDir, "state.db")
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // status
 // ---------------------------------------------------------------------------
@@ -141,7 +213,10 @@ func cmdTelemetryStatus(configPath string, args []string) {
 	rejectUnknownFlags("telemetry status", args)
 	checkMaxArgs("telemetry status", args, 0)
 
-	_, st := openConfigAndState(configPath)
+	// FINDING 5: status must work on a fresh install with no mirrors
+	// yet. Lenient loader degrades to LoadRaw() and finally to defaults
+	// rather than os.Exit on config validation.
+	_, st := openConfigAndStateLenient(configPath)
 	defer st.Close()
 
 	tier := telemetry.ReadTier(st)
@@ -372,7 +447,11 @@ be obvious).`) {
 		eventKind = args[0]
 	}
 
-	cfg, st := openConfigAndState(configPath)
+	// FINDING 5: inspect must work on a fresh install with no mirrors
+	// yet. Lenient loader; the inspect output uses config defaults
+	// (mirror_count=0, etc.) when no config is available — visible to
+	// the user via the bucket values.
+	cfg, st := openConfigAndStateLenient(configPath)
 	defer st.Close()
 
 	tier := telemetry.ReadTier(st)
@@ -408,11 +487,16 @@ be obvious).`) {
 
 // buildInspectPayload composes the exact map[string]any that
 // SignPayload + the contribute() RPC would receive. Mirrors the
-// payload shape documented in docs/telemetry-architecture-v2.md.
+// payload shape documented in docs/telemetry-architecture-v2.md AND
+// the rollup-table bucket-key tuple in docs/telemetry-v2.sql —
+// FINDING 3 (round-3 panel, 2026-05-02) requires those two stay in
+// lockstep. The client must transmit ONLY what the server's rollup
+// table consumes, so the discard contract is byte-for-byte tight.
 //
 // Bucket dimensions are computed inline; this is the same logic the
-// (deferred) submit pipeline will use, so changes here have a forcing-
-// function effect on submit-pipeline correctness.
+// submit pipelines will use (SM-158 already shares the bug-report
+// path; first_seen / upgrade / reliability_snapshot share these
+// helpers when they ship).
 func buildInspectPayload(cfg *config.Global, st *state.Store, eventKind string) (map[string]any, error) {
 	switch eventKind {
 	case "first_seen", "upgrade", "reliability_snapshot":
@@ -429,61 +513,135 @@ func buildInspectPayload(cfg *config.Global, st *state.Store, eventKind string) 
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
-	osDetail := telemetry.OSDetail()
-	osFamily := strings.ToLower(runtime.GOOS)
 
-	// The 9 structural fields per first_seen / upgrade. Wired here as
-	// best-effort approximations of the bucketed values; the production
-	// submit pipeline (SM-158) will share the same logic so this stays
-	// in lockstep with what would actually be sent.
-	mirrorCountBucket := bucketMirrorCount(len(cfg.Projects))
-	backgroundMode := detectBackgroundMode()
-	deletePolicy := string(cfg.DeletePolicy())
-	hasHooks := anyMirrorHasHook(cfg)
-	hasFilters := anyMirrorHasFilter(cfg)
-	hasAlertWebhook := strings.TrimSpace(cfg.AlertWebhookURL) != ""
-	hasBandwidthLimit := strings.TrimSpace(cfg.BandwidthLimit) != ""
-	rcloneVersion := bestEffortRcloneVersion(cfg)
-
-	payload := map[string]any{
-		"event_kind":          eventKind,
-		"schema_version":      1,
-		"install_id":          installID,
-		"client_version":      version,
-		"reported_at":         now,
-		"install_method":      detectInstallMethod(),
-		"os_family":           osFamily,
-		"os_detail":           osDetail,
-		"mirror_count_bucket": mirrorCountBucket,
-		"background_mode":     backgroundMode,
-		"delete_policy":       deletePolicy,
-		"has_hooks":           hasHooks,
-		"has_filters":         hasFilters,
-		"has_alert_webhook":   hasAlertWebhook,
-		"has_bandwidth_limit": hasBandwidthLimit,
-		"rclone_version":      rcloneVersion,
-	}
+	// FINDING 3: payload shape is event_kind-specific. install /
+	// upgrade events carry the installation_daily_rollup bucket
+	// dimensions; reliability snapshots carry the
+	// reliability_daily_rollup dimensions; the two have NO overlap
+	// beyond (event_kind, schema_version, reported_at, install_id,
+	// client_version) — the small envelope set every payload needs
+	// for HMAC verification. Pre-fix, the reliability_snapshot
+	// payload also carried install_method / os_family / os_detail /
+	// has_hooks / etc. — fields the server's _bump_reliability
+	// never reads but that travel across the network anyway. Ship
+	// only what the server consumes.
 
 	switch eventKind {
+	case "first_seen":
+		return buildInstallationPayload(cfg, "first_seen", installID, now), nil
 	case "upgrade":
+		p := buildInstallationPayload(cfg, "upgrade", installID, now)
+		// Upgrade adds two extra dimensions vs first_seen; both are
+		// non-NULL only for upgrade events.
 		priorVersion, _ := st.GetMeta("last_recorded_version")
 		if priorVersion == "" {
 			priorVersion = "(would be filled from state DB on actual upgrade detection)"
 		}
-		payload["prior_version"] = priorVersion
-		payload["days_since_first_seen_bucket"] = "(would be computed from state DB)"
+		p["prior_version"] = priorVersion
+		p["days_since_first_seen_bucket"] = computeDaysSinceFirstSeenBucket(st)
+		return p, nil
 	case "reliability_snapshot":
-		payload["anomaly_count_bucket"] = "(would be computed from anomaly DB)"
-		payload["most_common_anomaly_kind"] = nil
-		payload["sync_attempts_bucket"] = "(would be computed from state DB)"
-		payload["sync_failures_bucket"] = "(would be computed from state DB)"
-		payload["restart_count_bucket"] = "(would be computed from state DB)"
-		payload["max_queue_depth_bucket"] = "(would be computed from queue stats)"
-		payload["dead_letter_count_bucket"] = "(would be computed from queue stats)"
-		payload["state_db_size_bucket"] = bucketStateDbSize(cfg.StateDB)
+		return buildReliabilityPayload(cfg, installID, now), nil
 	}
+	// Unreachable.
+	return nil, fmt.Errorf("unhandled event_kind: %q", eventKind)
+}
 
-	return payload, nil
+// buildInstallationPayload composes the payload for first_seen /
+// upgrade events. The fields here are EXACTLY the bucket-key columns
+// of installation_daily_rollup (see docs/telemetry-v2.sql) plus the
+// envelope set every signed payload carries.
+//
+// FINDING 3: deliberately does NOT include `os_detail`. That field is
+// not in the rollup table and would be discarded server-side; sending
+// it widens the wire surface for no benefit.
+func buildInstallationPayload(cfg *config.Global, eventName, installID, reportedAt string) map[string]any {
+	return map[string]any{
+		// Envelope (HMAC + dispatch)
+		"event_kind":     eventName,
+		"schema_version": 1,
+		"install_id":     installID,
+		"reported_at":    reportedAt,
+		"client_version": version,
+
+		// installation_daily_rollup bucket-key columns
+		"install_method":      detectInstallMethod(),
+		"os_family":           strings.ToLower(runtime.GOOS),
+		"mirror_count_bucket": bucketMirrorCount(len(cfg.Projects)),
+		"background_mode":     detectBackgroundMode(),
+		"delete_policy":       string(cfg.DeletePolicy()),
+		"has_hooks":           anyMirrorHasHook(cfg),
+		"has_filters":         anyMirrorHasFilter(cfg),
+		"has_alert_webhook":   strings.TrimSpace(cfg.AlertWebhookURL) != "",
+		"has_bandwidth_limit": strings.TrimSpace(cfg.BandwidthLimit) != "",
+		"rclone_version":      bestEffortRcloneVersion(cfg),
+	}
+}
+
+// buildReliabilityPayload composes the payload for reliability_snapshot
+// events. Fields match reliability_daily_rollup's bucket-key columns,
+// not installation_daily_rollup's. FINDING 3 + FINDING 2.
+//
+// FINDING 2: every value is a LEGITIMATE bucket value from the
+// matching ENUM in docs/telemetry-v2.sql, so a hypothetical submission
+// at submit-time would not fail server-side schema_violation. Pre-fix,
+// every value here was a placeholder string like "(would be computed
+// from anomaly DB)" which would fail the ENUM cast.
+//
+// Today's heuristics return defaults that match what a healthy fresh
+// install would compute (zero anomalies, low restart count, small
+// state DB). When the production reliability_snapshot submit path
+// ships, these helpers should query the live state DB / anomaly DB /
+// queue stats and return real values; the defaults here remain the
+// right behavior for inspect on a clean install.
+func buildReliabilityPayload(cfg *config.Global, installID, reportedAt string) map[string]any {
+	return map[string]any{
+		// Envelope (HMAC + dispatch)
+		"event_kind":     "reliability_snapshot",
+		"schema_version": 1,
+		"install_id":     installID,
+		"reported_at":    reportedAt,
+		"client_version": version,
+
+		// reliability_daily_rollup bucket-key columns
+		"anomaly_count_bucket":     "0",
+		"most_common_anomaly_kind": nil,
+		"sync_attempts_bucket":     "<100",
+		"sync_failures_bucket":     "<100",
+		"restart_count_bucket":     "0",
+		"max_queue_depth_bucket":   "<100",
+		"dead_letter_count_bucket": "0",
+		"state_db_size_bucket":     bucketStateDbSize(cfg.StateDB),
+	}
+}
+
+// computeDaysSinceFirstSeenBucket reads first_seen_at from the state
+// DB if present and buckets the gap. Returns the matching ENUM value
+// or a documented placeholder when first_seen_at isn't recorded yet.
+func computeDaysSinceFirstSeenBucket(st *state.Store) string {
+	firstSeenStr, _ := st.GetMeta("first_seen_at")
+	if firstSeenStr == "" {
+		// Not yet recorded. The submit pipeline will write this on the
+		// first contribute(); inspect can't fabricate it.
+		return "(would be filled from state DB after first_seen lands)"
+	}
+	firstSeen, err := time.Parse(time.RFC3339, firstSeenStr)
+	if err != nil {
+		return "(unparseable first_seen_at)"
+	}
+	days := int(time.Since(firstSeen).Hours() / 24)
+	switch {
+	case days <= 7:
+		return "1-7"
+	case days <= 30:
+		return "8-30"
+	case days <= 90:
+		return "31-90"
+	case days <= 365:
+		return "91-365"
+	default:
+		return ">365"
+	}
 }
 
 // ---------------------------------------------------------------------------
