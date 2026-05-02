@@ -16,7 +16,7 @@ A claim is **GREEN** when the linked test exists, runs in CI (or the smoke harne
 | **C-02** | "We never store personal data." (schema-provable: only rollup tables exist) | PRIVACY.md "The shape of the promise" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_OnlyRollupTablesExist` + `TestTelemetryV2Schema_NoNarrativeColumns` | GREEN | 2026-04-30 |
 | **C-03** | "9 structural fields per first_seen / upgrade event" (mirror_count_bucket, background_mode, delete_policy, has_hooks, has_filters, has_alert_webhook, has_bandwidth_limit, rclone_version, plus version + install_method + os_family) | PRIVACY.md "Tier 2 — Standard" | `cmd/smirror/cmd_telemetry_test.go` + `system-validation/telemetry_v2_cli_claims_test.go` | `TestTelemetryInspect_FirstSeen_ProducesValidJSON` + `TestTelemetryV2CLI_InspectProducesJSONForFirstSeen` | GREEN | 2026-04-30 |
 | **C-04** | "Reliability snapshot: 7 bucketed dimensions" (anomaly_count_bucket, most_common_anomaly_kind, sync_attempts_bucket, sync_failures_bucket, restart_count_bucket, max_queue_depth_bucket, dead_letter_count_bucket, state_db_size_bucket — note PRIVACY.md says 7, schema has 8 dimensions; reconcile in next pass) | PRIVACY.md "Tier 3 — Reliability" | `cmd/smirror/cmd_telemetry_test.go` | `TestTelemetryInspect_Reliability_AddsReliabilityFields` | GREEN | 2026-04-30 |
-| **C-05** | "Bug-report bucket: kind, surface, version, severity_hint, source, submitted_tier" | PRIVACY.md "bug_report event" | (PENDING) | `TestContributePayload_BugReport_ExactlyDocumentedFields` | RED | (deferred to SM-158; bug-report payload is built by submit pipeline, not inspect) |
+| **C-05** | "Bug-report bucket: kind, surface, version, severity_hint, source, submitted_tier" | PRIVACY.md "bug_report event" | `cmd/smirror/cmd_report_bug_submit_test.go` | `TestBuildBugReportPayload_OneShot` + `TestBuildBugReportPayload_StandardTier` + `TestBuildBugReportPayload_ReliabilityTier` + `TestBuildBugReportPayload_NoNarrativeFields` (this last one asserts a forbidden-fields list — stronger than the claim) | GREEN | 2026-05-02 |
 | **C-06** | "k-anonymity floor of 5 in published digests" (cells with count < 5 suppressed) | PRIVACY.md "Forward commitment" | `scripts/test_telemetry_report.py` | `test_k_anon_filter_*` (5 cases: below floor, missing field, empty input, all-below, k_anon_guard) | GREEN | 2026-04-30 |
 | **C-07** | "No heartbeats, ever." (only `first_seen` and `upgrade` events on install-telemetry channel) | PRIVACY.md "Forward commitment" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_EventKindEnumNoHeartbeat` | GREEN | 2026-04-30 |
 | **C-08** | "No accumulated counts." (no bytes-mirrored, files-synced, uptime, error-counts continuous metrics in any rollup) | PRIVACY.md "Forward commitment" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_NoAccumulatedCountColumns` | GREEN | 2026-04-30 |
@@ -48,26 +48,26 @@ A claim is **GREEN** when the linked test exists, runs in CI (or the smoke harne
 
 ---
 
-## Status summary (as of 0.9.86-dev — round-3 panel completion)
+## Status summary (as of 0.9.91-dev — post-validation-pass closures)
 
 | Bucket | Count | % |
 |--------|-------|---|
-| GREEN | 24 | 86% |
+| GREEN | 25 | 89% |
 | AMBER | 0 | 0% |
-| RED | 4 | 14% |
+| RED | 3 | 11% |
 | **Total claims** | 28 | 100% |
 
-Three-day deltas:
+Four-day deltas:
 - 2026-04-30 morning (commit db309a6): 6 GREEN → 19 GREEN (+13 from schema-claims + CLI tests).
 - 2026-04-30 afternoon, items 1-3 (commit d088cd7): 19 GREEN → 21 GREEN (+1 C-06 AMBER→GREEN; +1 NEW A-10).
-- 2026-04-30 evening, Worker structural claims (this commit): 21 GREEN → 24 GREEN (C-13 AMBER→GREEN; C-14 + C-16 RED→GREEN).
+- 2026-04-30 evening, Worker structural claims (commit 5e9500a): 21 GREEN → 24 GREEN (C-13 AMBER→GREEN; C-14 + C-16 RED→GREEN).
+- 2026-05-02 SM-158 ship + validation pass: 24 GREEN → 25 GREEN (C-05 RED→GREEN — `TestBuildBugReportPayload_*` ship in `cmd/smirror/cmd_report_bug_submit_test.go`).
 
-Remaining RED:
+Remaining RED (both deferred):
 
-1. **C-05** — bug-report payload schema conformance. **Gated on SM-158** (the submit pipeline is what builds the bug-report payload; nothing currently builds one to inspect). Will GREEN automatically when SM-158 lands.
-2. **A-01** — HMAC timing benchmark. **Deferred** — needs perf-harness session.
-3. **A-03** — pg_stat_statements payload-literal absence. **Deferred** — needs live-Supabase fixture not currently available in CI.
-4. (no fourth — three counted RED reflects the actual state)
+1. **A-01** — HMAC timing benchmark. **Deferred** — needs perf-harness session.
+2. **A-03** — pg_stat_statements payload-literal absence. **Deferred** — needs live-Supabase fixture not currently available in CI.
+3. (only two RED in active state — both pre-deferred)
 
 There are no AMBER claims remaining.
 
@@ -82,15 +82,11 @@ Before tag, the percentage of GREEN claims must be **≥ 90%** of all *non-defer
 - A-03 (pg_stat_statements payload-literal absence) — needs a live-Supabase test fixture that we can't currently provision in CI.
 
 **Must be GREEN before v1.0:**
-- **C-05** (bug-report payload schema) — gated on SM-158 implementation. Deferred to v1.1 per round-3 panel.
+- (none — C-05 closed 2026-05-02 with the SM-158 ship.)
 
-**Current state**: 24/28 GREEN = **85.7% total**. With A-01 + A-03 deferred (denominator 26), 24/26 = **92.3%** — **above Quincy's ≥ 90% gate**.
+**Current state**: 25/28 GREEN = **89.3% total**. With A-01 + A-03 deferred (denominator 26), 25/26 = **96.2%** — **comfortably above Quincy's ≥ 90% gate**.
 
-The only non-deferred RED is C-05, which will GREEN automatically when SM-158 lands. So:
-- For a v1.0 with SM-158 deferred: **the validation gate is currently CLEARED** (the panel agreed C-05 wires after SM-158, which is itself v1.1 work).
-- For a v1.0 with SM-158 included: C-05 needs the SM-158 payload-builder + a test that round-trips a synthesized bug-report bucket.
-
-This is the first commit where the gate is provably above 90%. Deploy can proceed once you set up credentials.
+There are no non-deferred RED claims. Both remaining RED are explicit deferrals to v1.0.x with target work documented above.
 
 ---
 
