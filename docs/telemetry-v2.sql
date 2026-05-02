@@ -157,11 +157,19 @@ CREATE TABLE IF NOT EXISTS telemetry.installation_daily_rollup (
     days_since_first_seen_bucket   telemetry.days_since_first_seen_bucket,
     -- Counter:
     count                          BIGINT NOT NULL DEFAULT 0,
-    PRIMARY KEY (rollup_date, event_name, install_method, os_family,
-                 client_version, mirror_count_bucket, background_mode,
-                 delete_policy, has_hooks, has_filters, has_alert_webhook,
-                 has_bandwidth_limit, rclone_version,
-                 prior_version, days_since_first_seen_bucket)
+    -- Uniqueness, NOT a primary key, because PRIMARY KEY would force
+    -- prior_version and days_since_first_seen_bucket to NOT NULL — they
+    -- are legitimately NULL on first_seen events. UNIQUE NULLS NOT
+    -- DISTINCT (PG 15+) gives us the same ON CONFLICT semantics
+    -- (NULL = NULL is treated as a duplicate) without rejecting the row.
+    CONSTRAINT installation_daily_rollup_uniq
+        UNIQUE NULLS NOT DISTINCT (
+            rollup_date, event_name, install_method, os_family,
+            client_version, mirror_count_bucket, background_mode,
+            delete_policy, has_hooks, has_filters, has_alert_webhook,
+            has_bandwidth_limit, rclone_version,
+            prior_version, days_since_first_seen_bucket
+        )
 );
 
 COMMENT ON TABLE telemetry.installation_daily_rollup IS
@@ -214,11 +222,17 @@ CREATE TABLE IF NOT EXISTS telemetry.reliability_daily_rollup (
     dead_letter_count_bucket    telemetry.dead_letter_bucket NOT NULL,
     state_db_size_bucket        telemetry.state_db_size_bucket NOT NULL,
     count                       BIGINT NOT NULL DEFAULT 0,
-    PRIMARY KEY (rollup_date, client_version, anomaly_count_bucket,
-                 most_common_anomaly_kind, sync_attempts_bucket,
-                 sync_failures_bucket, restart_count_bucket,
-                 max_queue_depth_bucket, dead_letter_count_bucket,
-                 state_db_size_bucket)
+    -- Same NULL-friendly uniqueness as installation_daily_rollup; see
+    -- the comment there. most_common_anomaly_kind is NULL when zero
+    -- anomalies, so PRIMARY KEY would reject the row.
+    CONSTRAINT reliability_daily_rollup_uniq
+        UNIQUE NULLS NOT DISTINCT (
+            rollup_date, client_version, anomaly_count_bucket,
+            most_common_anomaly_kind, sync_attempts_bucket,
+            sync_failures_bucket, restart_count_bucket,
+            max_queue_depth_bucket, dead_letter_count_bucket,
+            state_db_size_bucket
+        )
 );
 
 COMMENT ON TABLE telemetry.reliability_daily_rollup IS
@@ -470,9 +484,25 @@ BEGIN
 END;
 $$;
 
--- Privilege model. Only callable via the Worker's service_role
--- credential; no anon access. PostgREST's RPC routing applies.
+-- Privilege model. Callable by `anon` (the Worker authenticates to
+-- PostgREST with SUPABASE_ANON_KEY — see worker/wrangler.toml) and by
+-- `service_role` (operator + CI direct-call path). No `PUBLIC` access.
+--
+-- Granting EXECUTE to anon does NOT widen the attack surface: the
+-- function is SECURITY DEFINER, so it runs as postgres and writes
+-- through to the rollup tables regardless of anon's own table grants;
+-- the only thing anon's EXECUTE buys an attacker is the ability to
+-- *attempt* a contribution. Every attempted contribution is gated by
+-- telemetry.verify_versioned_hmac() against a per-version key derived
+-- from TELEMETRY_MASTER_KEY at build time, so a successful write
+-- requires possession of a build key (i.e., a real smirror.exe
+-- binary). The anon key is public by design; HMAC is the gate.
+--
+-- This is deliberately *more* secure than granting service_role to
+-- the Worker would be: service_role bypasses RLS on every table in
+-- the project, which would mean a Worker compromise = full DB read.
 REVOKE ALL ON FUNCTION telemetry.contribute(JSONB, TEXT, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION telemetry.contribute(JSONB, TEXT, TEXT) TO anon;
 GRANT EXECUTE ON FUNCTION telemetry.contribute(JSONB, TEXT, TEXT) TO service_role;
 
 -- Internal helpers should not be callable from outside.
