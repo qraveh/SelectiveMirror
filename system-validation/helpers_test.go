@@ -794,16 +794,29 @@ var coverage = &coverageTracker{
 		"telemetry_worker_paths":              {Description: "Telemetry: worker exposes documented ingest/forget paths", Required: 1},
 		"telemetry_worker_edge_privacy":       {Description: "Telemetry: worker enforces edge privacy and resource limits", Required: 1},
 		"telemetry_schema_ingest_processing":  {Description: "Telemetry: server normalizes accepted ingest envelopes", Required: 1},
-		"telemetry_rls_envelope_binding":      {Description: "Telemetry: RLS authenticates envelope fields", Required: 1},
-		"telemetry_rls_server_owned_columns":  {Description: "Telemetry: RLS protects server-owned ingest state", Required: 1},
+		// NEW-FINDING 12 (round-2 validation pass, 2026-05-02): four
+		// v1-architecture coverage goals were removed here. They were
+		// declared but no test recorded them — every full-suite
+		// `go test ./system-validation/...` run failed the gate at 99/103.
+		// Each goal corresponds to a v1 surface deliberately deleted in
+		// the v2 collapse:
+		//   telemetry_rls_envelope_binding       — v1 had ingest_envelope; v2 has no raw envelope
+		//   telemetry_rls_server_owned_columns   — v1 had server_received_at columns; v2 has none
+		//   telemetry_retention_raw_purge        — v1 had a 90-day retention janitor; v2 has nothing to purge
+		//   telemetry_rollup_taxonomy_join       — v1 had taxonomy_term joins; v2 uses a closed client-side taxonomy
+		// The corresponding tests were already removed with the SQL drop
+		// in 0.9.82-dev (see docs/operations/sql/drop-v1-leftover.sql).
+		// v2 equivalents already exist:
+		//   v1 "envelope binding"      → telemetry_v2_schema_no_personal_data + _no_narrative
+		//   v1 "server-owned columns"  → telemetry_v2_schema_replay_overcount_only
+		//   v1 "retention purges raw"  → telemetry_v2_schema_no_install_id + _no_personal_data
+		//   v1 "rollup taxonomy joins" → telemetry_v2_schema_no_personal_data
 		"telemetry_digest_privacy":            {Description: "Telemetry: weekly digest respects privacy and markdown safety", Required: 1},
 		"telemetry_canonical_html_escape":     {Description: "Telemetry: canonical JSON covers HTML-sensitive strings", Required: 1},
 		"telemetry_crash_report_sanitization": {Description: "Telemetry: crash reports use explicit consent and safe sanitization", Required: 1},
-		"telemetry_retention_raw_purge":       {Description: "Telemetry: retention purges normalized raw report fields", Required: 1},
 		"telemetry_tier_fail_closed":          {Description: "Telemetry: tier gate fails closed on unreadable runtime state", Required: 1},
 		"telemetry_github_token_timeout":      {Description: "Telemetry: GitHub token lookup cannot hang network paths", Required: 1},
 		"telemetry_ops_docs_views":            {Description: "Telemetry: operations docs reference defined SQL views", Required: 1},
-		"telemetry_rollup_taxonomy_join":      {Description: "Telemetry: rollup taxonomy joins avoid cross-products", Required: 1},
 		"telemetry_validation_harness":        {Description: "Telemetry: validation coverage does not mask failed tests", Required: 1},
 		"telemetry_validation_rclone_gate":    {Description: "Telemetry: static validation checks do not require rclone", Required: 1},
 

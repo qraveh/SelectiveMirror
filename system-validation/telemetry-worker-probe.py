@@ -150,6 +150,32 @@ def check_contribute_bad_hmac(url: str) -> tuple[bool, str]:
     return expect_json_field(resp, "error", "rejected", "contribute-bad-hmac")
 
 
+def check_response_came_from_cloudflare_worker(url: str) -> tuple[bool, str]:
+    """Round-2 follow-up (recommendation 3): assert that responses come
+    from the Cloudflare edge (and therefore went through OUR Worker
+    rather than landing on a misrouted/unreachable hostname). Every
+    Cloudflare-served response carries a `cf-ray` header. If the probe
+    URL is mistyped or DNS/CDN config drifted, the response would
+    likely come from a different origin and lack this header — which
+    we would otherwise see as "all checks pass" because retired/
+    unknown paths can be faked by any 4xx-emitting server.
+
+    Anchored to the contribute-good-bad-hmac path (the most-tested
+    surface) so any catastrophic misroute fails this gate clearly."""
+    body = {
+        "payload": {"event_kind": "first_seen", "client_version": "0.0.0-probe"},
+        "claimed_version": "0.0.0-probe",
+        "claimed_hmac_hex": "deadbeef" * 8,
+    }
+    resp = post(url, "/v1/contribute", body)
+    if "cf-ray" not in (h.lower() for h in resp.headers):
+        return False, (
+            "response is missing the cf-ray header — the probe URL may "
+            "be misrouted (not hitting Cloudflare's edge / not hitting "
+            "our Worker). Verify URL: " + url)
+    return True, ""
+
+
 def check_forget_410(url: str) -> tuple[bool, str]:
     resp = post(url, "/v1/forget", {})
     ok, detail = expect_status(resp, 410, "forget-410")
@@ -261,6 +287,7 @@ def main() -> int:
     args = ap.parse_args()
 
     checks: list[tuple[str, Check]] = [
+        ("response_came_from_cloudflare",      check_response_came_from_cloudflare_worker),
         ("contribute_bad_hmac",                check_contribute_bad_hmac),
         ("forget_returns_410_with_v2_message", check_forget_410),
         ("bug_reports_returns_410_v1_msg",     check_bug_reports_410),

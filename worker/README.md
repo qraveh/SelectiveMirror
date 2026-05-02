@@ -104,6 +104,24 @@ ready.
 - **Logs**: `npx wrangler tail` streams live logs. The Worker emits
   `console.warn` if `RATE_LIMIT_SALT_SECRET` is missing.
 - **Free tier limits**: 100K requests/day, 10ms CPU per request.
+- **Two distinct 5xx sources** — important for triage:
+    * *Worker rewrite* — when `fetch(upstream)` returns non-200 (PGRST
+      4xx, Supabase 5xx, etc.), the Worker now rewrites to a generic
+      `502 upstream_unavailable` with JSON body. This is the FINDING 4
+      fix from the round-1 validation memo and is the path the
+      probe / Go client / smoke test will see for upstream issues.
+    * *Cloudflare edge* — when the Worker is throttled by Cloudflare's
+      free-tier limits (CPU ceiling exceeded mid-burst, or the platform
+      drops the request before the Worker runs), Cloudflare serves its
+      own HTML error page with a 5xx status. This is rare-but-possible
+      under burst load; it cannot be intercepted from the Worker side
+      because the Worker code never runs.
+    Distinguish at triage time by the response `Content-Type`: a
+    Worker rewrite is `application/json` with a `code` field; a
+    Cloudflare-edge 5xx is `text/html`. Clients should treat any
+    non-2xx as transient and retry on their normal cadence
+    (`internal/telemetry.Contribute` already wraps both as
+    `ErrNetwork`).
 - **Smoke testing after deploy**: `python3 scripts/telemetry-v2-smoke-test.py --via-worker`
   posts the four standard cases (bad HMAC, good HMAC, schema violation,
   unknown event) plus the retired-forget probe. See
