@@ -222,6 +222,43 @@ floor of 5 unless someone re-runs the smoke test 5+ times.)
 
 ---
 
+## Validators without master-key access
+
+The full smoke test (`scripts/telemetry-v2-smoke-test.py
+--via-worker`) exercises both rejection paths AND the
+acceptance-with-good-HMAC path. The good-HMAC path requires the
+master key — that's the point: the master key IS the gate.
+
+A validator (external auditor, release-validator rotation, periodic
+CI gate) without master-key access can still verify substantial
+ground truth via two complementary harnesses, neither of which
+needs the master:
+
+- **`system-validation/telemetry-worker-probe.py`** — single-pass
+  structural checks against the live Worker. Verifies retired
+  paths return 410 with the right messages, body cap holds at
+  100 KB, malformed bodies get 400 (FINDING 1: no PGRST passthrough),
+  GET on retired returns 410 (FINDING 8), unknown paths 404, and
+  bad-HMAC contribute attempts get 200 + `{ok:false,error:rejected}`.
+  Run by the
+  `.github/workflows/telemetry-worker-probe.yml` CI gate daily +
+  on every PR that touches `worker/**`. Read-only (every
+  contribute() POST is bad-HMAC, so no row is created).
+
+- **`system-validation/telemetry-mass-emulation.py`** — burst test
+  with N concurrent bad-HMAC POSTs across all four event_kinds.
+  Verifies the Worker sustains load without 5xx, rejects every
+  payload at HMAC step 1, retired endpoints continue 410 under
+  load, and per-IP rate limit fires somewhere around 30 RPM.
+
+What the master-key-less validator CAN'T test: the schema_violation
+and unknown_event paths (those run only after HMAC verification)
+and the rollup-delta side of the contract (good-HMAC contributes a
+row). The smoke test catches both. Operators with the master key
+should still run the full smoke test on every deploy.
+
+---
+
 ## Acceptance criteria
 
 The deploy is "done" when:

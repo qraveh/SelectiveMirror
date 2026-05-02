@@ -493,6 +493,18 @@ there are no stored rows, so the worst case is over-counting.
 The function rejects with `{ok: false, error: ...}` and does not
 increment any counter. No state change.
 
+**Ordering note**: the `not_object` type guard fires *before* the
+HMAC verification — a payload that isn't even a JSON object is
+rejected at the type gate before any crypto runs. The "every
+contribution is gated by HMAC" framing is therefore precise to: every
+contribution **with a parseable, JSON-object payload shape** is gated
+by HMAC. The pre-HMAC guard cannot leak personal data (the response
+just says "not an object") and cannot create a row (no INSERT path
+runs); it just fails fast on garbage so the function doesn't waste
+crypto cycles on it. The defensive ordering is the right one for a
+high-volume edge function. See `docs/telemetry-v2.sql` for the
+literal sequence.
+
 ### HMAC key compromise (single-binary)
 
 Same as v1: only that version's contributions are forgeable. The

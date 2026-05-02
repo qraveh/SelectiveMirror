@@ -1,0 +1,76 @@
+name: Telemetry worker probe
+
+# FINDING 11 from the 2026-05-02 validation memo: catch live-Worker
+# regressions before a real user does. Hits the deployed Cloudflare
+# Worker with `system-validation/telemetry-worker-probe.py` and
+# asserts each documented behavior.
+#
+# The probe is read-only (every contribute() POST uses a bad HMAC,
+# so no row is created in the rollup tables). No master key needed.
+# Safe to run on any cadence against the production Worker.
+#
+# What this catches that telemetry-emulation.yml does NOT:
+#   - Misconfigured redeploys: dropped RATE_LIMIT_SALT_SECRET, missing
+#     SUPABASE_ANON_KEY, renamed contribute path, etc.
+#   - Worker-source regressions that build but ship the wrong
+#     contract (e.g., reverting FINDING 1's body validator, or
+#     FINDING 8's retired-before-method ordering).
+#   - Cloudflare/Supabase outages that flip a 200 contract path
+#     to 5xx (FINDING 4 rewrite would mask this with 502 — the
+#     probe doesn't distinguish, but the alert is the same).
+#
+# Cadence:
+#   - Daily at 06:00 UTC: catch overnight infrastructure drift.
+#   - On PRs that touch worker/** or the probe script itself: catch
+#     regressions before they ship.
+#   - workflow_dispatch: manual run after any deploy.
+
+on:
+  schedule:
+    # 06:00 UTC daily. Matches the maintainer's time-zone convenience
+    # (early Europe morning).
+    - cron: '0 6 * * *'
+  pull_request:
+    paths:
+      - 'worker/**'
+      - 'system-validation/telemetry-worker-probe.py'
+      - '.github/workflows/telemetry-worker-probe.yml'
+  workflow_dispatch:
+    inputs:
+      worker_url:
+        description: 'Worker URL to probe (default: production)'
+        required: false
+        default: 'https://smirror-telemetry.selectivemirror.workers.dev'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install probe dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install requests
+
+      - name: Run live-Worker probe
+        run: |
+          URL="${{ github.event.inputs.worker_url || 'https://smirror-telemetry.selectivemirror.workers.dev' }}"
+          echo "Probing: $URL"
+          python3 system-validation/telemetry-worker-probe.py --url "$URL"
+
+      - name: Summarize for GitHub UI
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "::notice title=Live Worker contract verified::All 10 probes passed against the deployed Worker."
+          else
+            echo "::error title=Live Worker contract failed::One or more probes detected regression. See the 'Run live-Worker probe' step above for the failure detail."
+          fi
