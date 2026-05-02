@@ -112,10 +112,39 @@ WHERE proname IN ('contribute', '_bump_install', '_bump_bug', '_bump_reliability
 -- Expect: all five with prosecdef = true (SECURITY DEFINER)
 
 SELECT has_function_privilege('anon', 'telemetry.contribute(jsonb, text, text)', 'EXECUTE');
--- Expect: false
+-- Expect: TRUE
+-- (The Cloudflare Worker authenticates to PostgREST as the anon role, not
+--  service_role. SECURITY DEFINER + the contribute() function's HMAC check
+--  mean granting anon EXECUTE does not widen the attack surface — every
+--  contribution still has to carry a valid per-version HMAC. See
+--  telemetry-v2.sql line ~485 for the rationale comment.)
 
 SELECT has_function_privilege('service_role', 'telemetry.contribute(jsonb, text, text)', 'EXECUTE');
--- Expect: true
+-- Expect: TRUE (operator + CI direct-call path)
+
+SELECT has_function_privilege('authenticated', 'telemetry.contribute(jsonb, text, text)', 'EXECUTE');
+-- Expect: FALSE (we don't use the authenticated role at all)
+```
+
+### About the rollup-table constraints
+
+The two rollup tables that include nullable bucket columns
+(`installation_daily_rollup` for `prior_version` +
+`days_since_first_seen_bucket`, `reliability_daily_rollup` for
+`most_common_anomaly_kind`) use `UNIQUE NULLS NOT DISTINCT` rather
+than `PRIMARY KEY`. Reason: PostgreSQL implicitly enforces NOT NULL
+on every PK column, so a `first_seen` event (which legitimately has
+NULL `prior_version`) would have failed at INSERT time. The
+`NULLS NOT DISTINCT` semantics (PG 15+) treat NULL = NULL as a
+duplicate for `ON CONFLICT` purposes, which is what `_bump_install`
+needs. After applying `telemetry-v2.sql` you can verify:
+
+```sql
+SELECT conname, indnullsnotdistinct
+  FROM pg_constraint c JOIN pg_index i ON i.indexrelid = c.conindid
+ WHERE conname IN ('installation_daily_rollup_uniq',
+                   'reliability_daily_rollup_uniq');
+-- Expect both with indnullsnotdistinct = true
 ```
 
 ---
@@ -149,7 +178,18 @@ curl -X POST "https://smirror-telemetry.selectivemirror.workers.dev/v1/bug-repor
 
 ---
 
-## Step 4 — Smoke test end-to-end
+## Step 4 — Refresh PostgREST schema cache
+
+After Step 1 + 2's DDL, PostgREST may still be holding the old
+schema in its in-memory cache. Force a reload:
+
+```sql
+NOTIFY pgrst, 'reload schema';
+```
+
+Allow ~2 seconds for propagation, then proceed.
+
+## Step 5 — Smoke test end-to-end
 
 ```bash
 export TELEMETRY_MASTER_KEY="<from Supabase Vault>"
@@ -159,20 +199,18 @@ export DATABASE_URL="postgresql://postgres.<ref>:<pwd>@aws-0-eu-west-1.pooler.su
 python3 scripts/telemetry-v2-smoke-test.py --via-worker --version 0.0.0-deploy-smoke
 ```
 
-Expected: 5 cases pass —
+Expected: 6 cases pass —
 - bad HMAC → rejected
 - good HMAC → accepted (rollup row +1)
 - schema violation (bad enum value) → rejected
 - unknown event_kind → rejected
 - retired `/v1/forget` → 410 Gone
-
-Plus the optional rollup-delta DB check (case 6) confirms a row
-exists in `installation_daily_rollup` matching the smoke test's
-`client_version` and `rclone_version='v1.73.5-smoke'`.
+- rollup delta — 1 row in `installation_daily_rollup` matching the smoke
+  test's `client_version` and `rclone_version='v1.73.5-smoke'`
 
 ---
 
-## Step 5 — Cleanup the smoke-test row (optional)
+## Step 6 — Cleanup the smoke-test row (optional)
 
 ```sql
 DELETE FROM telemetry.installation_daily_rollup

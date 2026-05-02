@@ -172,44 +172,45 @@ Possible from: any tier.
 
 ### At None tier (the "stuck-user prompt")
 
-Running `smirror report-bug --submit` while `telemetry_tier == 'none'` triggers an interactive prompt:
+Running `smirror report-bug --submit` while `telemetry_tier == 'none'` and stdin is interactive triggers a 5-option prompt (implemented in `cmd/smirror/cmd_report_bug_submit.go::stuckUserPrompt`):
 
 ```
-$ smirror report-bug --submit
-Generating sanitized bug report... done. (348 lines)
+Bug submission options (telemetry tier is None — bug reports are not
+sent automatically). Choose how to proceed:
 
-Telemetry is currently None — bug submission is off.
-
-  [1] Enable Standard tier and submit (sends 2 install events ever
-      + this bug report; you can preview what's collected)
-  [2] One-shot: send just this report, don't change tier
-  [3] Save to local file and paste into a GitHub issue yourself
-  [v] View the full report bundle
+  [1] Enable Standard tier and submit
+       (changes your default; future bug reports submit automatically)
+  [2] One-shot: send THIS report only, don't change tier
+       (anonymous count contributed; tier stays None)
+  [3] Save the report locally; I'll file it manually
+       (no telemetry; you paste the bundle into a GitHub issue yourself)
+  [v] View the full report bundle before deciding
   [c] Cancel
-
-Read first?  smirror telemetry policy
-
-Choose [1/2/3/v/c]:
+Choice [1/2/3/v/c]:
 ```
 
 Behavior:
-- `[1]` → set `telemetry_tier = 'standard'`, then proceed with normal Standard-tier submission flow (preview → approve → enqueue)
-- `[2]` → submit the report with `submitted_tier = 'one_shot'`; tier remains `'none'`; nothing else is sent now or in the future
-- `[3]` → emit the bundle to a local file (same as `--stdout > file`); print the GitHub issue URL; exit
-- `[v]` → print the bundle to stdout; re-prompt
-- `[c]` → cancel; exit 0 with no action
+- `[1]` → write `telemetry_tier=standard` to the state DB (best-effort; falls back to one-shot if the DB write fails), then submit with `submitted_tier=standard`.
+- `[2]` → submit with `submitted_tier='one_shot'`; tier remains `'none'`; nothing else is sent now or in the future.
+- `[3]` → skip telemetry; the existing file-write/`--stdout`/`--clipboard`/`--browser` path runs as if `--submit` were absent.
+- `[v]` → print the sanitized bundle, then re-prompt.
+- `[c]` → cancel: print "Cancelled." and return.
 
-For non-interactive contexts (CI, scripts), the prompt cannot be displayed. The command exits with code 1 and an error: `bug submission requires telemetry tier 'standard' or 'reliability', or pass --one-shot for per-event consent.`
+For non-interactive contexts (CI, scripts), the prompt cannot be displayed. The command exits with code 1 and the error: `bug submission requires telemetry tier 'standard' or 'reliability', or pass --one-shot for per-event consent.`
 
 ### At Standard / Reliability tier
 
-Standard flow: generate bundle → show preview → prompt y/N → enqueue → print "Submitted. Reference: <server_id>" or "Cancelled."
+Standard flow (as shipped in 0.9.89-dev): generate bundle → sanitize → classify (`internal/telemetry/classify.go::ClassifyBugReport`) → sign + POST to `telemetry.contribute()` via the Worker → print one-line outcome to stderr (`Submitted: bug_kind=… bug_surface=… severity=… source=report_bug submitted_tier=…`) → print the prefilled GitHub-issue URL.
 
-The `--one-shot` flag is a no-op at these tiers (would be redundant); accept it for forward-compat but don't change behavior.
+There is no per-event y/N preview prompt at Standard or Reliability today: `--submit` is taken as the explicit user action. If user feedback shows confusion, a preview can be added in a follow-up.
+
+There is no "server reference" returned by the v2 RPC — `contribute()` returns `{"ok":true}` on a successful UPSERT and nothing more. The user's record of the contribution is the local file (when `--stdout` / `--clipboard` are not set, smirror writes the bundle to `<configdir>/reports/`).
+
+The `--one-shot` flag is a no-op at Standard/Reliability tiers (would be redundant); the implementation accepts it for forward-compat.
 
 ### `--browser` flag interactions
 
-`smirror report-bug --browser` (or the deprecated `--open`) opens a prefilled GitHub issue page after the telemetry submission completes. Works at all tiers including None (skips telemetry, just opens browser). With `--submit --browser` at None, the prompt offers the same [1][2][3] choices, and either submitted path also opens the browser.
+`smirror report-bug --browser` (or the deprecated `--open`) opens a prefilled GitHub issue page. With `--submit --browser`, the telemetry contribution is attempted first, then the browser opens to the same prefilled URL the always-print rule emits. Works at all tiers including None (with None + `--browser` alone, no telemetry is attempted; only the browser opens).
 
 ## State DB metadata schema
 
@@ -256,22 +257,28 @@ Migration notes for any existing builds that shipped the design:
   during migration) returns `410 Gone` with a JSON body pointing at
   PRIVACY.md.
 
-## Tests to add (when implementing)
+## Tests in tree
 
-- `cmd/smirror/telemetry_test.go`:
-  - `status` shows correct output at each tier
-  - `none/standard/reliability` correctly persist to state DB
-  - First-run migration: registry → state DB on first run only
-  - Transition from `'none'` to `'standard'`/`'reliability'` enqueues `first_seen`
-  - Transition to `'none'` purges queued events
-  - `forget` subcommand → rejected with v2 migration message; no
-    network call attempted
+- `cmd/smirror/cmd_telemetry_test.go` — SM-157 surface tests:
+  status output at each tier; persist tier on `none/standard/
+  reliability`; first-run registry → state DB migration; transition
+  enqueues `first_seen` from None; transition to None drops queued.
+- `cmd/smirror/cmd_report_bug_submit_test.go` — SM-158 payload +
+  URL helpers: `bug_report` payload shape under each tier (one_shot
+  / standard / reliability); the `NoNarrativeFields` privacy
+  invariant; prefilled-issue-URL shape, no-logs-section path,
+  truncation-at-cap.
+- `internal/telemetry/contribute_test.go` — 12 cases for the HTTP
+  client: HMAC round-trip vs server-side recompute, all rejection
+  reason codes, HTTP 410 / 500 / malformed, context-deadline,
+  env-var endpoint override.
+- `internal/telemetry/classify_test.go` — 12 cases for the
+  classifier: taxonomy lock against `scripts/telemetry-report.py`,
+  per-kind happy paths, severity escalation on `panic:`, the
+  "rclone version" success-line is not misclassified.
 
-- `cmd/smirror/reportbug_test.go`:
-  - `--submit` at None tier → triggers prompt in interactive mode
-  - `--submit` at None in non-interactive → exits 1 with hint
-  - `--submit --one-shot` at None tier → submits with `submitted_tier='one_shot'`
-  - `--submit` at Standard/Reliability → normal flow, `submitted_tier` set correctly
+End-to-end against the live Worker is documented in
+`docs/SM-158-report-bug-submit-plan.md`'s "Verified live" section.
 
 ## Out of scope for this design
 

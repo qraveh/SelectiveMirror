@@ -1,6 +1,38 @@
-# Telemetry System Validation Report
+# Telemetry System Validation Report — 2026-04-28 snapshot
 
-Date: 2026-04-28  
+> **This document is a historical snapshot, not a current-state
+> claim.** It captures the validation findings as of 2026-04-28 and
+> is preserved for traceability. Many of the items listed below as
+> "open" or "partly fixed" have since been closed by the work
+> documented in `system-validation/CLAIMS-MAP.md` (the live
+> validation gate).
+>
+> **Current state is in `system-validation/CLAIMS-MAP.md`**, which
+> tracks each privacy/architecture claim against an executable
+> test. As of 0.9.89-dev the gate sits at 24/28 GREEN (92.3% non-
+> deferred), above Quincy's 90% bar.
+>
+> Closed since this snapshot, with their resolution commits or
+> session memos:
+>
+> - **SM-157** (`smirror telemetry` CLI) — shipped 0.9.83-dev.
+> - **SM-158** (`report-bug --submit` pipeline) — shipped 0.9.89-dev,
+>   end-to-end verified live.
+> - **SM-160** — already fixed at the time of this snapshot.
+> - **SM-161** — retired (no normalization in v2).
+> - **SM-162** — downgraded to minor in v2 architecture.
+> - **SM-163** — closed 0.9.84-dev (daily-salted IP hash, no raw-IP
+>   fallback).
+> - **SM-164** — sanitization improvements landed in the round-2 batch.
+> - **SM-167** — already fixed at the time of this snapshot.
+> - **SM-168** — buildKey ldflag injection shipped before this round.
+> - **SM-171, SM-172, SM-173, SM-174, SM-175, SM-176, SM-177, SM-178**
+>   — all closed in the round-2/3 commits.
+>
+> The "Bug Inventory" table below is the as-of-2026-04-28 view; the
+> CLAIMS-MAP is the live view. Reading both gives you the trajectory.
+
+Date: 2026-04-28  (snapshot)
 Project root: `C:\SelectiveMirror`  
 Validation module: `C:\SelectiveMirror\system-validation`  
 BugTracker project: `C:\BugTracker\projects\SelectiveMirror`

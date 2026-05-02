@@ -36,12 +36,11 @@ What to look for in priority order:
 
 If a week looks like "n is too small for analysis," it is. Move on.
 
-> **Note**: as of 0.9.7x-dev, `scripts/telemetry-report.py` still
-> queries the v1 row-per-event tables. Under v2 those tables don't
-> exist; the rollup tables are denormalized counters. The digest
-> script is being rewritten for v2 — tracked as a follow-up. Until
-> then, the weekly PR may produce stale or empty output. Fall back
-> to the manual SQL queries below.
+As of 0.9.85-dev `scripts/telemetry-report.py` queries the v2 rollup
+tables directly — `installation_daily_rollup`, `bug_daily_rollup`,
+`reliability_daily_rollup`, plus the `version_dist` and
+`bug_unknown_share` views. The digest applies a k-anonymity floor of
+5 before publishing.
 
 ---
 
@@ -150,5 +149,5 @@ during the v2 deploy.
 | Schema source | [`docs/telemetry-v2.sql`](../telemetry-v2.sql) |
 | Worker source | [`worker/src/index.ts`](../../worker/src/index.ts) |
 | Smoke test | [`scripts/telemetry-v2-smoke-test.py`](../../scripts/telemetry-v2-smoke-test.py) |
-| Digest script | [`scripts/telemetry-report.py`](../../scripts/telemetry-report.py) — pending v2 rewrite |
+| Digest script | [`scripts/telemetry-report.py`](../../scripts/telemetry-report.py) — v2-native since 0.9.85-dev |
 | Deploy runbook | [`deploy-telemetry-v2.md`](./deploy-telemetry-v2.md) |

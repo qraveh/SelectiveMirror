@@ -57,8 +57,10 @@ npx wrangler secret put SUPABASE_ANON_KEY
 npx wrangler secret put RATE_LIMIT_SALT_SECRET
 # Paste any 32+ random bytes, e.g.:
 #   python3 -c "import secrets; print(secrets.token_hex(32))"
-# Rotate quarterly. If skipped, rate limiting still works but uses
-# raw-IP keys (worker logs a warning).
+# Rotate quarterly. If skipped, rate limiting is SKIPPED entirely
+# (the Worker logs a warning) — by design, since falling back to
+# raw-IP keys would defeat the SM-163 privacy fix. Always set this
+# in production.
 
 # Deploy
 npx wrangler deploy
@@ -67,10 +69,13 @@ npx wrangler deploy
 After deploy, the URLs are:
 
 ```
-https://smirror-telemetry.selectivemirror.workers.dev/v1/contribute       (v2 — current)
-https://smirror-telemetry.selectivemirror.workers.dev/v1/bug-reports      (v1 — deprecated)
-https://smirror-telemetry.selectivemirror.workers.dev/v1/installations/report  (v1 — deprecated)
+https://smirror-telemetry.selectivemirror.workers.dev/v1/contribute       (v2 — only ingest path)
+https://smirror-telemetry.selectivemirror.workers.dev/v1/forget           (retired — 410 Gone)
+https://smirror-telemetry.selectivemirror.workers.dev/v1/bug-reports      (legacy v1 — 410 Gone)
+https://smirror-telemetry.selectivemirror.workers.dev/v1/installations/report  (legacy v1 — 410 Gone)
 ```
+
+The retired paths intentionally return `410 Gone` with body `{"code":"endpoint_retired"}` so old binaries fail loudly rather than silently miscount; see `docs/PRIVACY.md` "Bug reports are not telemetry" for the rationale.
 
 (Account subdomain = `selectivemirror`, fixed via Cloudflare API after a
 one-time misconfiguration. Subdomain is changeable: DELETE then PUT on

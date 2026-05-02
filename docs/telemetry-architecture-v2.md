@@ -137,12 +137,29 @@ sums on conflict.
 
 Counter: `reports`.
 
-`bug_kind` and `bug_surface` are picked client-side from a fixed
-taxonomy at submission time. Free-text classification doesn't exist;
-the client's choice IS the classification. `severity_hint` is a small
-enum (`info` / `warning` / `error` / `critical`). `source` is
-`report_bug` or `crash_report`. `submitted_tier` records whether the
-contributor was at `standard` / `reliability` / `one_shot`.
+`bug_kind` and `bug_surface` are derived **client-side at submission
+time** from a fixed taxonomy of seven values plus `unknown`:
+`sync` / `watcher` / `rclone` / `config` / `service` / `fs` / `auth`.
+The classifier (`internal/telemetry/classify.go::ClassifyBugReport`)
+runs over the already-sanitized bundle; rules are simple keyword
+matches in a defined precedence order (most-specific first). The user
+does not pick the bucket — the keyword match does, deterministically,
+locally, before the contribution is signed and sent. Bundles that
+match no rule classify as `unknown`. The `bug_unknown_share` view
+surfaces the per-version unknown share over 30 days so the maintainer
+can evolve the taxonomy when it drifts (Mary's drift detection,
+A-10).
+
+`severity_hint` is a small ENUM (`info` / `warning` / `error` /
+`critical`); user-initiated `--submit` defaults to `error`. `source`
+is `report_bug` (current SM-158 path) or `crash_report` (deferred).
+`submitted_tier` records whether the contributor was at `standard`,
+`reliability`, or `one_shot`.
+
+The `bug_surface` column is intentionally separate from `bug_kind`
+even though today the classifier sets them equal, so a future split
+("kind=auth, surface=installer-msi") doesn't require a schema
+migration.
 
 #### `reliability_daily_rollup` bucket key
 
@@ -393,12 +410,27 @@ runbook into one operator session.
 
 | Deferred bug | v1 status | v2 status |
 |---|---|---|
+| **SM-157** (`smirror telemetry` runtime CLI) | Open | **Shipped 0.9.83-dev.** Five subcommands: `none` / `standard` / `reliability` / `status` / `policy`. No `forget`. |
+| **SM-158** (`report-bug --submit` pipeline) | Open | **Shipped 0.9.89-dev.** End-to-end verified live against the production Worker. See `docs/SM-158-report-bug-submit-plan.md`. |
 | **SM-161** (Worker → ingest/normalization) | Open | **Retired.** No normalization; Worker calls one RPC. |
 | **SM-162** (HMAC envelope binding) | Critical, deferred | **Downgraded to minor.** Replay can only over-count an aggregate; counters are monotonic and rate-limited. No exfiltration vector. |
-| **SM-163** (Worker rate-limit raw-IP) | Open | **Partially retired.** Daily-salted IP hash replaces raw IP. Still need atomic-counter or accept-the-slack decision. |
-| **SM-168** (MSI build embeds telemetry key) | Open | **Unchanged in scope but lower urgency.** Still needs to ship for the submit path to work; without it, contributions get silently HMAC-rejected. |
+| **SM-163** (Worker rate-limit raw-IP) | Open | **Closed 0.9.84-dev.** Daily-salted IP hash with `RATE_LIMIT_SALT_SECRET`. The Worker no longer falls back to raw-IP keys when the salt is missing — rate-limiting is skipped entirely (with a log warning) so the privacy invariant always holds. |
+| **SM-168** (MSI build embeds telemetry key) | Open | **Shipped before this round.** `internal/telemetry/hmac.go` reads `buildKey` from a build-time `-ldflags -X` injection; CI computes the per-version derived key from `SMIRROR_TELEMETRY_MASTER_KEY`. `smirror version` shows an 8-char fingerprint or `none`. |
 | **SM-172** (retention janitor purges normalized text) | Shipped 0.9.18-dev | **Obsolete.** v1 tables are dropped by `drop-v1-leftover.sql` as part of the standard deploy; v2 has nothing to purge (no raw stored). |
 | `smirror telemetry forget` (SM-157 sub-design) | Designed | **Deleted from design.** No record to forget. |
+
+**As of 2026-05-02 the v2 server is live** at
+`https://smirror-telemetry.selectivemirror.workers.dev`. Phase A
+(schema apply) and Phase B (Worker deploy) of the runbook were
+executed; smoke tests + an SM-158 end-to-end through real
+`smirror.exe` both passed and their rows were cleaned up. Two
+deploy-day fixes were rolled into the source: `GRANT EXECUTE ON
+telemetry.contribute() TO anon` (the Worker authenticates as the
+anon role, not service_role), and replacing `PRIMARY KEY` with
+`UNIQUE NULLS NOT DISTINCT` on `installation_daily_rollup` and
+`reliability_daily_rollup` (so first_seen events with NULL
+prior_version, and reliability snapshots with NULL
+most_common_anomaly_kind, can land cleanly).
 
 ---
 

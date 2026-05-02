@@ -1,8 +1,12 @@
 # SM-157 — `smirror telemetry` runtime CLI
 
-**Status**: not yet implemented; design is locked in
+**Status**: **shipped 0.9.83-dev**. Five subcommands wired in
+`cmd/smirror/cmd_telemetry.go`: `none`, `standard`, `reliability`,
+`status`, `policy`. The `forget` subcommand was deleted from the
+design under v2 (no server-side record to forget). Behavior matches
+the surface described in
 [`docs/cli-telemetry-command.md`](./cli-telemetry-command.md).
-**Severity**: major
+**Severity**: major (closed)
 
 > **Updated 2026-04-29 for v2 architecture.** The `forget` subcommand
 > is **removed** from the design — under stream-aggregate-and-discard

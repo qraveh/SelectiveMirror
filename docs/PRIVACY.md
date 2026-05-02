@@ -2,7 +2,7 @@
 
 **Audience**: end users of SelectiveMirror.
 **Plain-language version of**: `docs/telemetry-architecture-v2.md` (the technical spec).
-**Last updated**: 2026-04-29.
+**Last updated**: 2026-05-02. Current as of 0.9.89-dev (SM-158 shipped; v2 server live).
 
 ---
 
@@ -99,13 +99,17 @@ Same dimensions as `first_seen`, plus:
 - `days_since_first_seen_bucket` (`1-7` / `8-30` / `31-90` / `91-365` / `>365`)
 
 #### `bug_report` event (when YOU run `smirror report-bug --submit`)
-Bucket dimensions:
-- `bug_kind` (closed taxonomy you pick from at submit time — e.g. `sync` / `rclone` / `watcher` / `config` / `service`)
-- `bug_surface` (closed taxonomy — e.g. `windows-fs` / `gdrive` / `s3` / `sftp` / `local`)
+
+This event fires only when you explicitly run `smirror report-bug --submit`. It contributes one increment to a bucket. The bucket is composed entirely from **closed-vocabulary** dimensions — every value is one of a small set fixed at release time, never free text:
+
+- `bug_kind` — one of: `sync`, `watcher`, `rclone`, `config`, `service`, `fs`, `auth`, or `unknown`
+- `bug_surface` — same vocabulary (kept as a separate column for future-proofing; today it always equals `bug_kind`)
 - `client_version`
-- `severity_hint` (`info` / `warning` / `error` / `critical`)
-- `source` (`report_bug` or `crash_report`)
-- `submitted_tier` (`standard` / `reliability` / `one_shot`)
+- `severity_hint` — one of: `info`, `warning`, `error`, `critical`
+- `source` — `report_bug` (this command) or `crash_report` (deferred)
+- `submitted_tier` — `standard`, `reliability`, or `one_shot`
+
+**How `bug_kind` is chosen.** The smirror client classifies your sanitized bundle locally, by keyword match against the closed list above (e.g., a bundle containing "rclone: not found" buckets as `rclone`; "access is denied" buckets as `fs`). You don't pick the bucket; the client does, deterministically, on your machine, before anything is sent. If no rule matches, the bucket is `unknown` — which feeds a separate aggregate (`bug_unknown_share`) so the maintainer can notice and evolve the taxonomy. The classifier source is `internal/telemetry/classify.go`; you can read every rule it applies.
 
 **The bug-report narrative is not in this list.** See "What is no longer telemetry" below.
 
@@ -142,6 +146,8 @@ When you use `smirror report-bug --browser`, your written narrative is filed as 
 The only thing SelectiveMirror's telemetry knows about your bug report (when you also opt to submit a count via `--submit`) is the categorical bucket above — `(bug_kind, bug_surface, client_version, severity_hint, source, submitted_tier)`. No narrative, no GitHub link, no install_id.
 
 The smirror client sanitizes the report bundle (paths, mirror names, credentials, remote URIs, log lines) **before** prefilling the GitHub Issue draft, so even the data you submit voluntarily to GitHub has been redacted by the client first.
+
+**The CLI always tells you where the narrative lives.** Whenever `smirror report-bug --submit` completes — succeeded or failed, with or without `--browser` — the CLI prints the GitHub-issue URL (with your sanitized bundle pre-filled into the issue form). The categorical count contributed via telemetry is statistical; the narrative is yours, owned and edited via your GitHub account. SelectiveMirror does not accept ownership of the data of bug reports.
 
 ### 2. Per-install history / "active install" precise count
 
