@@ -18,6 +18,29 @@ session.
 > See [`telemetry-architecture-v2.md`](./telemetry-architecture-v2.md)
 > for the rationale and
 > [`PRIVACY.md`](./PRIVACY.md) "Bug reports are not telemetry."
+
+> **Updated 2026-05-02 (Raveh).** Whenever `--submit` completes —
+> with or without `--browser` — the CLI MUST print the GitHub-issue
+> URL the user can file the narrative at. The categorical count
+> contributed via telemetry is statistical; the narrative is the
+> user's, owned and edited via their GitHub account. SelectiveMirror
+> "does not accept ownership of the data of the bug reports."
+>
+> Concretely:
+>   - `--submit --browser`: file count + open browser to prefilled
+>     GitHub Issue page (current plan).
+>   - `--submit` (no `--browser`): file count + print
+>     "If you'd like the bug actually fixed, file the narrative
+>     at: <URL>" so the user knows the count alone won't trigger a
+>     fix.
+>   - `--submit --one-shot` (no `--browser`): same — print the URL.
+>     The user contributed an anonymous count without committing to
+>     ongoing telemetry; they still need to file the narrative
+>     themselves to get a fix.
+>
+> This rule preserves the architectural property: telemetry =
+> anonymous statistics, narrative = GitHub Issues. The CLI always
+> reminds the user where the narrative lives.
 **Severity**: major
 **Author**: Raveh, in response to Codex Validation Report
 2026-04-28.
