@@ -117,7 +117,7 @@ func TestTelemetryV2Worker_RetiredPathsCoverLegacyAndForget(t *testing.T) {
 	}
 	for _, want := range required {
 		if !strings.Contains(worker, want) {
-			t.Errorf("Worker RETIRED_PATHS is missing %s — CLAIMS-MAP C-16 requires every legacy path return 410 Gone", want)
+			t.Errorf("Worker retired-path sets are missing %s — CLAIMS-MAP C-16 requires every legacy path return 410 Gone", want)
 		}
 	}
 
@@ -127,6 +127,123 @@ func TestTelemetryV2Worker_RetiredPathsCoverLegacyAndForget(t *testing.T) {
 
 	if !strings.Contains(worker, `code: "endpoint_retired"`) {
 		t.Errorf("Worker retired-path response body does not include code: \"endpoint_retired\"")
+	}
+}
+
+// FINDING 7 (round-3 panel, 2026-05-02): the Worker should distinguish
+// retired-forget paths ("nothing to forget" — true under v2 stream-
+// aggregate-and-discard) from retired-ingest paths ("endpoint moved
+// to /v1/contribute"). Both return 410, but the message is correct
+// for the kind of path. This guard ensures both sets exist as
+// separate constants with their own messages.
+func TestTelemetryV2Worker_RetiredPathsClassifiedByPurpose(t *testing.T) {
+	t.Parallel()
+
+	worker := readWorker(t)
+
+	if !strings.Contains(worker, "RETIRED_FORGET_PATHS") {
+		t.Errorf("Worker does not declare RETIRED_FORGET_PATHS — FINDING 7 needs forget paths classified separately so the response message is accurate")
+	}
+	if !strings.Contains(worker, "RETIRED_INGEST_PATHS") {
+		t.Errorf("Worker does not declare RETIRED_INGEST_PATHS — FINDING 7 needs ingest paths classified separately so the response message points at /v1/contribute")
+	}
+
+	// The forget path message should mention "nothing to forget".
+	// The ingest path message should mention "/v1/contribute".
+	if !strings.Contains(worker, "nothing to forget") {
+		t.Errorf("Worker retired-forget message does not contain 'nothing to forget' — accurate framing under v2 architecture")
+	}
+	if !strings.Contains(worker, "/v1/contribute") {
+		t.Errorf("Worker retired-ingest message does not point at /v1/contribute — operators need the actionable hint")
+	}
+}
+
+// FINDING 8 (round-3 panel, 2026-05-02): the retired-path check must
+// run BEFORE the method allowlist. Otherwise GET /v1/forget returns
+// 405 ("method not allowed") which suggests the endpoint exists but
+// only accepts POST — when in fact the endpoint is gone. 410 is the
+// architectural truth and should fire regardless of method.
+func TestTelemetryV2Worker_RetiredPathCheckBeforeMethodCheck(t *testing.T) {
+	t.Parallel()
+
+	worker := readWorker(t)
+
+	// Find the positions of the two checks. The retired-path block
+	// is identified by RETIRED_FORGET_PATHS (its first reference);
+	// the method block is identified by `method !== "POST"`.
+	retiredIdx := strings.Index(worker, "RETIRED_FORGET_PATHS.has")
+	methodIdx := strings.Index(worker, `method !== "POST"`)
+
+	if retiredIdx == -1 {
+		t.Fatalf("Could not locate RETIRED_FORGET_PATHS.has(...) check; structural test cannot proceed")
+	}
+	if methodIdx == -1 {
+		t.Fatalf(`Could not locate request.method !== "POST" check; structural test cannot proceed`)
+	}
+	if retiredIdx >= methodIdx {
+		t.Errorf("retired-path check appears AFTER method check (retiredIdx=%d, methodIdx=%d). FINDING 8: GET on a retired path should return 410 Gone, not 405. Move the retired-path block above the method-allowlist block.", retiredIdx, methodIdx)
+	}
+}
+
+// FINDING 1 (round-3 panel, 2026-05-02): the Worker must validate
+// body shape before forwarding to PostgREST so PGRST schema-cache
+// hints (function name, parameter signatures, parameter ORDER hints)
+// don't leak via 4xx error bodies. Validation rejects with a generic
+// 400; PGRST never sees a malformed shape.
+func TestTelemetryV2Worker_HasBodyShapeValidator(t *testing.T) {
+	t.Parallel()
+
+	worker := readWorker(t)
+
+	if !strings.Contains(worker, "isValidContributeBody") {
+		t.Errorf("Worker does not declare isValidContributeBody — FINDING 1 requires a body-shape validator that rejects malformed payloads before they reach PostgREST")
+	}
+	// The validator should be CALLED in the request flow (not just
+	// declared and unused). The call site must precede the upstream
+	// fetch.
+	callIdx := strings.Index(worker, "isValidContributeBody(bodyBytes)")
+	fetchIdx := strings.Index(worker, "fetch(upstreamRequest)")
+	if callIdx == -1 {
+		t.Errorf("isValidContributeBody is declared but not called from the fetch handler")
+	} else if fetchIdx == -1 {
+		t.Errorf("Could not find fetch(upstreamRequest) callsite; structural test cannot proceed")
+	} else if callIdx >= fetchIdx {
+		t.Errorf("isValidContributeBody is called AFTER fetch(upstreamRequest) — body validation must precede the PostgREST call")
+	}
+
+	// The validator's rejection message must be generic — no
+	// parameter ORDER hint, no function name, no schema-cache
+	// reference. We assert the rejection emits "bad_request" code
+	// (Worker-defined) rather than PGRST's PGRST202 / PGRST204
+	// codes (which would mean we're passing through).
+	//
+	// Note: "PGRST" appears in source comments explaining the
+	// rationale; that's fine. We check that the response BODIES
+	// constructed via jsonResponse(...) don't reference PGRST.
+	// Heuristic: the rejection should use "bad_request" + the
+	// generic message from the source, neither of which contains
+	// the literal substring "PGRST".
+	rejectMsg := `code: "bad_request"`
+	if !strings.Contains(worker, rejectMsg) {
+		t.Errorf("Worker does not emit a `code: \"bad_request\"` response — body validation should produce its own generic 400 (not a PGRST passthrough)")
+	}
+}
+
+// FINDING 4: upstream 5xx (Cloudflare-fronted Supabase blip) arrives
+// as a non-throw with HTML body. The Worker should rewrite anything
+// other than 200 from the upstream call to a generic 502.
+func TestTelemetryV2Worker_RewritesNon200UpstreamTo502(t *testing.T) {
+	t.Parallel()
+
+	worker := readWorker(t)
+
+	// The branch should exist. Look for the 200-only happy path
+	// followed by the catch-all jsonResponse(502, ...) for non-200.
+	if !strings.Contains(worker, "upstreamResponse.status === 200") {
+		t.Errorf("Worker does not 200-gate upstream responses — FINDING 4 requires only 200 from contribute() be passed through verbatim; everything else becomes a 502")
+	}
+	if !strings.Contains(worker, "upstream_unavailable") {
+		t.Errorf("Worker does not emit code: upstream_unavailable — operator-facing error code lost")
 	}
 }
 

@@ -74,19 +74,30 @@ const RATE_LIMIT_WINDOW_SECONDS = 60;
 const RPC_PATH = "/v1/contribute";
 const RPC_FUNCTION = "contribute";
 
-// Forget endpoint — explicitly NOT supported under v2. The CLI design
-// removed `smirror telemetry forget` (see docs/cli-telemetry-command.md);
-// any client still attempting the legacy path receives 410 Gone with
-// a pointer to the new policy. This is intentional and durable.
-const RETIRED_PATHS = new Set([
+// Retired paths fall into two semantic groups so the response message
+// matches what the path actually was:
+//
+// RETIRED_FORGET_PATHS — explicitly removed under v2 because there is
+// no per-install server data to delete (stream-aggregate-and-discard).
+// "Nothing to forget" is the correct framing for these.
+//
+// RETIRED_INGEST_PATHS — v1 ingest paths retired in 0.9.7x-dev when
+// the v1 schema was dropped. The correct framing is "endpoint moved";
+// the substitute is /v1/contribute. Same 410 status, different
+// message so a confused operator sees the actionable hint.
+const RETIRED_FORGET_PATHS = new Set([
     "/v1/forget",
-    // v1 ingest paths, retired in 0.9.7x-dev when the v1 schema was
-    // dropped. Returning 410 (rather than 404) so any straggler
-    // pre-0.9.18 client gets a clear "endpoint gone" signal. There
-    // shouldn't be any such clients (SM-160 cut the wire); this is
-    // belt-and-braces.
+]);
+
+const RETIRED_INGEST_PATHS = new Set([
     "/v1/bug-reports",
     "/v1/installations/report",
+]);
+
+// Combined for any callsite that just needs "is this a retired path".
+const RETIRED_PATHS = new Set<string>([
+    ...RETIRED_FORGET_PATHS,
+    ...RETIRED_INGEST_PATHS,
 ]);
 
 const ALLOWED_PATHS = new Set([
@@ -97,23 +108,37 @@ export default {
     async fetch(request: Request, env: Env): Promise<Response> {
         const url = new URL(request.url);
 
-        // Method allowlist
-        if (request.method !== "POST") {
-            return jsonResponse(405, {
-                code: "method_not_allowed",
-                message: "Only POST is supported on this endpoint.",
-            });
-        }
-
-        // Retired path: 410 Gone with policy pointer.
-        if (RETIRED_PATHS.has(url.pathname)) {
+        // Retired path: 410 Gone with the appropriate message.
+        // CHECKED FIRST — before method allowlist — so a GET on a
+        // retired endpoint returns 410 Gone (the endpoint is gone),
+        // not 405 Method Not Allowed (the endpoint exists but
+        // doesn't accept GET). Either is technically correct, but
+        // 410 communicates the architectural truth.
+        if (RETIRED_FORGET_PATHS.has(url.pathname)) {
             return jsonResponse(410, {
                 code: "endpoint_retired",
                 message:
                     "Under SelectiveMirror v2 (stream-aggregate-and-" +
-                    "discard), no per-install server data exists; there " +
-                    "is nothing to forget. Run `smirror telemetry none` " +
-                    "to stop contributing. See docs/PRIVACY.md.",
+                    "discard), no per-install server data exists; " +
+                    "there is nothing to forget. Run `smirror telemetry " +
+                    "none` to stop contributing. See docs/PRIVACY.md.",
+            });
+        }
+        if (RETIRED_INGEST_PATHS.has(url.pathname)) {
+            return jsonResponse(410, {
+                code: "endpoint_retired",
+                message:
+                    "Endpoint removed in v2. Use POST /v1/contribute " +
+                    "instead. See docs/telemetry-architecture-v2.md.",
+            });
+        }
+
+        // Method allowlist (after retired-path check, so retired
+        // paths return 410 regardless of method).
+        if (request.method !== "POST") {
+            return jsonResponse(405, {
+                code: "method_not_allowed",
+                message: "Only POST is supported on this endpoint.",
             });
         }
 
@@ -175,6 +200,24 @@ export default {
             });
         }
 
+        // Body shape validation — FINDING 1 from the 2026-05-02
+        // validation pass. Without this, a malformed body would reach
+        // PostgREST and PGRST202 would echo the function name, parameter
+        // names, and parameter ORDER hints back to the client. That
+        // contradicts the architectural posture: regulators / auditors
+        // / curious users should learn the schema only by reading
+        // docs/telemetry-v2.sql, not by probing the API. Validate here
+        // so PGRST never sees a malformed shape and never has reason
+        // to surface its schema-cache hints.
+        if (!isValidContributeBody(bodyBytes)) {
+            return jsonResponse(400, {
+                code: "bad_request",
+                message: "Body must be a JSON object with exactly the keys " +
+                         "'payload' (object), 'claimed_version' (string), " +
+                         "and 'claimed_hmac_hex' (string).",
+            });
+        }
+
         // Forward to PostgREST RPC. The body is forwarded verbatim;
         // the Postgres function expects parameter-bound JSONB.
         const supabaseBase = `https://${env.SUPABASE_PROJECT_REF}.supabase.co`;
@@ -194,19 +237,40 @@ export default {
 
         try {
             const upstreamResponse = await fetch(upstreamRequest);
-            // Pass through status and body (don't expose Supabase
-            // headers). The function returns 200 with
-            // {"ok": false, "error": ...} on rejection — we forward
-            // that verbatim so the client can read the rejection
-            // reason.
-            return new Response(upstreamResponse.body, {
-                status: upstreamResponse.status,
-                headers: {
-                    "Content-Type": upstreamResponse.headers.get("Content-Type") || "application/json",
-                },
+
+            // Happy path: contribute() ran (it always returns 200 with
+            // its own JSON, even on rejection — that's part of the
+            // contract so callers can read the reason). Pass through.
+            if (upstreamResponse.status === 200) {
+                return new Response(upstreamResponse.body, {
+                    status: 200,
+                    headers: {
+                        "Content-Type": upstreamResponse.headers.get("Content-Type") || "application/json",
+                    },
+                });
+            }
+
+            // Anything other than 200 from PostgREST means a server
+            // / config issue, not a legitimate contribute() outcome.
+            // FINDING 1: PGRST 4xx bodies expose schema cache details
+            // (function name, parameter signatures, parameter-order
+            // hints). Don't pass them through.
+            // FINDING 4: an upstream Cloudflare-fronted Supabase 5xx
+            // arrives as a non-throw with text/html error page —
+            // don't pass that through either.
+            // Either way: log the actual status for ops debugging,
+            // return a generic 502 to the client.
+            console.warn(
+                `Worker: upstream returned ${upstreamResponse.status} ` +
+                `(non-200). Returning generic 502 to client.`,
+            );
+            return jsonResponse(502, {
+                code: "upstream_unavailable",
+                message: "Telemetry endpoint temporarily unavailable.",
             });
         } catch (err) {
-            // Upstream error: don't leak details
+            // Upstream throw (DNS, connection reset, etc.). Same
+            // resolution: don't leak details.
             return jsonResponse(502, {
                 code: "upstream_unavailable",
                 message: "Telemetry endpoint temporarily unavailable.",
@@ -214,6 +278,58 @@ export default {
         }
     },
 };
+
+// isValidContributeBody — FINDING 1 from the 2026-05-02 validation
+// pass. Returns true iff the body parses to a JSON object with exactly
+// the three documented keys, each with the expected type. Any other
+// shape (extra keys, missing keys, wrong types, non-object payload,
+// non-string claimed_version, etc.) returns false and the caller
+// emits a generic 400. Keeping the validation rules minimal here
+// since the server-side function (`telemetry.contribute()`) does the
+// substantive checks (HMAC, schema_violation, unknown_event).
+function isValidContributeBody(bodyBytes: ArrayBuffer): boolean {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(new TextDecoder().decode(bodyBytes));
+    } catch {
+        return false;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return false;
+    }
+    const obj = parsed as Record<string, unknown>;
+
+    // Required keys — exactly these three.
+    const expected = new Set(["payload", "claimed_version", "claimed_hmac_hex"]);
+    for (const k of Object.keys(obj)) {
+        if (!expected.has(k)) {
+            return false;
+        }
+    }
+    for (const k of expected) {
+        if (!(k in obj)) {
+            return false;
+        }
+    }
+
+    // Type checks. payload must be an object (not an array, not a
+    // primitive). claimed_version + claimed_hmac_hex must be
+    // non-empty strings.
+    if (
+        typeof obj.payload !== "object" ||
+        obj.payload === null ||
+        Array.isArray(obj.payload)
+    ) {
+        return false;
+    }
+    if (typeof obj.claimed_version !== "string" || obj.claimed_version.length === 0) {
+        return false;
+    }
+    if (typeof obj.claimed_hmac_hex !== "string" || obj.claimed_hmac_hex.length === 0) {
+        return false;
+    }
+    return true;
+}
 
 /**
  * Rate-limit check with salted-IP-hash key (SM-163 fix).
