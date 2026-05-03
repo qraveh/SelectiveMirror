@@ -88,11 +88,27 @@ jobs:
         env:
           CGO_ENABLED: 1
 
+      # PR-PRE-M3 (pre-release status panel 2026-05-03): same allowlist
+      # ↔ CHANGELOG linter as release.yml. Catches drift before the
+      # test suite runs.
+      - name: Lint allowlist vs CHANGELOG
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/check-allowlist-vs-changelog.ps1
+
+      # PR-PRE-M1 (pre-release status panel 2026-05-03): allowlist read
+      # from system-validation/allowlist.txt — single source of truth
+      # shared with release.yml. The previous in-line `$allowed = @(...)`
+      # had drifted (release.yml was empty; this file still tolerated
+      # TestPanelR3_*, which had since been re-asserted to pass).
       - name: System-validation tests (panel-derived black-box)
         shell: pwsh
         env:
           CGO_ENABLED: '1'
         run: |
+          $allowed = @(Get-Content system-validation/allowlist.txt | ForEach-Object {
+              $line = $_.Trim()
+              if ($line -and -not $line.StartsWith('#')) { $line }
+          })
           Push-Location system-validation
           go test -count=1 -json ./... | Tee-Object -FilePath ../system-validation-results.json | Out-Null
           $exitCode = $LASTEXITCODE
@@ -101,9 +117,6 @@ jobs:
               Write-Host "system-validation: all tests pass"
               exit 0
           }
-          $allowed = @(
-              'TestPanelR3_Gitignore_ExcludedParentBlocksChildNegation'
-          )
           $events = @(Get-Content ../system-validation-results.json | ForEach-Object { $_ | ConvertFrom-Json })
           $failed = $events | Where-Object { $_.Action -eq 'fail' -and $_.Test } | ForEach-Object { ($_.Test -split '/')[0] } | Sort-Object -Unique
           $unexpected = @($failed | Where-Object { $allowed -notcontains $_ })
@@ -167,6 +180,33 @@ jobs:
           if (-not $exe) { Write-Error "smirror.exe not found in dist/"; exit 1 }
           echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_OUTPUT
           Write-Host "Located: $($exe.FullName)"
+
+      # PR-PRE-M2 (pre-release status panel 2026-05-03): mirror the
+      # release.yml build-key fingerprint check so the dryrun's signal
+      # is as strong as release-time. A GoReleaser config drift (env
+      # var renamed, ldflag template typo) would otherwise pass dryrun
+      # and fail release. In dryrun the empty-key path is tolerated
+      # without the override (because the snapshot binary won't ship);
+      # the test is "did the ldflag mechanism work at all".
+      - name: Verify built binary HMAC build-key plumbing
+        shell: pwsh
+        run: |
+          $out = & "${{ steps.locate-exe.outputs.EXE_PATH }}" version
+          Write-Host "smirror version output:`n$out"
+          $line = $out -split "`n" | Where-Object { $_ -match "telemetry build-key:" } | Select-Object -First 1
+          if (-not $line) {
+              Write-Error "smirror version did not print 'telemetry build-key:' line — release.yml would block on this"
+              exit 1
+          }
+          $value = ($line -replace "telemetry build-key:\s*", "").Trim()
+          Write-Host "Detected build-key fingerprint: $value"
+          if ($value -eq "invalid") {
+              Write-Error "Built binary's telemetry build-key fingerprint is 'invalid' — the SMIRROR_TELEMETRY_DERIVED_KEY ldflag was set but is not valid hex."
+              exit 1
+          }
+          if ($value -eq "none") {
+              Write-Host "::warning::Build-key fingerprint is 'none' — OK for dryrun (no master key required); release.yml requires RELEASE_ALLOW_NO_TELEMETRY_KEY=1 for this state."
+          }
 
       - name: Upload smirror.exe artifact for msi job
         uses: actions/upload-artifact@v4

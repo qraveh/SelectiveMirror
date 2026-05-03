@@ -91,13 +91,14 @@ Where to look:
 
 What to check:
 1. Download the MSI from the release URL. Run `certutil -hashfile SelectiveMirror.msi SHA256` and compare to `checksums.txt`.
-2. Run `gh attestation verify SelectiveMirror.msi --repo qraveh/SelectiveMirror`. Should print one verified attestation (PR-S4).
+2. Run `gh attestation verify SelectiveMirror.msi --repo qraveh/SelectiveMirror`. Should print one verified attestation (PR-S4). (CI now runs this same command in-pipeline — see PR-PRE-M4 — but a tester re-run from the user's network is still meaningful.)
 3. Click through SmartScreen warning. Install completes.
-4. `smirror version` reports the right version.
-5. `smirror selfupdate --check` notices no newer version (since this IS the newest).
-6. From a previously-installed older version on a different machine: `smirror selfupdate` actually picks up the new release.
+4. **PR-PRE-D2 (pre-release status panel 2026-05-03): MSI consent dialog visual capture.** During the install wizard, when the "Telemetry preference" dialog (`TelemetryTierDlg` from `installer/TelemetryConsent.wxi`) appears, take a screenshot. Commit it to `screenshots/v<version>/install-telemetry-dialog.png` along with the rest of the release-day evidence. Anchors maturity-dashboard row 3 (MSI consent UI 🟡 → confirms the dialog actually rendered for THIS release; without the artifact the row stays informally 🟡 forever).
+5. `smirror version` reports the right version.
+6. `smirror selfupdate --check` notices no newer version (since this IS the newest).
+7. From a previously-installed older version on a different machine: `smirror selfupdate` actually picks up the new release.
 
-Each is a release-day signal. None being green is a release-quality concern; not all of them being green is normal under "small audience" mode.
+Each is a release-day signal. None being green is a release-quality concern; not all of them being green is normal under "small audience" mode. Step 4 (screenshot) is the only one that creates a tracked artifact in the repo.
 
 ---
 

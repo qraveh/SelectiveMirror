@@ -5,17 +5,26 @@
 # changelog uses commit messages with limited filters; the user-facing
 # release body should instead carry the hand-written narrative the
 # maintainer drafts in CHANGELOG.md. This script extracts the
-# `## [X.Y.Z]` section (and falls back to `## [Unreleased]` when the
-# matching section hasn't been promoted yet) and writes it to disk
-# for `gh release edit --notes-file` to pick up.
+# `## [X.Y.Z]` section and writes it to disk for `gh release edit
+# --notes-file` to pick up.
+#
+# PR-PRE-F3 (pre-release status panel 2026-05-03): the `[Unreleased]`
+# fallback now fires ONLY when -AllowMissing is set. Production
+# release.yml runs WITHOUT -AllowMissing — if the maintainer forgot
+# runbook §2 (promote `[Unreleased]` → `[X.Y.Z]`), the release fails
+# loudly rather than silently shipping the dev-cycle accumulator under
+# the version's name. Dryrun (release-dryrun.yml) still uses
+# -AllowMissing for the preview — `[Unreleased]` is the natural
+# preview source pre-promotion.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts/extract-changelog.ps1 -Version 0.9.27 -Output release-notes.md
-#   powershell ... -Version 0.9.27 -Output preview.md -AllowMissing  # don't fail if section missing
+#   powershell ... -Version 0.9.27 -Output preview.md -AllowMissing  # dryrun preview: fall back to [Unreleased]
 #
 # Exit codes:
-#   0 = section extracted (or AllowMissing + section missing → empty output)
-#   1 = section missing and AllowMissing not set
+#   0 = section extracted
+#   1 = [X.Y.Z] section missing and -AllowMissing not set; OR both [X.Y.Z]
+#       and [Unreleased] missing under -AllowMissing
 
 param(
     [Parameter(Mandatory)]
@@ -46,6 +55,10 @@ $unreleasedPattern = '^## \[Unreleased\]'
 $nextSectionPattern = '^## \['
 
 # Locate the section boundaries.
+# PR-PRE-F3: the [Unreleased] fallback fires ONLY under -AllowMissing.
+# Without that flag, a missing [X.Y.Z] section is a hard error — runbook
+# §2 (promote [Unreleased] → [X.Y.Z]) was skipped, and we will NOT
+# silently substitute the dev-cycle accumulator.
 $startIdx = -1
 $source = ''
 for ($i = 0; $i -lt $lines.Count; $i++) {
@@ -57,24 +70,25 @@ for ($i = 0; $i -lt $lines.Count; $i++) {
 }
 
 if ($startIdx -lt 0) {
-    # Fall back to [Unreleased] for dry-run preview.
+    if (-not $AllowMissing) {
+        Write-Error "No CHANGELOG section [$Version] found in $changelogPath. Did you forget to promote [Unreleased] -> [$Version] (release-runbook.md section 2)? -AllowMissing is reserved for the dryrun preview path."
+        exit 1
+    }
+    # AllowMissing path: fall back to [Unreleased] for the dryrun preview.
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match $unreleasedPattern) {
             $startIdx = $i
-            $source = "[Unreleased] (fallback for ${Version})"
+            $source = "[Unreleased] (AllowMissing fallback for [${Version}])"
             break
         }
     }
 }
 
 if ($startIdx -lt 0) {
-    if ($AllowMissing) {
-        Write-Host "::warning::No CHANGELOG section for version $Version (and no [Unreleased] fallback). Writing empty file."
-        Set-Content -Path $Output -Value "" -Encoding UTF8
-        exit 0
-    }
-    Write-Error "No CHANGELOG section for version $Version (and no [Unreleased] fallback)."
-    exit 1
+    # Reachable only under -AllowMissing AND both sections absent.
+    Write-Host "::warning::No CHANGELOG section [$Version] AND no [Unreleased] fallback in $changelogPath. Writing empty file (AllowMissing)."
+    Set-Content -Path $Output -Value "" -Encoding UTF8
+    exit 0
 }
 
 # Find the end: next `## [` heading after $startIdx, or end-of-file.

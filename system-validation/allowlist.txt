@@ -1,0 +1,36 @@
+# system-validation/allowlist.txt
+#
+# Tests in this file are tolerated as RED at release time by BOTH
+# .github/workflows/release.yml and .github/workflows/release-dryrun.yml.
+# This file is the single source of truth — both workflows read it
+# at the system-validation step. PR-PRE-M1 (pre-release status panel
+# 2026-05-03) made this consolidation: the prior hand-typed `$allowed`
+# arrays in each workflow had drifted (release.yml empty; dryrun
+# tolerated TestPanelR3_*, which had since been re-asserted to pass).
+#
+# Authority for adding an entry: each test name listed below must also
+# appear in CHANGELOG.md under a `### Bugs known at tag` (or
+# `### Known issues`) section, with rationale. The companion linter
+# scripts/check-allowlist-vs-changelog.ps1 enforces "every entry here
+# is mentioned in CHANGELOG" before the system-validation step runs.
+#
+# Format:
+#   * One test name per line (e.g. TestPanelR4_CLI_FreshConfig_FileMode).
+#   * No paths, no quotes — just the bare top-level Go test function.
+#   * Lines starting with `#` are comments.
+#   * Blank lines ignored.
+#   * Leading / trailing whitespace stripped.
+#
+# Currently empty as of v1.0.0 tag-day (2026-05-03):
+#   BUG-R3-1   closed by decision — test flipped to assert documented
+#              divergence; now passes (CHANGELOG [1.0.0] line 98).
+#   FIND-R4-1  closed by hooks deferral — test skipped, not failing
+#              (CHANGELOG [1.0.0] "Deferred from v1.0 — pre/post-sync hooks").
+#   BUG-R4-1   closed by implementation (CHANGELOG line 95).
+#   BUG-R5-1   closed by implementation (CHANGELOG line 96).
+#   NEW-R10-1  closed by implementation (CHANGELOG line 97).
+#   OBS-R4-1   non-blocking (uses t.Logf only; CHANGELOG line 65).
+#   R4-PF-10   no associated test (CHANGELOG line 66).
+#
+# Re-add an entry only with a matching CHANGELOG bullet that references
+# the test name verbatim.

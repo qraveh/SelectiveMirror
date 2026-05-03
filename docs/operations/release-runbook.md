@@ -54,13 +54,20 @@ Commit on its own with a message like `CHANGELOG: promote [Unreleased] to [0.9.2
 
 ## 3. Make sure the `## Known issues` section is present and accurate
 
-Each section in `[Unreleased]` (now `[X.Y.Z]`) should — at the top — carry a `### Known issues` block listing every panel-review finding still open against this version. Each entry must include a test name in `system-validation/` that exercises the finding; that test name is what the release pipeline's allowlist tolerates (PR-Q3).
+Each section in `[Unreleased]` (now `[X.Y.Z]`) should — at the top — carry a `### Known issues` (or `### Bugs known at tag`) block listing every panel-review finding still open against this version. Each entry must include a test name in `system-validation/` that exercises the finding; that test name is what the release pipeline's allowlist tolerates (PR-Q3).
 
-If any test name in `### Known issues` is NOT in `release.yml`'s `$allowed` array, edit either:
-- The CHANGELOG (drop the entry — finding is closed; rename the test or add a fix), OR
-- `release.yml` (add the test name to `$allowed`, with the CHANGELOG anchor in a comment).
+The allowlist now lives in `system-validation/allowlist.txt` (PR-PRE-M1, pre-release status panel 2026-05-03) — a single source of truth shared by `release.yml` and `release-dryrun.yml`. The companion linter `scripts/check-allowlist-vs-changelog.ps1` (PR-PRE-M3) enforces the agreement automatically:
 
-Both must agree, or system-validation gating drift blocks the release.
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/check-allowlist-vs-changelog.ps1
+```
+
+This runs at the top of the system-validation step in BOTH workflows. If a test in the allowlist has no `system-validation/<TestName>` mention in `CHANGELOG.md`, the release fails before tests even start. To resolve drift:
+
+- Drop the entry from `system-validation/allowlist.txt` (the test is no longer tolerated as RED — it passes, was reclassified, or was deleted), OR
+- Add a CHANGELOG bullet in `### Known issues` / `### Bugs known at tag` referencing the test name verbatim with rationale.
+
+The asymmetric direction (allowlist ⊆ CHANGELOG mentions) is intentional: CHANGELOG entries describing CLOSED tests still mention the test name as evidence of closure but correctly do NOT appear in the allowlist.
 
 ---
 
@@ -85,11 +92,13 @@ gh workflow run release-dryrun.yml \
     -f ref=master
 ```
 
-The dry-run runs the FULL release pipeline (vet + unit + system-validation + report-bug PII smoke + GoReleaser snapshot + MSI build + smoke test) on a fresh CI runner, without uploading anything to a real tag. PR-R1 (panel review pre-release 2026-04-28).
+The dry-run runs the FULL release pipeline (vet + go-mod-verify + unit + allowlist-vs-CHANGELOG linter + system-validation + report-bug PII smoke + GoReleaser snapshot + build-key fingerprint + MSI build + MSI smoke test) on a fresh CI runner, without uploading anything to a real tag. PR-R1 (panel review pre-release 2026-04-28). As of PR-PRE-M1/M2/M3 (pre-release status panel 2026-05-03) the dry-run carries the same gates as the real release except: no upload, no SLSA attestations, no winget submission, HMAC master key optional.
 
 Wait for the workflow to complete (`gh run watch` or the GitHub UI). Required outcome: **all green**. If anything is red:
 - A unit-test failure → fix, commit, restart at §4.
-- A system-validation failure outside the allowlist → either fix, or extend the allowlist with a CHANGELOG `### Known issues` entry. Don't push the tag until the allowlist matches reality.
+- An allowlist-vs-CHANGELOG drift (PR-PRE-M3) → fix the file pair per §3 above.
+- A system-validation failure outside the allowlist → either fix, or extend the allowlist with a CHANGELOG `### Known issues` entry (in that order — the linter will reject the inverse).
+- A build-key fingerprint mismatch (`telemetry build-key: invalid` or unexpected `none`) → check `.goreleaser.yaml` ldflag template + the `SMIRROR_TELEMETRY_DERIVED_KEY` secret/var plumbing.
 - An MSI build failure → this is the v0.9.22 tag-burn class of failure; fix locally, recommit, restart.
 - A report-bug PII leak → URGENT. Do not release. The redactor is broken; investigate `internal/telemetry/sanitize.go` and `cmd/smirror/cmdreportbug.go` before doing anything else.
 

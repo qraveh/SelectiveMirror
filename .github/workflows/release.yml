@@ -85,18 +85,35 @@ jobs:
         env:
           CGO_ENABLED: 1
 
+      # PR-PRE-M3 (pre-release status panel 2026-05-03): enforce the
+      # runbook §3 invariant — every test in
+      # system-validation/allowlist.txt must be referenced in
+      # CHANGELOG.md (typically inside `### Bugs known at tag`).
+      # Catches stale allowlist entries before the test suite runs.
+      - name: Lint allowlist vs CHANGELOG
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File scripts/check-allowlist-vs-changelog.ps1
+
       # PR-Q3 (panel review pre-release 2026-04-28): system-validation
       # tests are a separate Go module (system-validation/go.mod) and
       # therefore miss the `./internal/... ./cmd/...` globs above. ~70
       # panel-derived black-box tests previously did not gate release.
       # Known-RED tests listed in the allowlist (mirror of CHANGELOG
       # "Known issues" section) are tolerated; everything else blocks
-      # the release.
+      # the release. PR-PRE-M1 (pre-release status panel 2026-05-03):
+      # the allowlist is now read from system-validation/allowlist.txt
+      # so release.yml and release-dryrun.yml share a single source of
+      # truth.
       - name: System-validation tests (panel-derived black-box)
         shell: pwsh
         env:
           CGO_ENABLED: '1'
         run: |
+          # Read allowlist from shared file (PR-PRE-M1). Skip blanks and comments.
+          $allowed = @(Get-Content system-validation/allowlist.txt | ForEach-Object {
+              $line = $_.Trim()
+              if ($line -and -not $line.StartsWith('#')) { $line }
+          })
           Push-Location system-validation
           go test -count=1 -json ./... | Tee-Object -FilePath ../system-validation-results.json | Out-Null
           $exitCode = $LASTEXITCODE
@@ -105,14 +122,6 @@ jobs:
               Write-Host "system-validation: all tests pass"
               exit 0
           }
-          # Allowlist of known-RED tests. Each entry must also appear in
-          # CHANGELOG `## Known issues` for the release to be tolerable.
-          # As of 0.9.50-dev the allowlist is empty: BUG-R3-1 closed by
-          # decision (documented divergence), FIND-R4-1 closed by hooks
-          # deferral, BUG-R4-1 + BUG-R5-1 + NEW-R10-1 closed by
-          # implementation. Re-add an entry only with a matching
-          # CHANGELOG known-issues bullet.
-          $allowed = @()
           $events = @(Get-Content ../system-validation-results.json | ForEach-Object { $_ | ConvertFrom-Json })
           $failed = $events | Where-Object { $_.Action -eq 'fail' -and $_.Test } | ForEach-Object { ($_.Test -split '/')[0] } | Sort-Object -Unique
           $unexpected = @($failed | Where-Object { $allowed -notcontains $_ })
@@ -236,12 +245,45 @@ jobs:
             exit 1
           }
 
+      # ----------------------------------------------------------------
+      # PR-PRE-F2 (pre-release status panel 2026-05-03): SignPath
+      # insertion point for smirror.exe. When SignPath Foundation
+      # issues the EV cert, add this step HERE — between
+      # `Locate built smirror.exe` and `Upload smirror.exe artifact for
+      # msi job`. The signed binary then propagates to BOTH the
+      # GoReleaser ZIP (already built; will need re-bundling) AND the
+      # MSI (which will pick it up from the artifact). Gate on a repo
+      # variable so flipping it on becomes a one-line change.
+      #
+      #   - name: Sign smirror.exe via SignPath
+      #     if: ${{ vars.SIGNPATH_ENABLED == '1' }}
+      #     uses: signpath/github-action-submit-signing-request@v1
+      #     with:
+      #       api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #       organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      #       project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      #       signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      #       artifact-configuration-slug: smirror-exe
+      #       github-artifact-id: <artifact-id-from-upload-step>
+      #       wait-for-completion: true
+      #       output-artifact-directory: signed/
+      #
+      # When this step lands: also (a) re-bundle the GoReleaser ZIP
+      # with the signed exe, (b) flip release-maturity.md row 1 to 🟢,
+      # (c) update SECURITY.md "Code Signing" status.
+      # ----------------------------------------------------------------
+
+      # PR-PRE-F2: artifact retention bumped 7 → 90 days so a Path-A
+      # in-place re-sign of an already-tagged release can recover the
+      # exact unsigned bytes after the SignPath cert arrives. Without
+      # this, the bytes are gone after a week and Path A becomes
+      # impossible silently.
       - name: Upload smirror.exe artifact for msi job
         uses: actions/upload-artifact@v4
         with:
           name: smirror-exe-${{ steps.version.outputs.VERSION }}
           path: ${{ steps.locate-exe.outputs.EXE_PATH }}
-          retention-days: 7
+          retention-days: 90
           if-no-files-found: error
 
       # PR-S4 (panel review pre-release 2026-04-28): SLSA
@@ -255,6 +297,18 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: ${{ steps.locate-exe.outputs.EXE_PATH }}
+
+      # PR-PRE-M4 (pre-release status panel 2026-05-03): exercise the
+      # attestation roundtrip from CI itself. Without this, a broken
+      # OIDC issuer / action-version regression / token-scope drift
+      # would silently produce attestations users can't verify, and
+      # CI is mute. `gh attestation verify` queries GitHub's signed
+      # attestation store with the artifact's hash + repo identity
+      # and validates the chain.
+      - name: Verify build-provenance attestation roundtrip (smirror.exe)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh attestation verify "${{ steps.locate-exe.outputs.EXE_PATH }}" --repo ${{ github.repository }}
 
       # PR-W4 (panel review pre-release 2026-04-28): extract the matching
       # CHANGELOG section and pin it as the GitHub Release body.
@@ -320,6 +374,27 @@ jobs:
       - name: Build MSI (using artifact binary; -SkipGoBuild)
         run: powershell -ExecutionPolicy Bypass -File installer\build-msi.ps1 -Version ${{ needs.release.outputs.version }} -SkipGoBuild
 
+      # ----------------------------------------------------------------
+      # PR-PRE-F2 (pre-release status panel 2026-05-03): SignPath
+      # insertion point for the MSI. Add this step HERE — between
+      # `Build MSI` and `MSI smoke test`, so the smoke test exercises
+      # the SIGNED installer (catches the case where signing breaks
+      # something at install time).
+      #
+      #   - name: Sign SelectiveMirror.msi via SignPath
+      #     if: ${{ vars.SIGNPATH_ENABLED == '1' }}
+      #     uses: signpath/github-action-submit-signing-request@v1
+      #     with:
+      #       api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #       organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+      #       project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+      #       signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+      #       artifact-configuration-slug: smirror-msi
+      #       github-artifact-id: <artifact-id-from-msi-build>
+      #       wait-for-completion: true
+      #       output-artifact-directory: signed/
+      # ----------------------------------------------------------------
+
       # SEC-C2 regression gate: block the release if any MSI invariant
       # fails (service silently registered, wrong install scope, HKCU
       # registry entries, uninstall leftover files, etc.). GitHub
@@ -338,6 +413,14 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: installer\bin\Release\SelectiveMirror.msi
+
+      # PR-PRE-M4 (pre-release status panel 2026-05-03): same
+      # attestation-roundtrip exercise for the MSI. Confirms the chain
+      # for the artifact users actually install.
+      - name: Verify build-provenance attestation roundtrip (MSI)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh attestation verify installer\bin\Release\SelectiveMirror.msi --repo ${{ github.repository }}
 
       # PR-Q5 (panel review pre-release 2026-04-28): published-artifact
       # smoke. Download the MSI from the GitHub release URL and confirm
