@@ -24,6 +24,14 @@ Telemetry v2 is **live** as of this tag — it was not in the original v1.0 scop
 
 ISO posture delta: NFR-PR-01 (Privacy) moved from "Met (declared, deferred measurement R-12)" to **"Met (declared, live measurement)"** — Cloudflare Worker access-log analysis is real and CI-probed daily, no longer awaiting the v1.0.1 cycle.
 
+### Compliance reading (customer-facing, ISO/IEC 25010:2023 lens)
+
+For customers doing vendor due-diligence or reading the v1.0.0 release with a compliance lens:
+
+- **Privacy** (LIVE): three-tier consent, opt-out by default (None tier with no startup pings); zero-traffic at None continuously verified by Cloudflare Worker access-log measurement (NFR-PR-01 in `docs/SRS.md` §4.6.7, ratio target = 0.000, CI-probed daily); `report-bug --submit` pipeline ships with end-to-end consent enforcement (categorical bucket only — no narrative columns ever stored server-side; narratives stay on GitHub Issues per CLAIMS-MAP C-15 / A-08).
+- **Authenticity**: TOCTOU-defended (single-resolution at `internal/sync/sync.go:446` per SM-085); NTFS reparse-points + symlinks rejected in service mode (SEC-H5 / PF-A3); state-DB symlink rejected on Open (SEC-H7 at `internal/state/state.go:137`); `report-bug --submit` payload signed with daily-rotating HMAC; telemetry uplink defended by `cf-ray` + SM Worker custom-header fingerprint probe (NEW-FINDING 13, commit `b996ab3`).
+- **Resistance**: 30+ SEC-* findings closed in the v0.9.x cycle (full cross-reference: `docs/security-audit-2026-04-18.md` + per-bug closure notes in `C:\BugTracker\projects\SelectiveMirror\`); CLAIMS-MAP validation gate at **25/28 GREEN** (89.3% total / 96.2% non-deferred) as the project's de-facto 29119-3 Test Completion Report for v1.0; full enumeration of any non-GREEN claim with deferral rationale in the "Bugs known at tag" subsection below.
+
 ### Deferred to v1.0.1
 
 - **R-12 — NFR-PR-01 measurement-function elaboration**: Cloudflare Worker access-log analysis; ratio of None-tier records over None-tier installs across the v1.0.0 release window; target = 0.000. First measurement at v1.0.1 cut, included in v1.0.1 release notes.
@@ -48,14 +56,31 @@ ISO posture delta: NFR-PR-01 (Privacy) moved from "Met (declared, deferred measu
 - `docs/VV-Plan.md` §1.1 V&V table corrected: "integration tests" moved from Validation/Method (category error per ISO/IEC/IEEE 29148:2018 §A.2 and 29119-1:2022 vocabulary) to Verification/Method; Validation/Method becomes "User acceptance, field testing, beta feedback" (R-8). BugTracker `SM-152` status flipped open → fixed (R-11).
 - `docs/iso-compliance.md` Source-documents-audited block refreshed to current revisions (R-9); §10.4 Change log gains a `v1.0 baseline (2026-05-01)` row (R-10).
 
-### Known issues at tag
+### Bugs known at tag (deferred to v1.0.x or later)
 
-The following findings are open against this version. Each is exercised by a test in `system-validation/`. The release pipeline (`.github/workflows/release.yml`) tolerates the named tests in its allowlist; everything else blocks. Plan: closed in v1.0.x patches.
+The following findings are open against this version. Each carries a target version and a remediation pointer. Where a regression test exists, the release pipeline (`.github/workflows/release.yml`) tolerates the named tests in its allowlist; everything else blocks. Compiled per ISO panel D-4 (2026-05-03 pre-tag work block). Closes DIS-1 and DIS-6 from the panel dissent register.
 
-The following findings are open against this version. Each is exercised by a test in `system-validation/`. The release pipeline (`.github/workflows/release.yml`) tolerates the named tests in its allowlist; everything else blocks. Plan: closed before v1.0.
+**Panel-found Mediums** (carried from v0.9.x panel-review backlog):
 
-- **OBS-R4-1 (Medium)** — Fresh `config.yaml` created by `smirror addmirror <path>` lands at mode 0666 (Go-reported); SEC-C5 baseline is 0600. Fix is a one-line plumbing of `writePreservingMode` into `cmdAddMirror`. Test: `system-validation/TestPanelR4_CLI_FreshConfig_FileMode` (uses `t.Logf`, not blocking).
-- **R4-PF-10 (Medium)** — Foreground (non-service) mode follows symlinks; the symlink-reject default is asymmetric with service mode (which rejects since SEC-H5 / PF-A3). A non-admin user's malicious `.syncignore` could plant a symlink to `%LOCALAPPDATA%\sensitive\file` and have it synced. Mitigation: keep monorepo-style configs out of foreground mode if you do not trust the directory tree. Fix: foreground default-reject + `--allow-symlinks` opt-in.
+- **OBS-R4-1 (Medium)** — Fresh `config.yaml` created by `smirror addmirror <path>` lands at mode 0666 (Go-reported); SEC-C5 baseline is 0600. Fix is a one-line plumbing of `writePreservingMode` into `cmdAddMirror`. Test: `system-validation/TestPanelR4_CLI_FreshConfig_FileMode` (uses `t.Logf`, not blocking). **Target: v1.0.1.**
+- **R4-PF-10 (Medium)** — Foreground (non-service) mode follows symlinks; the symlink-reject default is asymmetric with service mode (which rejects since SEC-H5 / PF-A3). A non-admin user's malicious `.syncignore` could plant a symlink to `%LOCALAPPDATA%\sensitive\file` and have it synced. Mitigation: keep monorepo-style configs out of foreground mode if you do not trust the directory tree. Fix: foreground default-reject + `--allow-symlinks` opt-in. **Target: v1.0.1.**
+
+**CLAIMS-MAP non-GREEN** (telemetry validation gate, both pre-deferred per `system-validation/CLAIMS-MAP.md`):
+
+- **CLAIMS-MAP A-01 (Low)** — "HMAC verify is constant-time enough that there's no useful timing attack." Test `TestVerifyHmac_TimingBoundedWithinThreshold` (benchmark, p99 deviation < 5%) requires a perf-harness session to author deterministically. Not blocking: the architectural claim is correct (constant-time `hmac.Equal`); the gap is empirical-evidence rather than implementation. **Target: v1.0.x.**
+- **CLAIMS-MAP A-03 (Low)** — "pg_stat_statements does NOT see payload literals." Test `TestPgStatStatements_NoPayloadLiterals` requires a live-Supabase fixture (smoke contribute, query stat_statements, assert no JSON literals). Not blocking: PostgREST normalizes parameters to `$1`, `$2` by construction; the gap is empirical-evidence. **Target: v1.0.x.**
+
+**Defense-in-depth deferrals** (filed during the v0.9.x cycle, not blocking but on the v1.0.x backlog):
+
+- **SM-082 items 3 + 4 (Minor)** — `svc.Control` policy asymmetry (warn-and-continue at `service.go:194` vs return-error at `service.go:300`) and Anomaly Detail field omits stderr (logged via `e.log.Warn` at `sync.go:1170` but dropped from anomaly record). Both low-priority error-handling polish; GitHub issue #94 carries the residual. **Target: v1.0.x.**
+- **SM-057 (Minor)** — Burst-delete reconciliation uses a 30-second sleep at `internal/watcher/watcher.go:574` (`burstReconcileDelay`); source comment already notes "should be quiescence-based". GitHub issue #69. **Target: v1.0.x.**
+- **SM-042 (Minor)** — Debounce regression test `Test-DebounceRapidWrites` (`test/run_tests.ps1:238-249`) asserts final content but not rclone invocation count. Effective coverage gap; should add log-parse / invocation-count assertion. GitHub issue #54. **Target: v1.0.x.**
+- **SM-198 (Minor)** — Burst-budget test reclassified to `t.Logf` at commit 76bf2f6; permanent decision (path-A live-sync throughput vs path-B harness sync_workers default + re-baseline) deferred. **Target: v1.0.x.**
+- **SM-212 (Low)** — `config.Validate` doesn't pre-validate that local-rclone `remote` is outside `local_path`. rclone catches at runtime (exit 7 "can't sync or move files on overlapping remotes"); only annoyance is log noise. **Target: v1.0.x.**
+
+**Quality regressions to track** (closes DIS-5 from the panel dissent register):
+
+- **State coverage regression** — `internal/state` dropped from 70.0% → 64.1% (5 metadata-write paths at 0% function coverage: `VacuumIfStale`, `PruneOrphanedProjects`, `MarkRemoteVerificationStale`, `ClearStaleExitCodes`, `IncrementMetaCounter`). All five are state-DB hygiene paths exercised by long-running daemons but not by unit tests. **Above the 50% per-package floor and 60% aggregate gate**, so not tag-blocking. **Target: v1.0.1.** (Likely from telemetry-related state.go growth without proportional tests.)
 
 A maintainer-readable view (severity, owner, planned remediation, target version) is in [docs/release-maturity.md](docs/release-maturity.md). Tests in this section are also tagged in CHANGELOG fix commits when closed.
 

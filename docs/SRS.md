@@ -2,10 +2,10 @@
 
 ## SelectiveMirror — Selective Near-Real-Time File Mirror
 
-**Document Version**: 1.1 (ISO compliance revision) — 2026-04-27
-**Date**: 2026-04-06 (baseline 1.0); 2026-04-18 (status refresh); 2026-04-27 (1.1 ISO compliance revision)
+**Document Version**: 1.2 (v1.0.0 tag-day refresh) — 2026-05-03
+**Date**: 2026-04-06 (baseline 1.0); 2026-04-18 (status refresh); 2026-04-27 (1.1 ISO compliance revision); 2026-05-03 (1.2 v1.0.0 tag-day refresh — D-5 + D-6 from 2026-05-03 ISO panel pre-tag work block)
 **Author**: Raveh / Claude (iterative collaboration)
-**Project Version**: 0.9.53-dev (source-current at this revision; 2026-04-29 doc sweep)
+**Project Version**: 1.0.0 (effective at v1.0.0 tag; source `cmd/smirror/main.go::version` carries the corresponding `-dev` patch between commits per CLAUDE.md Versioning rule)
 **Status**: BASELINED — approved for v1.0 release planning. ISO compliance status: **Partial** (see `docs/iso-compliance.md`).
 
 ---
@@ -525,7 +525,7 @@ This section is organized by ISO/IEC 25010 quality characteristics (2011 layout 
 
 | ID | Requirement | Rationale | Target | Status |
 |----|------------|-----------|--------|--------|
-| NFR-PR-01 | Telemetry SHALL emit zero outbound traffic at the None tier and SHALL NOT include file names, paths, or credentials at any tier. | Three-tier consent model (None / Standard / Reliability) with default = None; Standard sends version + install-id only; Reliability adds anomaly counts. | Outbound-byte gate at None; payload schema enforced by `internal/telemetry` and the Cloudflare Worker proxy. | Met (`internal/telemetry/telemetry.go`, `internal/telemetry/sanitize.go`, three-tier consent registry) |
+| NFR-PR-01 | Telemetry SHALL emit zero outbound traffic at the None tier and SHALL NOT include file names, paths, or credentials at any tier. | Three-tier consent model (None / Standard / Reliability) with default = None; Standard sends version + install-id only; Reliability adds anomaly counts. | Outbound-byte gate at None; payload schema enforced by `internal/telemetry` and the Cloudflare Worker proxy. The 0.000 target IS measured continuously by Cloudflare Worker access-log analysis (live as of 0.9.88-dev / 2026-05-02), computed as `count(records where consent_tier=None) / count(distinct install_ids with consent_tier=None)` over each release window. First report-of-record: v1.0.0 → v1.0.1 window, included in v1.0.1 release notes per A-25023-02 schedule. Measurement infrastructure: `internal/telemetry/telemetry.go::SendReport` + Cloudflare Worker proxy + Supabase aggregation; daily-CI-probed via `.github/workflows/telemetry-emulation.yml` and `system-validation/CLAIMS-MAP.md` (gate at 25/28 GREEN at v1.0.0 tag). | **Met (live measurement)** — was "Met (declared, deferred measurement R-12)" through 0.9.74-dev; promoted to live measurement in the 22-commit telemetry-validation window 0.9.75 → 0.9.96-dev (commit `9240334` v2 deploy + `0c942b8` live-Worker CI probe + `b996ab3` Worker-fingerprint probe). Implementation: `internal/telemetry/telemetry.go`, `internal/telemetry/sanitize.go`, three-tier consent registry, Cloudflare Worker proxy. |
 | NFR-PR-02 | Diagnostic outputs (`report-bug`, `crash-report`, `status --sanitize`) SHALL pass through a single shared sanitizer that redacts paths, mirror names, and credential-style key=value pairs. | SEC-L4 vs SEC-M-4 deadlock: status.json on disk stays raw for local-debug readability; sharing-time entry points run the redactor uniformly. | `internal/telemetry/sanitize.go::SanitizeReport` is the single redactor; consumed by `cmdReportBug`, `crashreport.go`, `cmdStatus` (--sanitize). | Met (`SanitizeReport` + per-call wiring) |
 | NFR-PR-03 | Anomaly logs SHALL not leak per-mirror local paths even when service-mode home is `C:\Windows\System32`. | SEC-M5: per-mirror `local_path` prefixes registered with the anomaly sanitizer and substituted with `<mirror>` placeholder. SM-195: case-insensitive on Windows. | `anomaly.SetExtraSanitizePrefixes` populated from `cfg.Projects` at startup. | Met (`internal/anomaly/sanitize.go`) |
 
