@@ -79,7 +79,7 @@ jobs:
       # is the cp1252 emoji crash that produced a 0-byte file. We
       # don't need real data; we need to verify the banner emits
       # without UnicodeEncodeError.
-      - name: Smoke: telemetry-debug.py renders banner without encoding crash
+      - name: "Smoke: telemetry-debug.py renders banner without encoding crash"
         env:
           DATABASE_URL: postgresql://invalid-host-for-smoke:5432/postgres
         shell: bash
