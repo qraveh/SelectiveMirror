@@ -285,74 +285,22 @@ def sparkline(values: list) -> str:
     return "".join(SPARK_BARS[min(int(v / mx * 8), 8)] for v in values)
 
 
-# SM-166: Server-side fields inserted into the published Markdown
-# digest (signature, client_version, bug_kind, bug_surface) originate
-# from opt-in submissions. Despite schema validation at ingest, an
-# unforeseen string containing pipes, backticks, link syntax, or line
-# breaks could corrupt the rendered table or inject formatting /
-# clickable content into the public docs. md_cell_escape neutralizes
-# Markdown structural characters and collapses whitespace so a single
-# cell stays a single cell. Truncation keeps wide tables readable.
+# SM-166 + PANEL-2 (BMAD review 2026-05-03): the Markdown cell
+# escaper used to live here as a copy. PANEL-2 found that the
+# operator-report had its own near-identical-but-not-identical copy,
+# and divergence between the two is itself a privacy bug (whichever
+# is patched first becomes the more-hardened one; the other regresses
+# silently). Both consumers now import from `_telemetry_md`.
 #
-# Note: install_id (or any prefix of it) is intentionally NEVER part
-# of the digest — see Q_BUGS_THIS_WEEK above for the SM-166 design
-# rationale.
-_MD_ESCAPE_PAIRS = (
-    ("\\", "\\\\"),
-    ("|", "\\|"),
-    ("`", "\\`"),
-    ("*", "\\*"),
-    ("_", "\\_"),
-    ("[", "\\["),
-    ("]", "\\]"),
-    ("<", "\\<"),
-    (">", "\\>"),
-    ("{", "\\{"),
-    ("}", "\\}"),
-)
-
-
-def md_cell_escape(s, max_len: int = 120) -> str:
-    """Sanitize a value for safe inclusion in a Markdown table cell.
-
-    - Replaces None/missing with the em-dash placeholder we use elsewhere.
-    - Strips ASCII control characters and collapses CR/LF/TAB to spaces
-      (a Markdown table cell must be one line).
-    - Escapes the table separator (|), backticks, asterisks, brackets,
-      angle brackets, and braces — anything that could either break
-      rendering or be interpreted as Markdown link / formatting.
-    - Truncates to max_len with an ellipsis. 120 chars is long enough
-      to keep error signatures useful while preventing pathological
-      blow-up of the digest file.
-
-    Numerics (int/float) are coerced to their str() form first, which
-    contains only safe characters — passing them through is harmless.
-    """
-    if s is None:
-        return "—"
-    s = str(s)
-    # Drop ASCII controls (0x00–0x1F except already-handled below) and
-    # convert any remaining whitespace control chars to plain space.
-    cleaned = []
-    for ch in s:
-        cp = ord(ch)
-        if ch in ("\r", "\n", "\t"):
-            cleaned.append(" ")
-        elif cp < 0x20 or cp == 0x7F:
-            # Other ASCII controls: drop entirely.
-            continue
-        else:
-            cleaned.append(ch)
-    s = "".join(cleaned)
-    # Markdown structural escapes. Order matters: backslash first, so
-    # the escapes added below aren't double-escaped.
-    for ch, esc in _MD_ESCAPE_PAIRS:
-        s = s.replace(ch, esc)
-    # Collapse runs of whitespace.
-    s = " ".join(s.split())
-    if len(s) > max_len:
-        s = s[: max_len - 1] + "…"
-    return s
+# Why imported via sys.path manipulation rather than as a regular
+# package: scripts/ is not a package (no __init__.py) and the script
+# filenames have hyphens that block normal `import`. The shared
+# helper sits as a sibling .py with a leading underscore to mark it
+# as internal; importing it requires nothing more than the standard
+# script-self-locating dance.
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from _telemetry_md import md_cell_escape, _MD_ESCAPE_PAIRS  # noqa: E402,F401
 
 
 def md_table(rows, headers, aligns=None):

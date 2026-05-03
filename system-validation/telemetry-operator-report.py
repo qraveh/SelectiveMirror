@@ -81,82 +81,25 @@ import psycopg
 
 
 # ---------------------------------------------------------------------------
-# Markdown escape — round-8 FINDING 26-29 hardening.
+# Markdown escape — PANEL-2 (BMAD review 2026-05-03).
 #
-# Mirrors the canonical implementation in
-# scripts/telemetry-report.py::md_cell_escape. Kept as a duplicate
-# rather than imported because the script lives in a different
-# directory (system-validation/ vs scripts/) and adding sys.path
-# manipulation for one function isn't worth the indirection.
+# Imported from scripts/_telemetry_md.py — the single source of truth
+# for the Markdown table-cell escaper. Both this script and
+# scripts/telemetry-report.py (the canonical published weekly digest)
+# import from there.
+#
+# Background: the panel found two near-identical-but-not-identical
+# escape functions in the two scripts. Divergence between operator-
+# debug and publish-safe sanitization is itself a privacy bug —
+# whichever is patched first becomes the more-hardened one; the other
+# regresses silently. PANEL-2 collapsed both into one module.
+#
+# DO NOT add a copy of md_cell_escape back here. If a render path
+# needs different behavior, parameterize the shared helper.
 # ---------------------------------------------------------------------------
-
-# Markdown special characters to escape with a backslash. Order matters:
-# escape `\` first so we don't double-escape.
-_MD_ESCAPE_PAIRS = [
-    ("\\", "\\\\"),
-    ("|", "\\|"),
-    ("`", "\\`"),
-    ("*", "\\*"),
-    ("_", "\\_"),
-    ("[", "\\["),
-    ("]", "\\]"),
-    ("{", "\\{"),
-    ("}", "\\}"),
-    ("<", "\\<"),
-    (">", "\\>"),
-    # Note: `&` is intentionally NOT escaped here. Markdown renderers
-    # treat `&` as literal unless it's part of an HTML entity, and
-    # escaping it as `\&` produces uglier output for legitimate uses
-    # ("Acme & Co" in a project name). HTML-injection via & alone is
-    # not a known vector — the dangerous attacks need `<` first, which
-    # IS escaped above.
-]
-
-
-def md_cell_escape(s, max_len: int = 120) -> str:
-    """Sanitize a string for inclusion in a Markdown table cell.
-
-    1. None → "—"
-    2. Strip control characters (< 0x20 plus DEL=0x7F), but convert
-       \\r / \\n / \\t to a single space first so they don't introduce
-       row-splitting line breaks (FINDING 26).
-    3. Strip RTL override / bidi-formatting characters that visually
-       reorder text (FINDING 28).
-    4. Escape Markdown specials (FINDINGs 26, 27).
-    5. Collapse runs of whitespace.
-    6. Truncate at max_len chars with `…` (FINDING 29).
-    """
-    if s is None:
-        return "—"
-    s = str(s)
-
-    # 2 + 3: clean control + bidi-format chars.
-    cleaned = []
-    for ch in s:
-        cp = ord(ch)
-        if ch in ("\r", "\n", "\t"):
-            cleaned.append(" ")
-        elif cp < 0x20 or cp == 0x7F:
-            continue
-        elif 0x202A <= cp <= 0x202E or 0x2066 <= cp <= 0x2069:
-            # Unicode bidi controls (LRE/RLE/PDF/LRO/RLO + LRI/RLI/FSI/PDI).
-            # Strip; their visual effect on table cells is misleading.
-            continue
-        else:
-            cleaned.append(ch)
-    s = "".join(cleaned)
-
-    # 4: escape Markdown specials.
-    for ch, esc in _MD_ESCAPE_PAIRS:
-        s = s.replace(ch, esc)
-
-    # 5: collapse whitespace.
-    s = " ".join(s.split())
-
-    # 6: truncate.
-    if len(s) > max_len:
-        s = s[: max_len - 1] + "…"
-    return s
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts"))
+from _telemetry_md import md_cell_escape  # noqa: E402,F401
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +132,17 @@ def get_release_dates() -> dict[str, dt.date]:
     return releases
 
 
+# Validation-pass test-marker patterns. Any client_version that ends
+# with one of these — or contains the parameterized round form
+# `-r\d+[a-z]?-` (e.g. `-r7-`, `-r7b-`, `-r8-`, `-r10-`) — is treated
+# as a test-marker injection, not real-user data. Edit this when a new
+# validation pass introduces a new marker style; keep round-number
+# parameterization generic so the classifier doesn't need a code
+# change every round.
+_TEST_MARKER_SUFFIXES = ("-r7b", "-r7-validation", "-r7-handshake")
+_TEST_MARKER_ROUND_RE = re.compile(r"-r\d+[a-z]?(-|$)")
+
+
 def classify_version(v: str, releases: dict) -> tuple[str, str]:
     """Return (release_date_str, classification).
     Classifications: released | dev | test-marker | unknown"""
@@ -196,8 +150,7 @@ def classify_version(v: str, releases: dict) -> tuple[str, str]:
     if base in releases:
         return (releases[base].isoformat(),
                 "released" if "-" not in v else f"derived-from-released-{base}")
-    if v.endswith("-r7b") or v.endswith("-r7-validation") or v.endswith("-r7-handshake") \
-            or "-r8-" in v:
+    if v.endswith(_TEST_MARKER_SUFFIXES) or _TEST_MARKER_ROUND_RE.search(v):
         return ("—", "test-marker")
     if "-dev" in v:
         return ("—", "dev (unreleased)")
@@ -255,6 +208,104 @@ def safe_section(name: str, fn):
 # ---------------------------------------------------------------------------
 # Section renderers
 # ---------------------------------------------------------------------------
+
+def _classification_bucket(v: str, releases: dict) -> str:
+    """Bucket a client_version into 'released' / 'dev' / 'test-marker'
+    / 'unknown' for the Section-0 breakdown. Lighter-weight wrapper
+    over `classify_version` that drops the date and normalizes the
+    'derived-from-released-…' refinement back to 'released'."""
+    if not v:
+        return "unknown"
+    _date, cls = classify_version(v, releases)
+    if cls.startswith("released") or cls.startswith("derived-from-released"):
+        return "released"
+    if cls.startswith("dev"):
+        return "dev"
+    if cls == "test-marker":
+        return "test-marker"
+    return "unknown"
+
+
+def render_real_data_baseline(cur, releases) -> None:
+    """PANEL-3 (BMAD review 2026-05-03): Mary's "Section 0 — Real-data
+    baseline."
+
+    The user's framing — *"we do not store raw data, so the report
+    should be perfect from the first run"* — combined with FINDING 16
+    (real-user rollups are empty in production) means the operator
+    cannot trust ANY downstream number until they know what fraction
+    is real users vs. test-marker injection.
+
+    This section answers, BEFORE anything else: of the contributions
+    in each rollup table, how many came from production binaries
+    downloaded by humans (`released`), from local -dev builds (`dev`),
+    from validation-pass test markers (`test-marker`), or from
+    versions with no matching git tag (`unknown`). The breakdown is
+    derived client-side from the existing `classify_version()` rather
+    than a server-side WHERE filter, so the SQL stays readable and
+    the classification rules are visible in one place.
+
+    Why first: under FINDING 16 reality, the answer is almost always
+    'all rows are test-marker; 0 real users.' If that's the answer,
+    the operator can stop reading immediately — every other section
+    is synthetic noise."""
+    print("## 0 — Real-data baseline (read this BEFORE anything below)")
+    print()
+    print("Of all contributions currently in the rollup tables, this")
+    print("breakdown shows how many came from each version classification.")
+    print("`test-marker` rows are validation-pass injections (`-r7`, `-r7b`,")
+    print("`-r8-`) that will be DELETEd. `released` rows are from real users")
+    print("running a CI-built binary that matches a `v*` git tag.")
+    print()
+    print("| Rollup table | released | dev | test-marker | unknown | TOTAL |")
+    print("| :--- | ---: | ---: | ---: | ---: | ---: |")
+
+    # Aggregate per (table, classification). One row per (table, version)
+    # → bucket in Python → sum.
+    table_totals = {}
+    for tbl, count_col in [("installation_daily_rollup", "count"),
+                            ("bug_daily_rollup", "reports"),
+                            ("reliability_daily_rollup", "count")]:
+        cur.execute(
+            f"SELECT client_version, COALESCE(SUM({count_col}), 0)::bigint "
+            f"FROM telemetry.{tbl} GROUP BY client_version")
+        bucket_sums = {"released": 0, "dev": 0, "test-marker": 0, "unknown": 0}
+        for v, n in cur.fetchall():
+            bucket = _classification_bucket(v, releases)
+            bucket_sums[bucket] += int(n)
+        total = sum(bucket_sums.values())
+        table_totals[tbl] = (bucket_sums, total)
+        print(f"| `{tbl}` | {bucket_sums['released']} | "
+              f"{bucket_sums['dev']} | {bucket_sums['test-marker']} | "
+              f"{bucket_sums['unknown']} | {total} |")
+    print()
+
+    # Verdict line: if ALL three tables have 0 released contributions,
+    # tell the operator explicitly that everything below is synthetic.
+    all_real = sum(t[0]["released"] for t in table_totals.values())
+    all_total = sum(t[1] for t in table_totals.values())
+    if all_total == 0:
+        print("> 🟢 **Production is empty.** No data in any rollup table.")
+        print("> This is the FINDING-16 reality if the install-event submit")
+        print("> pipeline (0.9.102-dev) hasn't yet been exercised by real")
+        print("> users.")
+    elif all_real == 0:
+        print("> ⚠️ **Zero real-user contributions.** Every row below is")
+        print("> synthetic (test-marker / dev / unknown). Treat aggregate")
+        print("> numbers as fixture data, not signal. Real users will appear")
+        print("> here as `released` once they install a v1.0 (or later)")
+        print("> CI-built binary AND opt into a non-None tier.")
+    else:
+        real_pct = round(100.0 * all_real / all_total, 1)
+        synthetic = all_total - all_real
+        print(f"> **{all_real} real-user contributions** ({real_pct}% of "
+              f"{all_total}); {synthetic} are synthetic / test-marker.")
+        if real_pct < 50:
+            print(">")
+            print("> Synthetic data exceeds real-user data. Sections below")
+            print("> mix both — interpret with caution.")
+    print()
+
 
 def render_freshness(cur) -> None:
     """FINDING 32: data-freshness indicator. Latest contribution date
@@ -316,37 +367,68 @@ def render_headline_counts(cur) -> None:
 def render_versions_seen(cur, releases) -> None:
     print("## 2 — Every smirror version seen in telemetry")
     print()
+    # PANEL-1 (BMAD review 2026-05-03): the prior implementation used
+    # nested FULL OUTER JOINs with `ON COALESCE(av.client_version,
+    # bv.client_version) = rv.client_version`, which silently dropped
+    # versions that only ever fired reliability snapshots — when both
+    # av and bv sides are NULL the COALESCE is NULL, the join condition
+    # `NULL = rv.client_version` is false, and the rel-only row is lost.
+    # Headline "Distinct versions seen: N" silently undercount.
+    #
+    # Fix: build the union of client_versions across all three rollup
+    # tables FIRST, then LEFT JOIN each per-table aggregate onto it.
+    # The driver row set is now correctly the UNION; nothing falls off.
     cur.execute("""
         WITH all_versions AS (
+            SELECT DISTINCT client_version FROM telemetry.installation_daily_rollup
+            UNION
+            SELECT DISTINCT client_version FROM telemetry.bug_daily_rollup
+            UNION
+            SELECT DISTINCT client_version FROM telemetry.reliability_daily_rollup
+        ),
+        install_agg AS (
             SELECT client_version,
-                   MAX(rollup_date)               AS last_seen,
-                   MIN(rollup_date)               AS first_seen,
-                   SUM(count)                     AS install_events
+                   MAX(rollup_date) AS last_seen,
+                   MIN(rollup_date) AS first_seen,
+                   SUM(count)       AS install_events
             FROM telemetry.installation_daily_rollup
             GROUP BY client_version
         ),
-        bug_versions AS (
-            SELECT client_version, SUM(reports) AS bug_events
+        bug_agg AS (
+            SELECT client_version,
+                   MAX(rollup_date) AS bug_last,
+                   MIN(rollup_date) AS bug_first,
+                   SUM(reports)     AS bug_events
             FROM telemetry.bug_daily_rollup
             GROUP BY client_version
         ),
-        rel_versions AS (
-            SELECT client_version, SUM(count) AS rel_events
+        rel_agg AS (
+            SELECT client_version,
+                   MAX(rollup_date) AS rel_last,
+                   MIN(rollup_date) AS rel_first,
+                   SUM(count)       AS rel_events
             FROM telemetry.reliability_daily_rollup
             GROUP BY client_version
         )
         SELECT
-            COALESCE(av.client_version, bv.client_version, rv.client_version) AS client_version,
-            av.last_seen,
-            av.first_seen,
-            COALESCE(av.install_events, 0) AS install_events,
-            COALESCE(bv.bug_events, 0)     AS bug_events,
-            COALESCE(rv.rel_events, 0)     AS rel_events
-        FROM all_versions av
-        FULL OUTER JOIN bug_versions bv ON av.client_version = bv.client_version
-        FULL OUTER JOIN rel_versions rv ON COALESCE(av.client_version, bv.client_version) = rv.client_version
-        ORDER BY (COALESCE(av.install_events, 0) + COALESCE(bv.bug_events, 0) + COALESCE(rv.rel_events, 0)) DESC,
-                 client_version DESC
+            v.client_version,
+            -- last_seen / first_seen across ALL tables (PANEL-1 bug
+            -- before: used only install_agg.last_seen / first_seen,
+            -- so versions with no install events showed `—` for
+            -- both even when bug or reliability data existed).
+            GREATEST(ia.last_seen,  ba.bug_last,  ra.rel_last)  AS last_seen,
+            LEAST(   ia.first_seen, ba.bug_first, ra.rel_first) AS first_seen,
+            COALESCE(ia.install_events, 0) AS install_events,
+            COALESCE(ba.bug_events,     0) AS bug_events,
+            COALESCE(ra.rel_events,     0) AS rel_events
+        FROM all_versions v
+        LEFT JOIN install_agg ia ON v.client_version = ia.client_version
+        LEFT JOIN bug_agg     ba ON v.client_version = ba.client_version
+        LEFT JOIN rel_agg     ra ON v.client_version = ra.client_version
+        ORDER BY (COALESCE(ia.install_events, 0)
+                   + COALESCE(ba.bug_events, 0)
+                   + COALESCE(ra.rel_events, 0)) DESC,
+                 v.client_version DESC
     """)
     rows = cur.fetchall()
     if not rows:
@@ -506,6 +588,21 @@ def render_bug_taxonomy(cur) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    # PANEL-2 follow-up: the banner_block() output contains a ⚠️ emoji,
+    # the verdict line contains 🟢, and the data-freshness section
+    # contains 🟢/🟡/🔴. On Windows the default stdout encoding is
+    # cp1252 (which cannot encode emoji), so writing the report to a
+    # pipe or file via plain `print()` raises UnicodeEncodeError and
+    # produces a 0-byte output file. Force UTF-8 on stdout/stderr at
+    # entry — the project is Windows-first; make the script Just Work
+    # for the maintainer it's built for.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except (AttributeError, ValueError):
+        # Older Python (<3.7) or already-replaced stream — best effort.
+        pass
+
     ap = argparse.ArgumentParser(
         description="Internal operator-facing telemetry report (NOT FOR PUBLICATION).",
         formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -551,8 +648,14 @@ def main() -> int:
     print("---")
     print()
 
-    # FINDING 32: data freshness up top so it's the first thing
-    # the operator sees.
+    # PANEL-3 (BMAD review 2026-05-03): Section 0 must come BEFORE
+    # everything else — under FINDING 16 reality the operator's first
+    # question is "is this real-user data or test-marker injection?"
+    # If the answer is "0 real users," the operator can stop reading.
+    safe_section("real-data baseline", lambda: render_real_data_baseline(cur, releases))
+
+    # FINDING 32: data freshness next so the operator sees pipeline
+    # liveness right after the real-vs-synthetic verdict.
     safe_section("freshness", lambda: render_freshness(cur))
 
     # All other sections wrapped per FINDING 33.
