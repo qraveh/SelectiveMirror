@@ -167,11 +167,12 @@ def check_response_came_from_cloudflare_sm_worker(url: str) -> tuple[bool, str]:
          server).
       2. SelectiveMirror Worker's distinctive 400 body fingerprint
          — POSTing a body with the wrong shape ({"foo":"bar"}) hits
-         the Worker's `isValidContributeBody` path, which returns
-         400 with `{"code":"bad_request","message":"Body must be a
-         JSON object with exactly the keys ..."}`. That code+message
-         shape is unique to our Worker; any other Cloudflare-fronted
-         service would respond differently to the same probe.
+         the Worker's `parseContributeBody` path (renamed from
+         isValidContributeBody in FINDING 15), which returns 400 with
+         `{"code":"bad_request","message":"Body must be a JSON object
+         with exactly the keys ..."}`. That code+message shape is
+         unique to our Worker; any other Cloudflare-fronted service
+         would respond differently to the same probe.
 
     Together these two pin both the edge AND the worker identity.
     Run first in the probe sequence so a misroute fails immediately

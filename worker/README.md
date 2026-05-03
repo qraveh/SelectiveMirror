@@ -87,9 +87,22 @@ ready.
 
 ## Operational notes
 
-- **Rate limit is per-edge-PoP, not global.** Cloudflare KV is regional;
-  a determined attacker spreading across many IPs/regions could each
-  get 30 req/min. For SM's threat model this is acceptable.
+- **Rate limit is a SOFT CAP, not a hard limit, and per-edge-PoP.**
+  The documented `30 req/min/IP` is a soft-cap target. Under burst
+  load the actual ceiling is ~2x because Cloudflare KV doesn't
+  support atomic increment — the Worker's read-check-write sequence
+  has a TOCTOU race that lets parallel requests slip through. A
+  60-request burst at concurrency 30 was observed to land 55+
+  successful POSTs in ~5 seconds (FINDING 14, round-5 validation
+  memo 2026-05-03). For absolute-flood scenarios, Cloudflare's
+  own DDoS protection is the floor. The real fix (Cloudflare
+  Durable Objects per IP shard, atomic increment) is deferred to
+  v1.0.x; threat-model impact today is low because replay can only
+  over-count aggregate counters, never exfiltrate.
+  Additionally, KV is regional so an attacker spreading across many
+  IPs/regions gets up to ~2N req/min PER PoP. For SM's threat model
+  this is acceptable; document it so operators planning capacity
+  aren't surprised.
 - **Rate-limit keys are salted hashes** (SM-163 fix). The salt is the
   `RATE_LIMIT_SALT_SECRET` mixed with the UTC date inside an HMAC; KV
   contents at rest cannot be reversed to IP addresses without the

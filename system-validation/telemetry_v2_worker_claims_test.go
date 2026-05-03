@@ -190,25 +190,40 @@ func TestTelemetryV2Worker_RetiredPathCheckBeforeMethodCheck(t *testing.T) {
 // hints (function name, parameter signatures, parameter ORDER hints)
 // don't leak via 4xx error bodies. Validation rejects with a generic
 // 400; PGRST never sees a malformed shape.
+//
+// FINDING 15 (round-5, 2026-05-03): the validator was renamed to
+// parseContributeBody and now returns the parsed object so the
+// Worker can re-serialize via JSON.stringify before forwarding —
+// stripping any UTF-8 BOM the client prepended and forcing
+// upstream Content-Type: application/json regardless of what the
+// client sent. Both formerly manifested as a generic 502
+// upstream_unavailable.
 func TestTelemetryV2Worker_HasBodyShapeValidator(t *testing.T) {
 	t.Parallel()
 
 	worker := readWorker(t)
 
-	if !strings.Contains(worker, "isValidContributeBody") {
-		t.Errorf("Worker does not declare isValidContributeBody — FINDING 1 requires a body-shape validator that rejects malformed payloads before they reach PostgREST")
+	if !strings.Contains(worker, "parseContributeBody") {
+		t.Errorf("Worker does not declare parseContributeBody — FINDING 1 requires a body-shape validator that rejects malformed payloads before they reach PostgREST (renamed from isValidContributeBody in FINDING 15)")
 	}
 	// The validator should be CALLED in the request flow (not just
 	// declared and unused). The call site must precede the upstream
 	// fetch.
-	callIdx := strings.Index(worker, "isValidContributeBody(bodyBytes)")
+	callIdx := strings.Index(worker, "parseContributeBody(bodyBytes)")
 	fetchIdx := strings.Index(worker, "fetch(upstreamRequest)")
 	if callIdx == -1 {
-		t.Errorf("isValidContributeBody is declared but not called from the fetch handler")
+		t.Errorf("parseContributeBody is declared but not called from the fetch handler")
 	} else if fetchIdx == -1 {
 		t.Errorf("Could not find fetch(upstreamRequest) callsite; structural test cannot proceed")
 	} else if callIdx >= fetchIdx {
-		t.Errorf("isValidContributeBody is called AFTER fetch(upstreamRequest) — body validation must precede the PostgREST call")
+		t.Errorf("parseContributeBody is called AFTER fetch(upstreamRequest) — body validation must precede the PostgREST call")
+	}
+
+	// FINDING 15: the parsed body is re-serialized via JSON.stringify
+	// before forwarding. Without this, BOM-prepended bodies and
+	// wrong-Content-Type bodies manifest as confusing 502s.
+	if !strings.Contains(worker, "JSON.stringify(parsed)") {
+		t.Errorf("Worker does not re-serialize the parsed body via JSON.stringify(parsed) — FINDING 15 requires the Worker to be the canonical-JSON gate so BOM/wrong-Content-Type don't leak as 502")
 	}
 
 	// The validator's rejection message must be generic — no

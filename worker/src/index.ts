@@ -63,7 +63,21 @@ interface Env {
 // via RLS WITH CHECK).
 const BODY_SIZE_CAP_BYTES = 100_000;
 
-// Rate limit configuration
+// Rate limit configuration. FINDING 14 (round-5 validation memo,
+// 2026-05-03): the per-IP rate limit is BEST-EFFORT, not a hard cap.
+// Cloudflare KV does not support atomic increment, so the
+// read-then-check-then-write sequence in checkRateLimit() has a
+// TOCTOU race: under burst load a parallel client can defeat the
+// limit by N×concurrency (validator observed 55+ HTTP 200 responses
+// in a 60-request burst against the documented 30/min — about 2x
+// the soft-cap). Cloudflare's own DDoS protection kicks in as the
+// absolute floor for true flood scenarios.
+//
+// Treat RATE_LIMIT_REQUESTS_PER_MINUTE as the SOFT-CAP TARGET, not
+// a guaranteed hard limit. The real fix (Durable Object per IP
+// shard) is a v1.0.x project; the privacy/threat-model impact today
+// is low (replay can only over-count an aggregate; counters are
+// monotonic; HMAC key compromise is the harder bound).
 const RATE_LIMIT_REQUESTS_PER_MINUTE = 30;
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 
@@ -200,16 +214,25 @@ export default {
             });
         }
 
-        // Body shape validation — FINDING 1 from the 2026-05-02
-        // validation pass. Without this, a malformed body would reach
-        // PostgREST and PGRST202 would echo the function name, parameter
-        // names, and parameter ORDER hints back to the client. That
-        // contradicts the architectural posture: regulators / auditors
-        // / curious users should learn the schema only by reading
-        // docs/telemetry-v2.sql, not by probing the API. Validate here
-        // so PGRST never sees a malformed shape and never has reason
-        // to surface its schema-cache hints.
-        if (!isValidContributeBody(bodyBytes)) {
+        // Body shape validation + parse — FINDING 1 from the 2026-05-02
+        // round-1 validation pass. Without this, a malformed body would
+        // reach PostgREST and PGRST202 would echo the function name,
+        // parameter names, and parameter ORDER hints back to the
+        // client. Validate here so PGRST never sees a malformed shape.
+        //
+        // FINDING 15 (round-5): parseContributeBody also RETURNS the
+        // parsed object, so we can re-serialize via JSON.stringify
+        // before forwarding to PostgREST. This means a UTF-8 BOM that
+        // a misconfigured client prepended (allowed by JSON.parse but
+        // rejected by PostgREST's stricter parser) is stripped, and
+        // a wrong Content-Type header from the client (e.g. text/plain)
+        // is replaced with application/json on the upstream call. Both
+        // formerly manifested as a generic 502 upstream_unavailable
+        // — confusing for an operator chasing what looks like a
+        // server problem when it's a fixable client-side serializer
+        // quirk.
+        const parsed = parseContributeBody(bodyBytes);
+        if (parsed === null) {
             return jsonResponse(400, {
                 code: "bad_request",
                 message: "Body must be a JSON object with exactly the keys " +
@@ -218,21 +241,29 @@ export default {
             });
         }
 
-        // Forward to PostgREST RPC. The body is forwarded verbatim;
-        // the Postgres function expects parameter-bound JSONB.
+        // Re-serialize the validated object (FINDING 15). The Worker is
+        // now the canonical-JSON gate; PostgREST sees only clean JSON
+        // with the right Content-Type, regardless of what the client
+        // sent on the wire.
+        const upstreamBody = JSON.stringify(parsed);
+
+        // Forward to PostgREST RPC.
         const supabaseBase = `https://${env.SUPABASE_PROJECT_REF}.supabase.co`;
         const upstreamURL = `${supabaseBase}/rest/v1/rpc/${RPC_FUNCTION}`;
 
         const upstreamRequest = new Request(upstreamURL, {
             method: "POST",
             headers: {
-                "Content-Type":    request.headers.get("Content-Type") || "application/json",
+                // Force application/json regardless of the client's
+                // Content-Type (FINDING 15). The body has been
+                // re-serialized above, so it's guaranteed-clean JSON.
+                "Content-Type":    "application/json",
                 "apikey":          env.SUPABASE_ANON_KEY,
                 "Authorization":   `Bearer ${env.SUPABASE_ANON_KEY}`,
                 "Content-Profile": "telemetry",
                 "Prefer":          "return=minimal",
             },
-            body: bodyBytes,
+            body: upstreamBody,
         });
 
         try {
@@ -279,23 +310,35 @@ export default {
     },
 };
 
-// isValidContributeBody — FINDING 1 from the 2026-05-02 validation
-// pass. Returns true iff the body parses to a JSON object with exactly
-// the three documented keys, each with the expected type. Any other
-// shape (extra keys, missing keys, wrong types, non-object payload,
-// non-string claimed_version, etc.) returns false and the caller
-// emits a generic 400. Keeping the validation rules minimal here
-// since the server-side function (`telemetry.contribute()`) does the
-// substantive checks (HMAC, schema_violation, unknown_event).
-function isValidContributeBody(bodyBytes: ArrayBuffer): boolean {
+// parseContributeBody — FINDING 1 (round-1, body-shape validation)
+// + FINDING 15 (round-5, return-the-parsed-object).
+//
+// Returns the parsed object iff the body parses to a JSON object with
+// exactly the three documented keys, each with the expected type.
+// Returns null on any other shape (extra keys, missing keys, wrong
+// types, non-object payload, non-string claimed_version, etc.).
+//
+// The caller re-serializes the returned object via JSON.stringify()
+// before forwarding to PostgREST, guaranteeing:
+//   - any UTF-8 BOM the client prepended is stripped (JSON.parse
+//     accepts BOM but JSON.stringify never emits one)
+//   - upstream Content-Type is always application/json regardless
+//     of what the client sent
+//   - the byte stream PostgREST sees is canonical JSON for the
+//     parsed shape, not whatever the client happened to wire
+//
+// Keeping the validation rules minimal here since the server-side
+// function (`telemetry.contribute()`) does the substantive checks
+// (HMAC, schema_violation, unknown_event).
+function parseContributeBody(bodyBytes: ArrayBuffer): Record<string, unknown> | null {
     let parsed: unknown;
     try {
         parsed = JSON.parse(new TextDecoder().decode(bodyBytes));
     } catch {
-        return false;
+        return null;
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return false;
+        return null;
     }
     const obj = parsed as Record<string, unknown>;
 
@@ -303,12 +346,12 @@ function isValidContributeBody(bodyBytes: ArrayBuffer): boolean {
     const expected = new Set(["payload", "claimed_version", "claimed_hmac_hex"]);
     for (const k of Object.keys(obj)) {
         if (!expected.has(k)) {
-            return false;
+            return null;
         }
     }
     for (const k of expected) {
         if (!(k in obj)) {
-            return false;
+            return null;
         }
     }
 
@@ -320,15 +363,15 @@ function isValidContributeBody(bodyBytes: ArrayBuffer): boolean {
         obj.payload === null ||
         Array.isArray(obj.payload)
     ) {
-        return false;
+        return null;
     }
     if (typeof obj.claimed_version !== "string" || obj.claimed_version.length === 0) {
-        return false;
+        return null;
     }
     if (typeof obj.claimed_hmac_hex !== "string" || obj.claimed_hmac_hex.length === 0) {
-        return false;
+        return null;
     }
-    return true;
+    return obj;
 }
 
 /**
