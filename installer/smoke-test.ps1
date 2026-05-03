@@ -157,6 +157,23 @@ foreach ($r in $reg) {
 if ($hkcu -eq 0 -and $hklm -gt 0) { Pass "$hklm/$($reg.Count) Registry entries use HKLM, 0 HKCU" }
 else                               { Fail "HKCU entries present: $hkcu (HKLM: $hklm)" }
 
+# Product icon (Add/Remove Programs / Installed apps).
+# Asserts both the Icon table entry exists AND ARPPRODUCTICON property
+# points at it. Without ARPPRODUCTICON the install entry has no icon
+# next to "SelectiveMirror" in Settings → Apps → Installed apps.
+try {
+    $icons = Query 'SELECT Name,Data FROM Icon'
+    $productIcon = $icons | Where-Object { (Field $_ 1) -eq 'ProductIcon.ico' }
+    if ($productIcon) { Pass "Icon table contains ProductIcon.ico" }
+    else              { Fail "Icon table missing ProductIcon.ico (found: $($icons.Count) icons)" }
+} catch {
+    Fail "Icon table absent or unreadable: $_"
+}
+$arpIcon = $props | Where-Object { (Field $_ 1) -eq 'ARPPRODUCTICON' } | ForEach-Object { Field $_ 2 }
+if ($arpIcon -eq 'ProductIcon.ico') { Pass "ARPPRODUCTICON=ProductIcon.ico (icon shown in Add/Remove Programs)" }
+elseif (-not $arpIcon)              { Fail "ARPPRODUCTICON not set (icon will be missing in Apps & features)" }
+else                                { Fail "ARPPRODUCTICON='$arpIcon' (expected 'ProductIcon.ico')" }
+
 #-------------------------------------------------------------------------------
 Heading "3. Install (synchronous)"
 $p = Start-Process msiexec -ArgumentList "/i","`"$MsiPath`"","/quiet","/l*v","`"$installLog`"" -Wait -PassThru

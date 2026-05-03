@@ -18,6 +18,20 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of $(var.ProductName) is already installed."
                   Schedule="afterInstallInitialize" />
 
+    <!-- Product icon (Add/Remove Programs / "Apps & features" / "Installed
+         apps"). MSI requires a multi-size .ico — generated from
+         installer/Resources/sm_icon.png at 1024×1024 via PIL into the
+         standard Windows icon size set (16, 20, 24, 32, 40, 48, 64, 96,
+         128, 256). The Id MUST end in .ico for the Windows Installer to
+         recognize the Icon table entry as an icon resource.
+
+         Source-of-truth note: regenerate sm_icon.ico from sm_icon.png via
+         the one-liner in `installer/Resources/README` (or just rerun the
+         PIL snippet) any time the source PNG changes. The ICO is
+         committed so the build doesn't need PIL at MSI-build time. -->
+    <Icon Id="ProductIcon.ico" SourceFile="Resources\sm_icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ProductIcon.ico" />
+
     <!-- UI -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="Resources\license.rtf" />
