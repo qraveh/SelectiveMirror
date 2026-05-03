@@ -47,9 +47,12 @@ installer/bin/
 installer/obj/
 docs/*.pdf
 
-# Test coverage profiles (go test -coverprofile=*.out)
+# Test coverage profiles (go test -coverprofile=*.out / *.txt /
+# bare 'coverage'). The bare-name pattern is the default
+# `go test -coverprofile=coverage` produces.
 *.out
 coverage*.txt
+/coverage
 
 # Bug reports
 smirror-bug-report-*.txt
@@ -67,3 +70,12 @@ __pycache__/
 
 # Personal narrative drafts (commit only when promoted to docs)
 docs/story10.md
+
+# Telemetry digest / operator-report snapshots — regeneratable from
+# scripts/telemetry-report.py + scripts/telemetry-debug.py. Round-N
+# point-in-time outputs land in system-validation/ during validation
+# rounds; the scripts themselves and the validation memos that
+# reference them are tracked, but the markdown snapshots are not.
+system-validation/telemetry-digest-*.md
+system-validation/telemetry-operator-report-*.md
+system-validation/telemetry-published-weekly-digest-*.md

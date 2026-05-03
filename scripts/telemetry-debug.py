@@ -91,9 +91,25 @@ import os
 import re
 import subprocess
 import sys
+
+# Round-11 FINDING 38: docstrings + banner output may contain non-ASCII
+# (em-dashes, emoji, arrows). On Windows the default stdout is cp1252
+# which cannot encode them, so even `--help` crashes BEFORE main()
+# runs. Reconfigure stdout/stderr to UTF-8 at module load (before
+# argparse / banner code touches them).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+except (AttributeError, ValueError):
+    pass
+
 import traceback
 
-import psycopg
+# psycopg is loaded LAZILY in main() rather than at module-load time.
+# Round-11 FINDING 37: eager import here breaks --help for any operator
+# without psycopg installed. `psycopg` is bound by main() via
+# _telemetry_deps.require_psycopg().
+psycopg = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -714,6 +730,8 @@ def main() -> int:
     ap.add_argument("--full-dump",
                     action="store_true",
                     help="Show top-30 rows per rollup table in Section 4 (default top-10).")
+    ap.add_argument("--verbose-env", action="store_true",
+                    help="Print env-file discovery diagnostics to stderr.")
     args = ap.parse_args()
 
     if not args.confirm_internal_only:
@@ -724,9 +742,35 @@ def main() -> int:
             "For the publish-safe digest, run scripts/telemetry-report.py.\n")
         return 2
 
-    if "DATABASE_URL" not in os.environ:
-        sys.stderr.write("ERROR: DATABASE_URL env var required.\n")
+    # Round-10 FINDING 36b: PowerShell has no `source` builtin and WSL2's
+    # `~` maps to Linux home (not Windows home where ~/.smirror-deploy.env
+    # actually lives). Auto-discover the env file across both shells so
+    # `python3 scripts/telemetry-debug.py --confirm-internal-only` Just
+    # Works without prior `source ~/.smirror-deploy.env`. Operator's
+    # manually-set env wins over the file (variables already in
+    # os.environ are not overwritten).
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _telemetry_env import ensure_database_url
+    db_url = ensure_database_url(verbose=args.verbose_env)
+    if not db_url:
+        sys.stderr.write(
+            "ERROR: DATABASE_URL environment variable not set, and no\n"
+            ".smirror-deploy.env file found in any of the standard\n"
+            "locations (~ / $USERPROFILE / /mnt/c/Users/<you> / repo root).\n"
+            "\n"
+            "Either:\n"
+            "  - Set DATABASE_URL=postgresql://... in your shell, or\n"
+            "  - Place .smirror-deploy.env at one of the locations above, or\n"
+            "  - Set $SMIRROR_DEPLOY_ENV to its full path.\n"
+            "\n"
+            "Run with --verbose-env to see which paths were probed.\n")
         return 2
+
+    # Round-11 FINDING 37: lazy-import psycopg so --help works even when
+    # the dep isn't installed.
+    from _telemetry_deps import require_psycopg
+    global psycopg
+    psycopg = require_psycopg()
 
     url = os.environ["DATABASE_URL"]
     project_id = project_id_from_url(url)

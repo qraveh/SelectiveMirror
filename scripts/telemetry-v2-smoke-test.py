@@ -51,10 +51,26 @@ import hashlib
 import json
 import os
 import sys
+
+# Round-11 FINDING 38: docstrings + banner output may contain non-ASCII
+# (em-dashes, emoji, arrows). On Windows the default stdout is cp1252
+# which cannot encode them, so even `--help` crashes BEFORE main()
+# runs. Reconfigure stdout/stderr to UTF-8 at module load (before
+# argparse / banner code touches them).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+except (AttributeError, ValueError):
+    pass
+
 from datetime import datetime, timezone
 from typing import Any
 
-import requests
+# Round-11 FINDING 37: requests is needed for the HTTP cases but is
+# loaded lazily so --help works without it. psycopg is OPTIONAL (only
+# needed for the rollup-delta DB check); leave its eager-import-with-
+# graceful-skip pattern intact.
+requests = None  # type: ignore[assignment]
 
 try:
     import psycopg as pg
@@ -316,6 +332,12 @@ def main() -> int:
     ap.add_argument("--version", default="0.0.0-smoke",
                     help="client_version to use in payloads (default: 0.0.0-smoke).")
     args = ap.parse_args()
+
+    # Round-11 FINDING 37: lazy-import requests so --help works without it.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _telemetry_deps import require_requests
+    global requests
+    requests = require_requests()
 
     master_key = os.environ.get("TELEMETRY_MASTER_KEY", "")
     if not master_key:

@@ -61,22 +61,27 @@ k-anonymity floor of 5 before publishing.
 
 import os
 import sys
+
+# Round-11 FINDING 38: docstrings + banner output may contain non-ASCII
+# (em-dashes, emoji, arrows). On Windows the default stdout is cp1252
+# which cannot encode them, so even `--help` crashes BEFORE main()
+# runs. Reconfigure stdout/stderr to UTF-8 at module load (before
+# argparse / banner code touches them).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+except (AttributeError, ValueError):
+    pass
+
 from datetime import date, datetime, timedelta, timezone
 
-try:
-    import psycopg as pg
-    from psycopg import sql as pg_sql  # noqa: F401
-    PSYCOPG_VERSION = 3
-except ImportError:
-    try:
-        import psycopg2 as pg
-        PSYCOPG_VERSION = 2
-    except ImportError:
-        sys.stderr.write(
-            "ERROR: psycopg (v3) or psycopg2-binary required.\n"
-            "Install with: pip install psycopg2-binary\n"
-        )
-        sys.exit(2)
+# psycopg (v3 preferred, v2 fallback) is needed but is loaded LAZILY
+# inside main() rather than at module-load time. Round-11 FINDING 37:
+# eager import here breaks `--help` for any operator who hasn't yet
+# `pip install`ed psycopg, since argparse never gets a chance to run.
+# `pg` and `PSYCOPG_VERSION` are populated by main() via _telemetry_deps.
+pg = None             # type: ignore[assignment]
+PSYCOPG_VERSION = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +243,38 @@ WHERE rollup_date >= now() - INTERVAL '30 days'
 GROUP BY client_version, most_common_anomaly_kind, anomaly_count_bucket
 ORDER BY snapshots DESC, client_version DESC
 LIMIT 20;
+"""
+
+# Round-11 user request (2026-05-03): "We also need cumulative
+# installation events by version. We also need cumulative bug reports
+# by version." The existing Q_VERSION_DIST is a 30-day window only.
+# These two queries are ALL-TIME — they survive when there's no recent
+# activity (the FINDING-16 reality where the "low-volume" digest
+# branch shows zeros for every weekly metric). The cumulative view
+# preserves the longer-arc signal: which versions have EVER landed,
+# which versions have EVER reported bugs, what the long-tail
+# distribution looks like.
+Q_CUMULATIVE_INSTALL_EVENTS_BY_VERSION = """
+SELECT
+  client_version,
+  SUM(count)::bigint AS install_events,
+  MIN(rollup_date)   AS first_seen_in_telemetry,
+  MAX(rollup_date)   AS last_seen_in_telemetry
+FROM telemetry.installation_daily_rollup
+GROUP BY client_version
+ORDER BY install_events DESC, client_version DESC;
+"""
+
+Q_CUMULATIVE_BUG_REPORTS_BY_VERSION = """
+SELECT
+  client_version,
+  SUM(reports)::bigint AS bug_reports,
+  COUNT(DISTINCT bug_kind) AS distinct_bug_kinds,
+  MIN(rollup_date)   AS first_report,
+  MAX(rollup_date)   AS last_report
+FROM telemetry.bug_daily_rollup
+GROUP BY client_version
+ORDER BY bug_reports DESC, client_version DESC;
 """
 
 # Hygiene: free-tier ceiling + last ingest activity.
@@ -631,18 +668,158 @@ def render_hygiene(hygiene):
     )
 
 
+def render_cumulative_install_events_by_version(rows):
+    """Round-11 user request: cumulative install events per version,
+    all-time. Survives the FINDING-16 reality where the 30-day window
+    is empty — even when nothing landed this week, the all-time
+    arc is preserved."""
+    out = ["## Cumulative installation events by version (all-time)\n"]
+    visible = k_anon_filter(rows, "install_events")
+    suppressed = len(rows) - len(visible)
+    if not rows:
+        out.append("_No install events ever recorded._\n")
+    elif not visible:
+        out.append(
+            f"_All version cells below k-anonymity floor ({K_ANONYMITY_FLOOR}). "
+            f"Suppressed: {suppressed} version(s)._\n")
+    else:
+        out.append(
+            md_table(
+                [
+                    {
+                        "Version": r["client_version"],
+                        "Install events": r["install_events"],
+                        "First seen": r["first_seen_in_telemetry"],
+                        "Last seen": r["last_seen_in_telemetry"],
+                    }
+                    for r in visible
+                ],
+                ["Version", "Install events", "First seen", "Last seen"],
+                aligns=["left", "right", "left", "left"],
+            )
+        )
+        if suppressed:
+            out.append(
+                f"\n_({suppressed} additional version(s) with install_events "
+                f"below k={K_ANONYMITY_FLOOR} suppressed.)_")
+    return "\n".join(out)
+
+
+def render_cumulative_bug_reports_by_version(rows):
+    """Round-11 user request: cumulative bug reports per version,
+    all-time. Same survival property as the install-events sibling."""
+    out = ["## Cumulative bug reports by version (all-time)\n"]
+    visible = k_anon_filter(rows, "bug_reports")
+    suppressed = len(rows) - len(visible)
+    if not rows:
+        out.append("_No bug reports ever recorded._\n")
+    elif not visible:
+        out.append(
+            f"_All version cells below k-anonymity floor ({K_ANONYMITY_FLOOR}). "
+            f"Suppressed: {suppressed} version(s)._\n")
+    else:
+        out.append(
+            md_table(
+                [
+                    {
+                        "Version": r["client_version"],
+                        "Bug reports": r["bug_reports"],
+                        "Distinct kinds": r["distinct_bug_kinds"],
+                        "First report": r["first_report"],
+                        "Last report": r["last_report"],
+                    }
+                    for r in visible
+                ],
+                ["Version", "Bug reports", "Distinct kinds",
+                 "First report", "Last report"],
+                aligns=["left", "right", "right", "left", "left"],
+            )
+        )
+        if suppressed:
+            out.append(
+                f"\n_({suppressed} additional version(s) with bug_reports "
+                f"below k={K_ANONYMITY_FLOOR} suppressed.)_")
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
-    db_url = os.environ.get("DATABASE_URL", "")
+    # Round-10 FINDING 35: render_honesty_banner() emits a 📊 emoji in
+    # the published digest. On Windows the default stdout encoding is
+    # cp1252 which can't encode emoji, so a maintainer running this
+    # script locally to spot-check the Sunday-cron output gets a 0-byte
+    # file + UnicodeEncodeError. CI (Ubuntu) is utf-8 by default so
+    # this never fires in the digest workflow itself. Force utf-8 on
+    # entry — the project is Windows-first; the script should Just
+    # Work for the Windows operator. Mirrors the same fix in
+    # scripts/telemetry-debug.py (round-9 bonus).
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except (AttributeError, ValueError):
+        pass  # Older Python or already-replaced stream — best effort.
+
+    # Round-10 FINDING 36: `--help` must always work and never crash
+    # on missing env. Pre-fix the script had no argument parsing at all
+    # — `--help` flowed straight to the `DATABASE_URL` env-var check
+    # and exited with the database error, leaving the maintainer
+    # unable to discover what the script does. argparse below makes
+    # `--help` a top-level concern so it always answers cleanly.
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="telemetry-report.py",
+        description=(
+            "Generate the SelectiveMirror weekly telemetry digest "
+            "(k-anonymity floor of 5 applied; safe to publish). "
+            "Reads from live Supabase via $DATABASE_URL; writes "
+            "Markdown to stdout. The published Sunday-cron variant "
+            "of this script is wired in `.github/workflows/"
+            "telemetry-digest.yml`. For the un-floored operator-debug "
+            "view, see `scripts/telemetry-debug.py --confirm-internal-only`."),
+        epilog=(
+            "ENV: DATABASE_URL (required) — postgresql://... pointing at "
+            "the Supabase project that hosts the v2 telemetry schema. "
+            "Source ~/.smirror-deploy.env if you have it."),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--verbose-env", action="store_true",
+                    help="Print env-file discovery diagnostics to stderr.")
+    args = ap.parse_args()
+
+    # Round-10 FINDING 36b: PowerShell has no `source` builtin and WSL2's
+    # `~` maps to Linux home (not Windows home where ~/.smirror-deploy.env
+    # actually lives). Auto-discover the env file across both shells so
+    # `python3 scripts/telemetry-report.py` Just Works without prior
+    # `source ~/.smirror-deploy.env`. Operator's manually-set env wins
+    # over the file (variables already in os.environ are not overwritten).
+    from _telemetry_env import ensure_database_url
+    db_url = ensure_database_url(verbose=args.verbose_env)
     if not db_url:
         sys.stderr.write(
-            "ERROR: DATABASE_URL environment variable not set.\n"
-            "Set it to your Supabase connection string and re-run.\n"
+            "ERROR: DATABASE_URL environment variable not set, and no\n"
+            ".smirror-deploy.env file found in any of the standard\n"
+            "locations (~ / $USERPROFILE / /mnt/c/Users/<you> / repo root).\n"
+            "\n"
+            "Either:\n"
+            "  - Set DATABASE_URL=postgresql://... in your shell, or\n"
+            "  - Place .smirror-deploy.env at one of the locations above, or\n"
+            "  - Set $SMIRROR_DEPLOY_ENV to its full path.\n"
+            "\n"
+            "Run with --verbose-env to see which paths were probed.\n"
+            "Run --help for the full usage.\n"
         )
         sys.exit(2)
+
+    # Round-11 FINDING 37: lazy-import psycopg so --help works even when
+    # the dep isn't installed. require_psycopg() prefers v3, falls back
+    # to v2; on failure prints actionable error with interpreter path
+    # and exits 2.
+    from _telemetry_deps import require_psycopg
+    global pg, PSYCOPG_VERSION
+    pg = require_psycopg()
+    PSYCOPG_VERSION = 3 if pg.__name__ == "psycopg" else 2
 
     try:
         conn = pg.connect(db_url) if PSYCOPG_VERSION == 3 else pg.connect(db_url)
@@ -659,6 +836,10 @@ def main():
         reliability_patterns = fetch_all(conn, Q_RELIABILITY_PATTERNS)
         hygiene = fetch_all(conn, Q_HYGIENE)
         quiet_kinds = fetch_all(conn, Q_QUIET_KINDS)
+        # Round-11 user request: cumulative all-time per-version views.
+        # Survive the FINDING-16 reality where the 30-day window is empty.
+        cum_install_by_ver = fetch_all(conn, Q_CUMULATIVE_INSTALL_EVENTS_BY_VERSION)
+        cum_bugs_by_ver = fetch_all(conn, Q_CUMULATIVE_BUG_REPORTS_BY_VERSION)
     except Exception as e:
         sys.stderr.write(f"ERROR: query failed: {e}\n")
         sys.exit(1)
@@ -676,6 +857,15 @@ def main():
     if event_volume_30d < 5 and headline["bugs_this_wk"] == 0 and bugs_ever < 3:
         print(render_header(headline, week_start))
         print(render_pipeline_alive_only(headline, hygiene, sparkline_values))
+        # Round-11 user request: even in the low-volume "pipeline alive"
+        # branch, surface the cumulative-by-version sections. They're the
+        # ONE thing that survives a quiet week — they show whether ANY
+        # version has ever contributed, even when the 7d/30d windows
+        # are zeros across the board.
+        print()
+        print(render_cumulative_install_events_by_version(cum_install_by_ver))
+        print()
+        print(render_cumulative_bug_reports_by_version(cum_bugs_by_ver))
         return
 
     # Full report
@@ -685,6 +875,14 @@ def main():
     print(render_bugs_section(bugs, quiet_kinds))
     print()
     print(render_versions(version_dist, install_channels))
+    print()
+    # Round-11 user request: cumulative-by-version sections. Placed
+    # between the 30d-window version distribution and the reliability
+    # patterns so the operator's eye flows from "this week's churn" →
+    # "all-time per-version arc" → "operational health."
+    print(render_cumulative_install_events_by_version(cum_install_by_ver))
+    print()
+    print(render_cumulative_bug_reports_by_version(cum_bugs_by_ver))
     print()
     print(render_reliability(reliability_patterns))
     print()

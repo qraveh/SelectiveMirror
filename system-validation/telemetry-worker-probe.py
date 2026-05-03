@@ -77,10 +77,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any, Callable
 
-import requests
+# Round-11 FINDING 38: argparse description = __doc__ which contains
+# `→` (U+2192). On Windows the default stdout is cp1252 which cannot
+# encode it, so `--help` itself crashes BEFORE main() runs. Reconfigure
+# stdout/stderr to UTF-8 at module load (before argparse touches them).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+except (AttributeError, ValueError):
+    pass
+
+# Round-11 FINDING 37: requests loaded lazily in main() so --help works
+# without it. Bound by main() via _telemetry_deps.require_requests().
+requests = None  # type: ignore[assignment]
 
 DEFAULT_URL = "https://smirror-telemetry.selectivemirror.workers.dev"
 
@@ -322,6 +335,13 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true",
                     help="Suppress per-check pass lines; only print failures")
     args = ap.parse_args()
+
+    # Round-11 FINDING 37: lazy-load requests so --help works without it.
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.join(repo_root, "scripts"))
+    from _telemetry_deps import require_requests
+    global requests
+    requests = require_requests()
 
     checks: list[tuple[str, Check]] = [
         ("response_came_from_sm_worker",       check_response_came_from_cloudflare_sm_worker),

@@ -23,11 +23,25 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import os
 import sys
+
+# Round-11 FINDING 38: docstrings + banner output may contain non-ASCII
+# (em-dashes, emoji, arrows). On Windows the default stdout is cp1252
+# which cannot encode them, so even `--help` crashes BEFORE main()
+# runs. Reconfigure stdout/stderr to UTF-8 at module load (before
+# argparse / banner code touches them).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+except (AttributeError, ValueError):
+    pass
+
 import time
 from datetime import datetime, timezone
 
-import requests
+# Round-11 FINDING 37: requests loaded lazily in main() so --help works.
+requests = None  # type: ignore[assignment]
 
 WORKER_URL = "https://smirror-telemetry.selectivemirror.workers.dev"
 
@@ -123,6 +137,13 @@ def main():
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--version", type=str, default="0.0.0-validation")
     args = ap.parse_args()
+
+    # Round-11 FINDING 37: lazy-load requests so --help works without it.
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, os.path.join(repo_root, "scripts"))
+    from _telemetry_deps import require_requests
+    global requests
+    requests = require_requests()
 
     work = []
     for i in range(args.n_installs):
