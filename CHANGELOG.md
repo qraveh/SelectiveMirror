@@ -5,9 +5,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-## [1.0.0] — 2026-05-01
+## [1.0.0] — 2026-05-03
 
-First stable release. Closes the v0.9.x panel-review backlog (5 of 5 Tier-1 findings closed), the Codex audit's nine new bugs (8 of 9 closed; SM-198 deferred), and the ISO compliance audit's six findings (5 closed + 1 partial — collision-acknowledgment block in `docs/iso-compliance.md` §10.6). Ships as **Self-Assessment with Partial ISO Compliance**: A-GOV-01 (independent external review) is permanently classified as Non-Conformity by Choice on ISO/IEC/IEEE 29148:2018 §5.2.4 / §6.5; the project deliberately does not pursue those clauses. SignPath Authenticode signing remains pending (external dependency) — first installs on Windows will continue to trigger SmartScreen until the SignPath Foundation cert lands; verification commands in `SECURITY.md`.
+First stable release. (Originally targeted 2026-05-01; the pause extended 2 days to ship and validate the Telemetry feature end-to-end — see "Telemetry — shipped live in this release" below.)
+
+Closes the v0.9.x panel-review backlog (5 of 5 Tier-1 findings closed), the Codex audit's nine new bugs (8 of 9 closed; SM-198 deferred), and the ISO compliance audit's six findings (5 closed + 1 partial — collision-acknowledgment block in `docs/iso-compliance.md` §10.6). Ships as **Self-Assessment with Partial ISO Compliance**: A-GOV-01 (independent external review) is permanently classified as Non-Conformity by Choice on ISO/IEC/IEEE 29148:2018 §5.2.4 / §6.5; the project deliberately does not pursue those clauses. SignPath Authenticode signing remains pending (external dependency) — first installs on Windows will continue to trigger SmartScreen until the SignPath Foundation cert lands; verification commands in `SECURITY.md`.
+
+### Telemetry — shipped live in this release
+
+Telemetry v2 is **live** as of this tag — it was not in the original v1.0 scope and was shipped during the 2026-05-01 → 2026-05-03 pause. What "live" means concretely:
+
+- Three-tier consent registry: **None / Standard / Reliability** with **default = None** (no opt-in, no traffic).
+- Cloudflare Worker proxy with daily rotating-salt IP hashing, retired-path semantics for legacy `/v1/forget`, body validation, schema-violation rewriting.
+- End-to-end `report-bug --submit` pipeline with bucketed payload (no narrative columns ever stored server-side); narratives stay on GitHub Issues.
+- Mass-emulation harness committed at `scripts/telemetry-v2-smoke-test.py` + `.github/workflows/telemetry-emulation.yml`.
+- Live-Worker fingerprint probe: cf-ray + SM Worker custom header verified daily and per-tag.
+- **CLAIMS-MAP validation gate** (`system-validation/CLAIMS-MAP.md`) at **25/28 GREEN** (89.3% total, 96.2% non-deferred). Two RED in active deferral: A-01 HMAC timing benchmark (perf-harness session, v1.0.x), A-03 pg_stat_statements smoke (live-Supabase fixture, v1.0.x). The CLAIMS-MAP gate is the project's de-facto 29119-3 Test Completion Report for v1.0.
+
+ISO posture delta: NFR-PR-01 (Privacy) moved from "Met (declared, deferred measurement R-12)" to **"Met (declared, live measurement)"** — Cloudflare Worker access-log analysis is real and CI-probed daily, no longer awaiting the v1.0.1 cycle.
 
 ### Deferred to v1.0.1
 

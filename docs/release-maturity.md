@@ -7,27 +7,27 @@ This file is a **live snapshot** of the indicators that decide whether Selective
 
 ---
 
-## Status board (refreshed: 2026-04-28)
+## Status board (refreshed: 2026-05-03 — v1.0.0 tag-day)
 
 | Indicator | Target for "general public" | Current state | Color |
 |---|---|---|---|
-| **Code signing (Authenticode)** | Signed MSI + EXE under SignPath EV cert | Plan in SECURITY.md; SignPath Foundation application not yet submitted | 🔴 |
-| **GitHub build-provenance** | Both MSI + EXE attested per release | Wired in release.yml v0.9.27 cycle; first attested release will be v0.9.27 | 🟡 |
-| **MSI consent UI** | Three-tier radio dialog visible during install | Property + registry wired since v0.9.4-dev; dialog landing in v0.9.27 cycle (PR-S2) | 🟡 |
-| **winget submission** | Latest MSI submitted to microsoft/winget-pkgs | Manifest template up-to-date; CI auto-submission gated on `WINGET_SUBMIT_ENABLED=1`; first auto-submission with v0.9.27 | 🟡 |
-| **Pre-release dryrun** | release-dryrun.yml green within 24h of tag | Workflow added in v0.9.27 cycle; one full successful run required before next tag | 🟡 |
-| **system-validation gating** | All `panel_findings_*_test.go` green at release time, OR allowlisted with CHANGELOG known-issues entry | Wired in release.yml v0.9.27 cycle. Allowlist for `panel_findings_*` is empty after the Phase A-G + Round 14 batch (all five Tier-1 findings closed). **However, the broader `system-validation/` suite has separate failures outside the panel-test scope** — telemetry server-contract / Worker / RLS tests, TestCLI_Status SQLITE_BUSY in-process schema-create race (SM-142, retry-loop covers the BUSY window), TestScenario_BurstFileCreation / High-depth queue under load. SM-197 (Codex audit 2026-04-29) flagged the dashboard as overstated. Honest read: 🟡. The release.yml gate passes because it scopes to panel-found tests; full-suite green is a v1.0.x roadmap item. | 🟡 |
-| **SLA smoke** | Latest scheduled run within 48h is green | Workflow added in v0.9.27 cycle; first scheduled run pending | 🟡 |
-| **Open Highs from latest panel review** | Zero open Highs against the about-to-tag commit | 0 open. BUG-R4-1 closed in 0.9.44-dev. FIND-R4-1 closed by hooks deferral 2026-04-29 (see docs/RESOLUTION-2026-04-29-hooks-deferred.md). | 🟢 |
-| **Open Mediums** | ≤ 3 open, all with planned fix versions | 4 open (OBS-R4-1..5, R4-PF-10). Planned for v1.0.x patches. | 🟡 |
-| **Telemetry health (last 7 days)** | Envelope rate steady, no recurring signature on the latest released version | First Phase-5-live release (v0.9.4-dev) data ingested; weekly digest sample-size still small | 🟡 |
-| **Report-bug PII smoke** | Release-time smoke green every release | `scripts/check-pii-leak.ps1` wired into release.yml + dryrun in v0.9.27 cycle | 🟢 |
-| **HMAC master key** | Stored, rotation procedure documented + tested, absent-key fail-loud at release | Stored ✓; rotation documented (telemetry-ops.md); CI fail-loud added in v0.9.27 cycle (PR-S3); rotation never actually executed | 🟡 |
-| **Test-count delta** | No regression vs. previous release | 640+ unit + 70+ system-validation; growing per cycle | 🟢 |
-| **Docs vs. code drift** | All `docs/*.md` reference real file paths and current behaviors | Latest sweep 2026-04-29 (CHANGELOG line 42-47); story.md properly framed as historical snapshot | 🟢 |
-| **Backups / rollback** | Documented rollback path that respects GAP-7 forward-only state DB | README "Compatibility & rollback" section added in v0.9.27 cycle (PR-W2) | 🟢 |
-| **CI runner age** | windows-latest still supported, Go 1.26 still supported | Both current 2026-04 | 🟢 |
-| **External review** | One independent eye on a recent panel-review batch | A-GOV-01 closed by decision: external review NOT planned (per CHANGELOG line 45). SELF-ASSESSMENT label retained. | ⚪ N/A by decision |
+| **Code signing (Authenticode)** | Signed MSI + EXE under SignPath EV cert | Plan in SECURITY.md; SignPath Foundation application status: *operator-confirmed (see indicator-detail below for current value)*. Long pole for the wider-beta audience widening; not a blocker for the maintainer-only / small-tester audience that v1.0.0 ships to. | 🔴 |
+| **GitHub build-provenance** | Both MSI + EXE attested per release | Wired in release.yml v0.9.27 cycle; first attested release lands with v1.0.0 tag (this tag). Flip to 🟢 after `gh attestation list` returns expected output post-tag. | 🟡 |
+| **MSI consent UI** | Three-tier radio dialog visible during install | Property + registry wired since v0.9.4-dev. Dialog shipped during v0.9.x cycle. Pre-tag operator gate (R-5 MSI smoke) confirms eyes-on. | 🟡 |
+| **winget submission** | Latest MSI submitted to microsoft/winget-pkgs | Manifest template up-to-date; CI auto-submission gated on `WINGET_SUBMIT_ENABLED=1` + `WINGET_SUBMIT_PAT`. First submission lands with v1.0.0 if gate flipped. | 🟡 |
+| **Pre-release dryrun** | release-dryrun.yml green within 24h of tag | Operator-side gate per sm-keeper Mode A; required green within 24h of the v1.0.0 tag. | 🟡 |
+| **system-validation gating** | All `panel_findings_*_test.go` green at release time, OR allowlisted with CHANGELOG known-issues entry | `panel_findings_*` allowlist empty (all 5 Tier-1 findings closed). **Telemetry CLAIMS-MAP gate at 25/28 GREEN (89.3% total / 96.2% non-deferred — comfortably above the ≥ 90% gate)** — the strongest 29119-3 Test Completion Report evidence the project has produced. Two RED in active deferral: A-01 HMAC timing benchmark (v1.0.x), A-03 pg_stat_statements smoke (v1.0.x). Broader system-validation suite still has the historical separate failures outside panel-test scope (TestCLI_Status SM-142 in-process schema-create race covered by retry loop; burst-file scenarios under load) — full-suite green remains a v1.0.x roadmap item. | 🟢 |
+| **SLA smoke** | Latest scheduled run within 48h is green | Operator-side gate per sm-keeper Mode A; refresh required if > 48h stale at tag. | 🟡 |
+| **Open Highs from latest panel review** | Zero open Highs against the about-to-tag commit | **0 open.** BUG-R4-1 closed in 0.9.44-dev. FIND-R4-1 closed by hooks deferral 2026-04-29 (see docs/RESOLUTION-2026-04-29-hooks-deferred.md). 22-commit telemetry-validation window (0.9.75 → 0.9.96-dev) added zero new Highs. | 🟢 |
+| **Open Mediums** | ≤ 3 open, all with planned fix versions | **6 open**, all with v1.0.x targets: OBS-R4-1 (cosmetic addmirror file mode), R4-PF-10 (foreground symlink-follow), CLAIMS-MAP A-01 (HMAC timing benchmark), CLAIMS-MAP A-03 (pg_stat_statements smoke), SM-082 items 3+4 (svc.Control inconsistency + Anomaly Detail stderr), SM-057 (burst-delete reconcile sleep). Above the ≤ 3 target; 🟡 with explicit v1.0.x deferral pages in CHANGELOG `[1.0.0]` "Bugs known at tag". | 🟡 |
+| **Telemetry health (continuous live measurement)** | Cloudflare Worker access-log probe daily-green; envelope rate steady; zero None-tier records over None-tier installs (NFR-PR-01 target = 0.000) | **Live as of 0.9.88-dev / 2026-05-02.** Worker emits records, schema-validated daily by `.github/workflows/telemetry-emulation.yml`, CLAIMS-MAP gate at 25/28 GREEN, fingerprint probe (cf-ray + SM Worker custom header) verified per-tag. First measurement of NFR-PR-01 ratio included in v1.0.1 release notes per A-25023-02 schedule. | 🟢 |
+| **Report-bug PII smoke** | Release-time smoke green every release | `scripts/check-pii-leak.ps1` wired into release.yml + dryrun. Plus `report-bug --submit` end-to-end (SM-158 ship 0.9.89-dev): bucketed payload only, no narrative columns ever stored server-side. | 🟢 |
+| **HMAC master key** | Stored, rotation procedure documented + tested, absent-key fail-loud at release | Stored ✓; rotation documented (telemetry-ops.md); CI fail-loud landed v0.9.27 cycle. Build-key fingerprint visible in `smirror version`; CLAIMS-MAP C-18 GREEN. Rotation never actually executed — that drill is a v1.0.x item. | 🟡 |
+| **Test-count delta** | No regression vs. previous release | **650+ unit + 80+ system-validation**; aggregate `internal/` coverage ~65.9%, telemetry 79.6% (+2.7pts). **State coverage regression**: 70.0% → 64.1% (5 metadata-write paths at 0% — VacuumIfStale, PruneOrphanedProjects, MarkRemoteVerificationStale, ClearStaleExitCodes, IncrementMetaCounter). Above the 50% per-package floor and 60% aggregate gate; tracked as DIS-5 in CHANGELOG `[1.0.0]` "Bugs known at tag" for v1.0.x backlog. | 🟡 |
+| **Docs vs. code drift** | All `docs/*.md` reference real file paths and current behaviors | Latest sweep 2026-05-03 (this dashboard refresh). Test Strategy doc (`docs/test-strategy.md`) authored this tag closes A-29119-01 / R-16. SRS Project Version line bumped to current (D-5 in panel pre-tag work block). | 🟢 |
+| **Backups / rollback** | Documented rollback path that respects GAP-7 forward-only state DB | README "Compatibility & rollback" section in place. | 🟢 |
+| **CI runner age** | windows-latest still supported, Go 1.26 still supported | Both current 2026-05. | 🟢 |
+| **External review** | One independent eye on a recent panel-review batch | A-GOV-01 closed by decision: external review NOT planned. Multi-role panel-review pattern + telemetry CLAIMS-MAP gate are the substitutes. SELF-ASSESSMENT label retained on `docs/iso-compliance.md`. | ⚪ N/A by decision |
 
 **Color key**: 🟢 ready · 🟡 partial / on-track but not closed · 🔴 blocker for the listed audience · ⚪ deliberate non-goal
 
@@ -41,7 +41,7 @@ The set of indicators above maps to a recommended audience.
 |---|---|---|
 | **Maintainer-only** | Code signing not required. Indicators all 🟡 or better. No active red-state findings. | ✅ Ready. v0.9.x shipped at this level; v1.0.0 retains it. |
 | **Maintainer + small group of testers** | Same as above + audience signaling in README + known-issues inventory in CHANGELOG. | ✅ Ready. **Current audience for v1.0.0** (recommended for the first 30 days post-tag while telemetry signature data accumulates and the SignPath cert lands). |
-| **Wider beta (forum / Hacker News announcement)** | Above + winget submitted (🟢 row 4) + SLA smoke 🟢 + at most 1 open High with explicit user-facing call-out + first dryrun green. | ❌ Not yet. winget pending, SLA pending, 2 open Highs. |
+| **Wider beta (forum / Hacker News announcement)** | Above + winget submitted (🟢 row 4) + SLA smoke 🟢 + at most 1 open High with explicit user-facing call-out + first dryrun green. | ❌ Not yet. winget pending, SLA pending, **0 open Highs** (was 2 in prior dashboard text — corrected: see Open-Highs row above). |
 | **General public / "production"** | All rows 🟢 or ⚪ except optional. Code signing 🟢 (the row 1 blocker). MSI consent UI 🟢 dialog. Zero open Highs. | ❌ Not yet. Row 1 (signing) is the long pole. |
 
 The maintainer signs off on which audience the next release targets. The release-runbook does not gate on this; it surfaces it. When in doubt: stay one rung lower than you think.
