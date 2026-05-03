@@ -61,11 +61,27 @@ Inputs:
 Output: Markdown to stdout. Pipe to a file for the operator
 deliverable. Convention: filename includes `-INTERNAL-`.
 
+Relationship to scripts/telemetry-report.py (the canonical
+published weekly digest):
+
+  This script is a SIBLING of `telemetry-report.py`, intentionally
+  named to reflect subordination — `telemetry-debug` is the
+  operator's "give me the un-floored view RIGHT NOW" tool, while
+  `telemetry-report` is the contract-bound publish-safe path the
+  CI cron uses. They share `_telemetry_md.py` (escape primitive)
+  and the same SQL query patterns. The split is explicitly NOT
+  flag-toggled (`--debug`) on the canonical script because that
+  flag would proliferate concerns across one entry point; the
+  sibling-script structure keeps each entry's CLI surface clean.
+
+  Doc-graph: both scripts are listed in
+  `docs/operations/telemetry-ops.md`'s glossary table, side-by-side.
+
 Usage:
     set -a; source ~/.smirror-deploy.env; set +a
-    python3 system-validation/telemetry-operator-report.py \\
+    python3 scripts/telemetry-debug.py \\
         --confirm-internal-only \\
-        > system-validation/telemetry-operator-report-INTERNAL-r7b.md
+        > docs/telemetry/telemetry-debug-INTERNAL-$(date +%Y-%m-%d).md
 """
 from __future__ import annotations
 
@@ -97,8 +113,11 @@ import psycopg
 # DO NOT add a copy of md_cell_escape back here. If a render path
 # needs different behavior, parameterize the shared helper.
 # ---------------------------------------------------------------------------
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts"))
+# 0.9.10x-dev: operator-debug script moved from system-validation/ to
+# scripts/ alongside the canonical published digest (panel scope
+# decision, Option C). _telemetry_md is now a sibling — same dir,
+# direct import.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _telemetry_md import md_cell_escape  # noqa: E402,F401
 
 
@@ -174,20 +193,34 @@ def project_id_from_url(url: str) -> str:
 
 
 def banner_block() -> list[str]:
-    """The 'NOT FOR PUBLICATION' framing that runs at the top of the
-    report (FINDING 30)."""
+    """The 'INTERNAL — DO NOT PUBLISH' framing that runs at the top
+    AND bottom of the report.
+
+    Panel item 5 (P2, BMAD round 9): the prior version called itself
+    an "Operator Report" — a name that sounds publishable. The
+    canonical artifact is the published weekly digest
+    (`scripts/telemetry-report.py`); this one is the un-floored
+    sibling, intentionally named for subordination. Title in the
+    body uses "INTERNAL — Operator View" so a reader who scrolls
+    past the banner still lands on the same framing.
+    """
     return [
-        "> ⚠️ **INTERNAL OPERATOR REPORT — NOT FOR PUBLICATION** ⚠️",
+        "> ⚠️ **INTERNAL — DO NOT PUBLISH** ⚠️",
         ">",
-        "> This report dumps raw rollup-table data WITHOUT the k-anonymity",
-        "> floor that the canonical published digest applies. Cells with",
-        "> 1-4 contributors appear here verbatim and would leak distinct",
-        "> install fingerprints if shared externally. Suppress before",
-        "> sharing — or run `scripts/telemetry-report.py` for the",
-        "> publish-safe weekly digest.",
+        "> This is `scripts/telemetry-debug.py` output — the operator's",
+        "> un-floored sibling of `scripts/telemetry-report.py` (the",
+        "> canonical published weekly digest). It dumps raw rollup-table",
+        "> rows WITHOUT the k-anonymity floor of 5 that the published",
+        "> digest applies. Cells with 1-4 contributors appear here",
+        "> verbatim and would leak distinct install fingerprints if",
+        "> shared externally.",
         ">",
-        "> Reading this is fine; copy-pasting it to Slack / a blog post /",
-        "> a public GitHub issue is not.",
+        "> **Reading this is fine; copy-pasting it to Slack / a blog post /",
+        "> a public GitHub issue is not.** For a publish-safe view, run:",
+        ">",
+        "> ```",
+        "> python3 scripts/telemetry-report.py",
+        "> ```",
         "",
     ]
 
@@ -325,9 +358,19 @@ def render_freshness(cur) -> None:
     row = cur.fetchone()
     last = row[0] if row else None
     if last is None:
-        print("_(all rollup tables empty — no data freshness signal yet)_")
+        print("_(all rollup tables empty — no data freshness signal yet. ")
+        print("This is the **FINDING 16 / install-event pipeline** state if no real users have ")
+        print("yet contributed: server-side schema is in place, client-side first_seen + upgrade ")
+        print("submit pipeline shipped in 0.9.102-dev (commit 11285cb), but rollups stay empty ")
+        print("until a CI-signed binary at Standard or Reliability tier runs `smirror start`.)_")
     else:
-        today = dt.date.today()
+        # Panel item 6 (P2, BMAD round 9): use UTC date for the
+        # freshness arithmetic, not local. The rollup_date column is
+        # stored as a UTC date by the server's _bump_* functions
+        # (`(reported_at)::TIMESTAMPTZ::DATE`), so comparing against
+        # local `today()` produces an off-by-one for operators in
+        # any timezone west of UTC.
+        today = dt.datetime.now(dt.timezone.utc).date()
         delta = (today - last).days
         if delta == 0:
             age = "today"
@@ -350,7 +393,13 @@ def render_freshness(cur) -> None:
 
 
 def render_headline_counts(cur) -> None:
-    print("## 1 — Headline counts (no k-anonymity floor; raw)")
+    # Panel item 11 (P3, BMAD round 9): "raw" → "un-floored." The
+    # word "raw" is overloaded in the privacy contract (raw payloads
+    # are the v1 antipattern that v2 architecturally eliminated).
+    # The accurate description is that this section bypasses the
+    # k-anonymity FLOOR — the data is still aggregated; just not
+    # suppressed at the small-cell threshold.
+    print("## 1 — Headline counts (un-floored; no k-anonymity suppression)")
     print()
     print("| Table | Buckets | Total contributions | Distinct client_versions | Distinct rclone_versions |")
     print("| :--- | ---: | ---: | ---: | ---: |")
@@ -470,55 +519,103 @@ def render_release_timeline(cur, releases) -> None:
     print()
 
 
-def render_raw_dumps(cur) -> None:
-    print("## 4 — Raw rollup-table dumps (top 30 rows per table by count)")
+def _empty_state_msg(table: str) -> str:
+    """Panel item 7 (P2, BMAD round 9): empty-state message links to
+    the FINDING-16 deferral context so the operator immediately
+    knows whether "no rows" means "broken pipeline" or "we
+    haven't shipped that pipeline yet."
+
+    installation_daily_rollup empty + path-(a) shipped means no
+    real-user contributions YET (server expects them; no users have
+    started a CI-signed daemon).
+
+    bug_daily_rollup empty means no `report-bug --submit` calls yet.
+
+    reliability_daily_rollup empty is FINDING-16 PERSISTENT — the
+    reliability_snapshot writer is deferred to v1.0.x; this rollup
+    will stay empty until the sync-engine + watcher counters land.
+    """
+    if table == "installation_daily_rollup":
+        return ("_(no rows. Pipeline shipped 0.9.102-dev / commit 11285cb; "
+                "stays empty until a CI-signed binary at non-None tier runs `smirror start`.)_")
+    if table == "bug_daily_rollup":
+        return ("_(no rows. `report-bug --submit` (SM-158, 0.9.89-dev) has the "
+                "wire path; rollup populates per submission.)_")
+    if table == "reliability_daily_rollup":
+        return ("_(no rows. **FINDING 16 deferred-pipeline:** the "
+                "`reliability_snapshot` writer's bucket-dimension counters "
+                "are pending in `internal/sync` + `internal/watcher` — see "
+                "`docs/PRIVACY.md` 'Currently shipped vs. deferred.' "
+                "Reliability tier is functionally identical to Standard "
+                "tier today.)_")
+    return "_(no rows)_"
+
+
+def render_raw_dumps(cur, full_dump: bool = False) -> None:
+    """Panel item 8 (P2, BMAD round 9): raw dumps now opt-in. Default
+    truncates each table to top-10 rows with a "Showing X of N"
+    note; pass `--full-dump` for the prior 30-row behavior. Most
+    operator visits are first-pass triage — if they need deeper
+    inspection they can re-run with the flag.
+    """
+    cap = 30 if full_dump else 10
+    title_n = "top 30" if full_dump else "top 10 (pass `--full-dump` for top 30)"
+    print(f"## 4 — Un-floored rollup-table dumps ({title_n} rows per table by count)")
     print()
-    print("These are the actual rows the digest script aggregates from. Useful for ops debugging when the digest looks wrong.")
+    print("Actual rows the digest script aggregates from. Useful for ops debugging when the digest looks wrong.")
     print()
 
-    print("### 4a — installation_daily_rollup (top 30 by count)")
+    print(f"### 4a — installation_daily_rollup ({title_n} by count)")
     print()
-    cur.execute("""
+    cur.execute(f"""
         SELECT rollup_date, event_name::text, install_method, os_family,
                client_version, mirror_count_bucket::text, background_mode::text,
                delete_policy::text, rclone_version, prior_version,
                days_since_first_seen_bucket::text, count
         FROM telemetry.installation_daily_rollup
         ORDER BY count DESC, rollup_date DESC
-        LIMIT 30
+        LIMIT {cap}
     """)
     rows = cur.fetchall()
     if not rows:
-        print("_(no rows)_")
+        print(_empty_state_msg("installation_daily_rollup"))
     else:
+        cur.execute("SELECT COUNT(*) FROM telemetry.installation_daily_rollup")
+        total = cur.fetchone()[0]
+        print(f"_Showing {len(rows)} of {total} bucket row(s)._")
+        print()
         print("| date | event | method | os | client_version | mirrors | bg | delete | rclone | prior | days_since | count |")
         print("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: |")
         for r in rows:
             print("| " + " | ".join(md_cell_escape(c) for c in r) + " |")
     print()
 
-    print("### 4b — bug_daily_rollup (top 30 by reports)")
+    print(f"### 4b — bug_daily_rollup ({title_n} by reports)")
     print()
-    cur.execute("""
+    cur.execute(f"""
         SELECT rollup_date, bug_kind, bug_surface, client_version,
                severity_hint::text, source::text, submitted_tier::text, reports
         FROM telemetry.bug_daily_rollup
         ORDER BY reports DESC, rollup_date DESC
-        LIMIT 30
+        LIMIT {cap}
     """)
     rows = cur.fetchall()
     if not rows:
-        print("_(no rows)_")
+        print(_empty_state_msg("bug_daily_rollup"))
     else:
+        cur.execute("SELECT COUNT(*) FROM telemetry.bug_daily_rollup")
+        total = cur.fetchone()[0]
+        print(f"_Showing {len(rows)} of {total} bucket row(s)._")
+        print()
         print("| date | kind | surface | client_version | severity | source | tier | reports |")
         print("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: |")
         for r in rows:
             print("| " + " | ".join(md_cell_escape(c) for c in r) + " |")
     print()
 
-    print("### 4c — reliability_daily_rollup (top 30 by count)")
+    print(f"### 4c — reliability_daily_rollup ({title_n} by count)")
     print()
-    cur.execute("""
+    cur.execute(f"""
         SELECT rollup_date, client_version, anomaly_count_bucket::text,
                most_common_anomaly_kind, sync_attempts_bucket::text,
                sync_failures_bucket::text, restart_count_bucket::text,
@@ -526,12 +623,16 @@ def render_raw_dumps(cur) -> None:
                state_db_size_bucket::text, count
         FROM telemetry.reliability_daily_rollup
         ORDER BY count DESC, rollup_date DESC
-        LIMIT 30
+        LIMIT {cap}
     """)
     rows = cur.fetchall()
     if not rows:
-        print("_(no rows)_")
+        print(_empty_state_msg("reliability_daily_rollup"))
     else:
+        cur.execute("SELECT COUNT(*) FROM telemetry.reliability_daily_rollup")
+        total = cur.fetchone()[0]
+        print(f"_Showing {len(rows)} of {total} bucket row(s)._")
+        print()
         print("| date | client_version | anomalies | leading anomaly | sync_att | sync_fail | restart | queue | dead | db_size | count |")
         print("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | ---: |")
         for r in rows:
@@ -609,6 +710,10 @@ def main() -> int:
     ap.add_argument("--confirm-internal-only",
                     action="store_true",
                     help="Acknowledge this is an internal report and won't be published. Required.")
+    # Panel item 8 (P2, BMAD round 9): raw dumps are opt-in.
+    ap.add_argument("--full-dump",
+                    action="store_true",
+                    help="Show top-30 rows per rollup table in Section 4 (default top-10).")
     args = ap.parse_args()
 
     if not args.confirm_internal_only:
@@ -623,28 +728,61 @@ def main() -> int:
         sys.stderr.write("ERROR: DATABASE_URL env var required.\n")
         return 2
 
-    releases = get_release_dates()
-    sys.stderr.write(f"Loaded {len(releases)} releases from git tag history.\n")
-
     url = os.environ["DATABASE_URL"]
     project_id = project_id_from_url(url)
-    try:
-        conn = psycopg.connect(url)
-        cur = conn.cursor()
-    except Exception as e:
-        sys.stderr.write(f"ERROR: could not connect to database: {type(e).__name__}: {e}\n")
-        return 3
 
-    # Banner + header
+    # Emit the banner + header FIRST, before the DB connect attempt.
+    # This way an operator who runs the script with a bad
+    # DATABASE_URL still sees the "INTERNAL — DO NOT PUBLISH"
+    # framing in the output, plus a structured error stanza in
+    # place of the data sections. Pre-fix, a connection failure
+    # produced an empty stdout with the error only on stderr —
+    # operators piping to a file would see an empty file. (Also
+    # the path the round-9 Bonus-1 cp1252 regression took before
+    # the utf-8 reconfigure landed.)
     for line in banner_block():
         print(line)
-    print("# SelectiveMirror Telemetry — Operator Report")
+    # Panel item 5 (P2, BMAD round 9): title flipped from "Operator
+    # Report" (sounds publishable) to "INTERNAL — Operator View"
+    # (the framing the banner above just primed). The canonical
+    # publishable artifact is the WEEKLY DIGEST; this is its
+    # un-floored sibling.
+    print("# SelectiveMirror Telemetry — INTERNAL Operator View")
     print()
     print(f"**Generated**: {dt.datetime.now(dt.timezone.utc).isoformat()} UTC")
     # FINDING 31: project ID only; no hostname / region.
     print(f"**Source**: live Supabase (project ID `{project_id}`)")
     print(f"**Schema**: docs/telemetry-v2.sql (stream-aggregate-and-discard)")
+    print(f"**Sibling of**: `scripts/telemetry-report.py` (the canonical published digest)")
     print()
+
+    releases = get_release_dates()
+    sys.stderr.write(f"Loaded {len(releases)} releases from git tag history.\n")
+
+    try:
+        conn = psycopg.connect(url)
+        cur = conn.cursor()
+    except Exception as e:
+        sys.stderr.write(f"ERROR: could not connect to database: {type(e).__name__}: {e}\n")
+        # Emit a clean error stanza in the body so the Markdown file
+        # is still valid and the operator can see what went wrong.
+        print("---")
+        print()
+        print("## ❌ Database connection failed")
+        print()
+        print(f"_Could not reach the live Supabase project `{project_id}`._")
+        print()
+        print("Possible causes:")
+        print()
+        print("- `DATABASE_URL` env var is malformed or stale")
+        print("- Network blocked from this host to the Supabase pooler")
+        print("- Supabase project is paused (free tier inactivity)")
+        print()
+        print(f"Underlying error: `{type(e).__name__}: {e}`")
+        print()
+        for line in banner_block():
+            print(line)
+        return 3
     print("---")
     print()
 
@@ -662,7 +800,7 @@ def main() -> int:
     safe_section("headline counts",       lambda: render_headline_counts(cur))
     safe_section("versions seen",         lambda: render_versions_seen(cur, releases))
     safe_section("release timeline",      lambda: render_release_timeline(cur, releases))
-    safe_section("raw rollup dumps",      lambda: render_raw_dumps(cur))
+    safe_section("un-floored rollup dumps", lambda: render_raw_dumps(cur, full_dump=args.full_dump))
     safe_section("rclone distribution",   lambda: render_rclone_distribution(cur))
     safe_section("bug taxonomy coverage", lambda: render_bug_taxonomy(cur))
 

@@ -23,11 +23,13 @@ import sys
 
 
 def load_module():
-    """Load telemetry-operator-report.py as a module despite the
-    hyphen in the filename."""
+    """Load telemetry-debug.py as a module despite the hyphen in
+    the filename. (Renamed from telemetry-operator-report.py in
+    0.9.10x-dev when the script moved scripts/ alongside the
+    canonical published digest — panel scope decision Option C.)"""
     here = pathlib.Path(__file__).resolve().parent
-    src = here / "telemetry-operator-report.py"
-    spec = importlib.util.spec_from_file_location("telemetry_operator_report", src)
+    src = here / "telemetry-debug.py"
+    spec = importlib.util.spec_from_file_location("telemetry_debug", src)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"could not load {src}")
     mod = importlib.util.module_from_spec(spec)
@@ -142,13 +144,20 @@ def test_project_id_unknown_form(m):
 # ---------------------------------------------------------------------------
 
 def test_banner_block_says_not_for_publication_FINDING_30(m):
-    """FINDING 30: every operator report must be marked NOT FOR
-    PUBLICATION at the top so a casual copy-paste-publish doesn't
-    leak un-floor-filtered data."""
+    """FINDING 30: every operator-debug output must be marked
+    INTERNAL / DO NOT PUBLISH at the top so a casual copy-paste-
+    publish doesn't leak un-floor-filtered data.
+
+    Panel item 5 (BMAD round 9): banner phrasing is "DO NOT
+    PUBLISH" rather than "NOT FOR PUBLICATION" — shorter, more
+    imperative. Both signal the same thing; the test accepts
+    either."""
     block = m.banner_block()
     text = "\n".join(block)
-    # Required phrases that signal "internal only."
-    assert "NOT FOR PUBLICATION" in text
+    # Required phrases that signal "internal only." Either banner
+    # phrasing satisfies the contract.
+    assert "DO NOT PUBLISH" in text or "NOT FOR PUBLICATION" in text, \
+        f"banner missing publish-warning phrase: {text!r}"
     assert "INTERNAL" in text
     assert "k-anonymity" in text
     # The banner must point at the publish-safe alternative.

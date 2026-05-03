@@ -149,5 +149,23 @@ during the v2 deploy.
 | Schema source | [`docs/telemetry-v2.sql`](../telemetry-v2.sql) |
 | Worker source | [`worker/src/index.ts`](../../worker/src/index.ts) |
 | Smoke test | [`scripts/telemetry-v2-smoke-test.py`](../../scripts/telemetry-v2-smoke-test.py) |
-| Digest script | [`scripts/telemetry-report.py`](../../scripts/telemetry-report.py) — v2-native since 0.9.85-dev |
+| Live-Worker probe | [`system-validation/telemetry-worker-probe.py`](../../system-validation/telemetry-worker-probe.py) — daily CI gate |
+| Mass-emulation harness | [`system-validation/telemetry-mass-emulation.py`](../../system-validation/telemetry-mass-emulation.py) — read-only burst test |
+| Markdown escape primitive | [`scripts/_telemetry_md.py`](../../scripts/_telemetry_md.py) — single source for `md_cell_escape`; imported by both digest + debug scripts |
+| Published weekly digest | [`scripts/telemetry-report.py`](../../scripts/telemetry-report.py) — v2-native since 0.9.85-dev. **Use for cron / publication. Always applies the k-anonymity floor.** |
+| Operator debug view | [`scripts/telemetry-debug.py`](../../scripts/telemetry-debug.py) — sibling of the published digest, named for subordination. Adds raw rollup dumps, version cross-references, and Section 0 "real-data baseline." **For maintainer eyes only — refuses to render without `--confirm-internal-only`.** Output filename pattern: `*-INTERNAL-*.md`. |
 | Deploy runbook | [`deploy-telemetry-v2.md`](./deploy-telemetry-v2.md) |
+
+### Why two report scripts?
+
+The published `telemetry-report.py` cron path enforces k-anonymity (≥5
+contributors per cell or the cell is suppressed) and emits a Markdown
+digest fit to commit to `docs/telemetry/weekly-*.md`. The operator
+sometimes needs the un-floored view RIGHT NOW — what does every
+rollup row look like for debugging an apparent reporting bug? That's
+`telemetry-debug.py`. Both are in `scripts/` and share their
+escape-and-render primitives (`_telemetry_md.py`); the names signal
+which one ships to the world (canonical) vs. which one stays inside
+the maintainer's terminal (debug). The debug script's
+`--confirm-internal-only` flag is a structural guard against
+accidental publishing — the script refuses to run without it.

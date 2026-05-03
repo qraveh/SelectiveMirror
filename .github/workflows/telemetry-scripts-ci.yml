@@ -1,0 +1,113 @@
+name: Telemetry scripts CI
+
+# Cross-platform unit tests for the Python telemetry-reporting scripts.
+#
+# Bonus-1 from the round-9 validation memo (BMAD panel, 2026-05-03):
+# the operator-debug script's banner_block uses ⚠️ + 🟢/🟡/🔴 emoji.
+# On Windows with default cp1252 stdout the script crashed with
+# UnicodeEncodeError, leaving a 0-byte output file. The bug shipped
+# because no CI lane runs the script on Windows. This workflow is
+# the gate.
+#
+# What this catches that telemetry-emulation.yml does NOT:
+#   - Cross-platform encoding regressions (cp1252 vs utf-8 on Windows)
+#   - Pure-Python helper drift (md_cell_escape, classify_version,
+#     project_id_from_url, banner_block) BEFORE a DB-emulation run
+#     finds out the hard way.
+#   - Import-graph regressions (e.g., scripts/_telemetry_md.py
+#     extraction PANEL-2 fix).
+#
+# This is a fast lane (no postgres setup, no docker). Runs on every
+# push that touches the relevant scripts, on every PR.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/_telemetry_md.py'
+      - 'scripts/telemetry-report.py'
+      - 'scripts/telemetry-debug.py'
+      - 'scripts/test_telemetry_report.py'
+      - 'scripts/test_telemetry_debug.py'
+      - '.github/workflows/telemetry-scripts-ci.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'scripts/_telemetry_md.py'
+      - 'scripts/telemetry-report.py'
+      - 'scripts/telemetry-debug.py'
+      - 'scripts/test_telemetry_report.py'
+      - 'scripts/test_telemetry_debug.py'
+      - '.github/workflows/telemetry-scripts-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  test-cross-platform:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is the load-bearing platform for SelectiveMirror per
+        # CLAUDE.md. ubuntu + macOS provide cross-encoding sanity.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.12']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # The unit tests don't need psycopg, but importing the scripts
+      # requires it because the import is at module scope. Install
+      # the binary wheel (no compilation needed).
+      - name: Install psycopg
+        run: python -m pip install --quiet 'psycopg[binary]'
+
+      - name: Run telemetry-report unit tests
+        run: python scripts/test_telemetry_report.py
+
+      - name: Run telemetry-debug unit tests
+        run: python scripts/test_telemetry_debug.py
+
+      # Bonus-1 reproducer: invoke telemetry-debug.py with a known-bad
+      # DATABASE_URL so it exits 3 (DB connection failure) AFTER
+      # rendering banner + Section 0 stub. The crash mode this catches
+      # is the cp1252 emoji crash that produced a 0-byte file. We
+      # don't need real data; we need to verify the banner emits
+      # without UnicodeEncodeError.
+      - name: Smoke: telemetry-debug.py renders banner without encoding crash
+        env:
+          DATABASE_URL: postgresql://invalid-host-for-smoke:5432/postgres
+        shell: bash
+        run: |
+          # The script should reach the connection step and exit 3.
+          # Any earlier crash (e.g. encoding error in banner) would
+          # exit with a different code or no output.
+          set +e
+          python scripts/telemetry-debug.py --confirm-internal-only > /tmp/smoke-out.md 2>/tmp/smoke-err.txt
+          rc=$?
+          set -e
+          echo "exit code: $rc"
+          echo "--- stdout (first 30 lines) ---"
+          head -30 /tmp/smoke-out.md || true
+          echo "--- stderr (first 20 lines) ---"
+          head -20 /tmp/smoke-err.txt || true
+          # Connection should fail (exit 3); the crucial check is that
+          # the script ran far enough to print SOMETHING — i.e. didn't
+          # die in banner emission.
+          # On Windows pre-fix, stdout was empty (UnicodeEncodeError
+          # before the first print landed). Post-fix, stdout has the
+          # banner.
+          if [ ! -s /tmp/smoke-out.md ]; then
+            echo "FAIL: stdout is empty — banner-emit crash regression?"
+            exit 1
+          fi
+          if ! grep -q "INTERNAL" /tmp/smoke-out.md; then
+            echo "FAIL: stdout doesn't contain 'INTERNAL' marker; banner shape regressed."
+            exit 1
+          fi
+          echo "PASS: banner rendered, exit code $rc as expected for bad DATABASE_URL"
