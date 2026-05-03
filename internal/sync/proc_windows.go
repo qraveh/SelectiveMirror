@@ -45,7 +45,8 @@ var (
 // Returns the handle as uintptr so the supervisor's signature is platform
 // neutral (proc_other.go provides an erroring stub of the same shape).
 func openProcessHandle(pid int) (uintptr, error) {
-	h, err := windows.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
+	// gosec G115 nolint: pid is os/exec's cmd.Process.Pid (positive on Windows, DWORD-bounded).
+	h, err := windows.OpenProcess(processQueryLimitedInformation, false, uint32(pid)) //nolint:gosec
 	if err != nil {
 		return 0, fmt.Errorf("OpenProcess(pid=%d): %w", pid, err)
 	}

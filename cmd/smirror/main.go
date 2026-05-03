@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.105-dev"
+var version = "0.9.106-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -1044,7 +1044,9 @@ Examples:
 func statusEmitSanitized(configPath string) {
 	cfg, _ := config.Load(configPath)
 
-	statusPath := configPath
+	// Both branches below assign statusPath; the prior `:= configPath`
+	// initializer was dead (ineffassign).
+	var statusPath string
 	if cfg != nil {
 		statusPath = filepath.Join(dataDir(cfg), "status.json")
 	} else {
@@ -1082,6 +1084,13 @@ func statusEmitSanitized(configPath string) {
 	}
 }
 
+// cmdStatus is a top-level CLI command that emits a multi-section status
+// report (service state, metrics, per-mirror sync state, ghosts, anomalies).
+// It is sequential reporting code — each section is its own conditional block
+// driven by config / state availability. Refactoring into per-section helpers
+// is tracked as a v1.0.x cleanup; cyclomatic complexity is intrinsic to the
+// reporting surface, not branch logic.
+//nolint:gocyclo // sequential reporting function; per-section split is a v1.0.x cleanup
 func cmdStatus(configPath string, args []string) {
 	if subcommandHelp(args, `Usage: smirror status [mirror] [--sanitize]
 

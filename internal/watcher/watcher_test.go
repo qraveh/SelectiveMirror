@@ -119,6 +119,7 @@ func TestFindProject_Match(t *testing.T) {
 	pw := m.findProject(filePath)
 	if pw == nil {
 		t.Fatal("expected to find project for file under project dir")
+		return // staticcheck SA5011
 	}
 	if pw.project.Name != "proj-a" {
 		t.Errorf("project = %q, want %q", pw.project.Name, "proj-a")

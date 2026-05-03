@@ -326,11 +326,11 @@ func runWithSupervisor(
 			// If the probe errored this tick (or any past tick), we treat
 			// cpu/io as "unknown" — neither flat nor moving. Output alone
 			// is still meaningful.
-			if !probeOK {
-				// Probe failed this tick. Keep prev.cpu/io unchanged so a
-				// future successful probe can compare. Output remains
-				// authoritative.
-			}
+			// probeOK==false: cpu/io samples are noise this tick. prev.cpu/io
+			// stays unchanged below (we only carry over successfully-sampled
+			// fields), so a future successful probe can still compare deltas.
+			// (Empty `if !probeOK` block removed; staticcheck SA9003.)
+			_ = probeOK
 
 			if anyMoved {
 				stallCounter = 0

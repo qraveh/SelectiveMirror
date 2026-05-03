@@ -35,6 +35,12 @@ import (
 // install-event payloads: MSI builds set INSTALL_METHOD via build flag;
 // fall back to "unknown" when unset. This is a low-cardinality field
 // for histogram bucketing — never used for routing or content gating.
+//
+// Currently unwired — buildBugReportPayload below uses the hardcoded
+// "unknown" placeholder until the build-time `var installMethod` ldflag
+// injection lands. Kept in tree (not deleted) so the future wire-in is
+// a one-line edit at the payload site instead of a file recreation.
+//nolint:unused // wired in by ldflag-injection follow-up; placeholder for now
 func installMethodHint() string {
 	// Future: a build-time injected `var installMethod = "msi"` etc.
 	// would be more accurate. For now, "unknown" is the honest default.
@@ -63,7 +69,9 @@ func buildBugReportPayload(
 	tier telemetry.Tier,
 	oneShot bool,
 ) map[string]any {
-	submittedTier := "standard"
+	// All four switch arms assign submittedTier; the prior initializer was
+	// dead (ineffassign).
+	var submittedTier string
 	switch {
 	case oneShot:
 		submittedTier = "one_shot"
@@ -267,7 +275,11 @@ func upgradeToStandardForSubmit(configPath string) error {
 // platformLabel returns "windows-amd64" / "linux-arm64" / etc., used by
 // install-event payloads. Kept here in case future payload shapes need
 // it; bug_report payloads don't include OS today (the bucket is
-// composed from client_version + bug_kind + bug_surface).
+// composed from client_version + bug_kind + bug_surface). Companion to
+// installMethodHint above; both are placeholders for future build-time
+// injection. Wired in by the same follow-up that lands the OS-bucket
+// dimension on bug_report payloads.
+//nolint:unused // placeholder for future payload-shape extension
 func platformLabel() string {
 	return runtime.GOOS + "-" + runtime.GOARCH
 }

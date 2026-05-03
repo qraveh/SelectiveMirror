@@ -3334,6 +3334,7 @@ func TestSyncSingleFile_ContentAddressedSkip(t *testing.T) {
 	fs, _ := e.state.GetFileState(proj.Name, "known.txt")
 	if fs == nil {
 		t.Fatal("state should exist")
+		return // staticcheck SA5011
 	}
 	if fs.LocalHash != hash {
 		t.Errorf("local_hash should be updated to %s, got %s", hash[:8], fs.LocalHash[:8])
@@ -3450,6 +3451,7 @@ END;`); err != nil {
 	}
 	if fs == nil {
 		t.Fatal("state after B is nil")
+		return // staticcheck SA5011
 	}
 	if fs.RemoteHash != hashA {
 		t.Fatalf("test setup expected stale remote_hash A after blocked verification; got %q", fs.RemoteHash)

@@ -121,13 +121,13 @@ mirrors:
 // SetField (and AddMirror, RemoveMirror) must not widen the file's mode on
 // edit. Previous code rewrote with 0644 unconditionally, downgrading the
 // initial 0600 from new-config creation.
+//
+// Platform note: on Windows, file modes are largely simulated; the meaningful
+// bit is the read-only flag controlled by mode&0200. We still assert the
+// stored mode value to catch regressions in the helper, but tolerate platform
+// differences. (Previously this was an empty `if` body — staticcheck SA9003
+// flagged it; lifted into the function comment instead.)
 func TestSetField_PreservesMode(t *testing.T) {
-	if os.Getenv("CI") == "" && filepath.Separator == '\\' {
-		// On Windows, file modes are largely simulated; the meaningful bit
-		// is the read-only flag controlled by mode&0200. We still assert the
-		// stored mode value to catch regressions in the helper, but tolerate
-		// platform differences.
-	}
 	configPath := testConfigDir(t, baseConfig)
 	// testConfigDir creates with 0644; force 0600 for this test.
 	if err := os.Chmod(configPath, 0600); err != nil {
@@ -240,6 +240,7 @@ func TestAddMirror_WithOptionalFields(t *testing.T) {
 	fp := cfg.FindProject("FullProject")
 	if fp == nil {
 		t.Fatal("FullProject not found")
+		return // staticcheck SA5011: explicit return after t.Fatal
 	}
 	if fp.DebounceSec != 5 {
 		t.Errorf("DebounceSec = %d, want 5", fp.DebounceSec)

@@ -531,6 +531,7 @@ func TestFindAsset_Match(t *testing.T) {
 	a := telemetry.FindAsset(assets, "windows_amd64.zip")
 	if a == nil {
 		t.Fatal("should find windows asset")
+		return // staticcheck SA5011
 	}
 	if a.Name != "SelectiveMirror_1.0.0_windows_amd64.zip" {
 		t.Errorf("wrong asset: %s", a.Name)

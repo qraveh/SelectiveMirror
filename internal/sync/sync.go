@@ -214,8 +214,7 @@ type Engine struct {
 	// mutual exclusion). Now bounded via refcount + GC: each mutex tracks how
 	// many goroutines hold or are waiting on it; when the refcount returns to
 	// zero AND the map is over fileLocksHighWater entries, the entry is GC'd.
-	fileLocks   gosync.Map // map[string]*lockEntry
-	fileLocksMu gosync.Mutex
+	fileLocks   gosync.Map   // map[string]*lockEntry
 	fileLocksN  atomic.Int64 // approximate count for high-water decision
 }
 

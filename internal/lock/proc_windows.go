@@ -16,7 +16,8 @@ func isProcessAlive(pid int) bool {
 		return false
 	}
 	const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-	h, err := windows.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	// gosec G115 nolint: pid is gated > 0 above; Windows PIDs are DWORD-bounded.
+	h, err := windows.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid)) //nolint:gosec
 	if err != nil {
 		// ERROR_INVALID_PARAMETER == process never existed or recently exited.
 		// ERROR_ACCESS_DENIED == process exists but our token can't open it
@@ -28,7 +29,7 @@ func isProcessAlive(pid int) bool {
 		}
 		return false
 	}
-	defer windows.CloseHandle(h)
+	defer func() { _ = windows.CloseHandle(h) }() // best-effort; nothing we can do if it fails
 	var exitCode uint32
 	if err := windows.GetExitCodeProcess(h, &exitCode); err != nil {
 		return false

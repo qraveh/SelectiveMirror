@@ -93,7 +93,7 @@ func newJobObject() (uintptr, error) {
 		uintptr(h),
 		uintptr(jobObjectExtendedLimitInformationClass),
 		uintptr(unsafe.Pointer(&info)),
-		uintptr(unsafe.Sizeof(info)),
+		unsafe.Sizeof(info), // already uintptr; no conversion needed
 	)
 	if r1 == 0 {
 		_ = windows.CloseHandle(h)
@@ -118,11 +118,12 @@ func assignPIDToJob(job uintptr, pid int) error {
 		return nil
 	}
 	const desiredAccess = windows.PROCESS_SET_QUOTA | windows.PROCESS_TERMINATE
-	procHandle, err := windows.OpenProcess(desiredAccess, false, uint32(pid))
+	// gosec G115 nolint: pid is os/exec's cmd.Process.Pid (positive on Windows, DWORD-bounded).
+	procHandle, err := windows.OpenProcess(desiredAccess, false, uint32(pid)) //nolint:gosec
 	if err != nil {
 		return fmt.Errorf("OpenProcess(pid=%d): %w", pid, err)
 	}
-	defer windows.CloseHandle(procHandle)
+	defer func() { _ = windows.CloseHandle(procHandle) }() // best-effort; matches the pattern at newJobObject's error path
 	r1, _, e1 := procAssignProcessToJobObject.Call(job, uintptr(procHandle))
 	if r1 == 0 {
 		return fmt.Errorf("AssignProcessToJobObject: %w", e1)

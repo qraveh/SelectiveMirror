@@ -685,7 +685,7 @@ func (s *Store) IncrementMetaCounter(key string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }() // best-effort cleanup; sql.ErrTxDone after Commit is expected
 
 	var raw sql.NullString
 	if err := tx.QueryRow("SELECT value FROM meta WHERE key = ?", key).Scan(&raw); err != nil && err != sql.ErrNoRows {

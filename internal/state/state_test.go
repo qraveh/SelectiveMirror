@@ -161,6 +161,7 @@ func TestUpdateAndGetFileState(t *testing.T) {
 	}
 	if fs == nil {
 		t.Fatal("expected non-nil FileState")
+		return // staticcheck SA5011: explicit return after t.Fatal so the analyzer doesn't think fs.LocalHash below could nil-deref
 	}
 	if fs.LocalHash != "abc123" {
 		t.Errorf("expected hash abc123, got %s", fs.LocalHash)
@@ -840,6 +841,7 @@ func TestUpdateRemoteVerification_SetsFields(t *testing.T) {
 	fs, _ := st.GetFileState("proj", "file.txt")
 	if fs == nil {
 		t.Fatal("file state should exist")
+		return // staticcheck SA5011: explicit return after t.Fatal
 	}
 	if !fs.IsRemoteVerified() {
 		t.Error("expected remote-verified after UpdateRemoteVerification")
