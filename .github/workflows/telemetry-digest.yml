@@ -18,9 +18,19 @@ on:
     - cron: '0 3 * * 0'
   workflow_dispatch: {}
 
-permissions:
-  contents: write
-  pull-requests: write
+# FINDING 22 (round-5 validation memo, 2026-05-03): permissions
+# moved from workflow-level to job-level. Workflow-level permissions
+# can trip GitHub's validation paths on workflows that lack a `push:`
+# trigger (the validator runs against every commit regardless),
+# producing 0-second "completed: failure" runs that pollute the
+# Actions tab without ever invoking the workflow body. Job-level
+# permissions only resolve when the job actually runs (cron or
+# workflow_dispatch), so the noise stops.
+#
+# If the actual cron run still fails because SUPABASE_DATABASE_URL is
+# unset, the existing `[ -z "$DATABASE_URL" ]` guard inside the job
+# emits a ::warning:: and exits 0 — visible to operators without
+# turning the run red.
 
 # Opt into Node.js 24 default for JavaScript actions (silences the
 # 2026-06-02 deprecation warning).
@@ -30,6 +40,9 @@ env:
 jobs:
   digest:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 

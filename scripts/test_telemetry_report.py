@@ -83,6 +83,27 @@ def test_k_anon_filter_all_below_returns_empty(m):
     assert visible == []
 
 
+def test_k_anon_filter_handles_string_count_via_safe_int(m):
+    """FINDING 20 (round-5 validation memo, 2026-05-03): defensive
+    coding for schema drift. If the count column ever gets emitted as
+    a string (TEXT cast / to_char view / downstream user query), the
+    filter should not crash with TypeError. safe_int wraps the value
+    in try/except, falling open to 0 → suppress.
+    """
+    # String values that ARE numeric: safe_int should parse them.
+    rows = [{"x": "5"}, {"x": "4"}, {"x": "10"}]
+    visible = m.k_anon_filter(rows, "x")
+    assert len(visible) == 2  # "5" and "10" pass; "4" suppressed
+    # String values that are NOT numeric: safe_int returns 0 → suppress.
+    rows = [{"x": "abc"}, {"x": ""}, {"x": "5"}]
+    visible = m.k_anon_filter(rows, "x")
+    assert len(visible) == 1  # only "5" survives
+    # Mixed types in one batch don't crash.
+    rows = [{"x": 5}, {"x": "5"}, {"x": None}, {"x": "garbage"}]
+    visible = m.k_anon_filter(rows, "x")
+    assert len(visible) == 2  # int 5 and str "5"
+
+
 def test_k_anon_guard_string_form(m):
     """k_anon_guard returns the count as string when ≥ floor; otherwise '<5'."""
     assert m.k_anon_guard(10) == "10"
@@ -172,6 +193,7 @@ def main():
         test_k_anon_filter_handles_missing_field,
         test_k_anon_filter_empty_input,
         test_k_anon_filter_all_below_returns_empty,
+        test_k_anon_filter_handles_string_count_via_safe_int,
         test_k_anon_guard_string_form,
         test_md_cell_escape_neutralizes_pipes,
         test_md_cell_escape_strips_newlines,

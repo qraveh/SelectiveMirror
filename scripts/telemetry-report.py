@@ -105,8 +105,25 @@ def k_anon_filter(rows, count_field: str) -> list:
     Used for grouped tables (e.g. version distribution) where small cells
     must not appear at all — leaving the row visible with "<5" would still
     leak that the version exists. Filter is the right move for those cases.
+
+    FINDING 20 (round-5 validation memo, 2026-05-03): defensive coding
+    for schema drift. The current rollup tables use BIGINT count
+    columns and psycopg returns Python int, so the inline ``or 0``
+    suffices today. But a future schema change to TEXT, a downstream
+    view that emits a string via ``to_char``, or a custom user query
+    threaded through this filter would crash with TypeError on the
+    ``>=`` comparison. ``safe_int`` wraps the value in a try/except so
+    schema-drift falls open to "treat as 0 → suppress" rather than
+    crashing the digest run. Defense-only; no behavior change today.
     """
-    return [r for r in rows if (r.get(count_field) or 0) >= K_ANONYMITY_FLOOR]
+    def safe_int(v) -> int:
+        if v is None:
+            return 0
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return 0
+    return [r for r in rows if safe_int(r.get(count_field)) >= K_ANONYMITY_FLOOR]
 
 
 # ---------------------------------------------------------------------------

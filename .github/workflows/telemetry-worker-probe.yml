@@ -29,7 +29,27 @@ on:
   schedule:
     # 06:00 UTC daily. Matches the maintainer's time-zone convenience
     # (early Europe morning).
+    #
+    # FINDING 23 (round-5 validation memo, 2026-05-03): GitHub Actions
+    # cron has known unreliability for workflows that haven't been on
+    # the default branch for ~60 days, AND for workflows that have
+    # never run at all. The `pull_request` + `push` triggers below
+    # ensure the workflow runs at least once per merge to master,
+    # which "warms up" cron registration. After ~60 days of regular
+    # default-branch activity the daily cron starts firing reliably;
+    # in the meantime, every PR that touches the worker / probe / yml
+    # exercises the gate, which is the protective value we actually
+    # need (catching regressions BEFORE they ship).
     - cron: '0 6 * * *'
+  push:
+    # Run on every push to master so the workflow accumulates
+    # default-branch history and cron-eligibility (per the GitHub
+    # Actions cron-firing heuristic). One run per merge is cheap.
+    branches: [master]
+    paths:
+      - 'worker/**'
+      - 'system-validation/telemetry-worker-probe.py'
+      - '.github/workflows/telemetry-worker-probe.yml'
   pull_request:
     paths:
       - 'worker/**'

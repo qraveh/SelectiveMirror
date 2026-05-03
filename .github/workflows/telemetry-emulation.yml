@@ -52,9 +52,24 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Set up PostgreSQL 15
+      - name: Set up PostgreSQL (v15+)
+        # FINDING 21 (round-5 validation memo, 2026-05-03): the prior
+        # `apt-get install postgresql-15` step has been failing on every
+        # PR / push since at least 2026-04-30 because ubuntu-latest
+        # (24.04+) doesn't ship `postgresql-15` in the default APT repos.
+        # Two fix paths: (a) add the apt.postgresql.org repo before
+        # installing v15, or (b) use whatever version is in the default
+        # repos and confirm v2 schema is compatible. We pick (a) because
+        # pinning the version (rather than tracking the moving Ubuntu
+        # default) keeps CI behavior predictable across runner-image
+        # updates. v2 needs PG 15+ for `UNIQUE NULLS NOT DISTINCT`; the
+        # apt.postgresql.org repo lets us pick v15, v16, or v17 freely.
         run: |
           sudo apt-get update -qq
+          sudo apt-get install -y postgresql-common
+          # Add the official PostgreSQL APT repo for ubuntu-latest. The
+          # script is idempotent and self-contained.
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y postgresql-15 postgresql-contrib-15
           sudo systemctl start postgresql
 
