@@ -283,14 +283,23 @@ func cmdTelemetryStatus(configPath string, args []string) {
 		fmt.Println()
 		fmt.Println("bug reports:        enabled, per-event approval required")
 		fmt.Println("install events:     sent at first_seen and on each upgrade")
-		fmt.Println("reliability:        bucketed deltas attached to upgrade events ONLY")
+		// FINDING 25 residual (round-7 validation memo, 2026-05-03):
+		// the prior "bucketed deltas attached to upgrade events ONLY"
+		// claim was a lie — reliability_snapshot has no production
+		// writer (FINDING 16, deferred to v1.0.x). Path-a closure in
+		// 0.9.102-dev shipped first_seen + upgrade but explicitly
+		// not reliability_snapshot. Status display now matches the
+		// honest cmdTelemetrySet output.
+		fmt.Println("reliability:        deferred to v1.0.x (Reliability tier is functionally")
+		fmt.Println("                    identical to Standard tier today; the tier choice is")
+		fmt.Println("                    recorded so deltas flow when the v1.0.x writer ships)")
 		if installID != "" {
 			fmt.Printf("install_id:         %s (anonymous, never stored server-side)\n", installID)
 		}
 		fmt.Println()
 		fmt.Println("Change tier:")
 		fmt.Println("  smirror telemetry none          Stop all telemetry")
-		fmt.Println("  smirror telemetry standard      Drop reliability deltas; keep install census")
+		fmt.Println("  smirror telemetry standard      Same wire output today; preserves choice for v1.0.x")
 	}
 }
 
