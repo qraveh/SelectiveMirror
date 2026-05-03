@@ -336,7 +336,16 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 			if existing, _ := st.GetMeta(metaInstallID); existing == "" {
 				_ = st.SetMeta(metaInstallID, telemetry.GenerateInstallID())
 			}
-			fmt.Println("first_seen event will be queued at next opportunity.")
+			// FINDING 16 honest-documentation note (round-5 validation
+			// memo, 2026-05-03): the install-event submit pipeline
+			// (first_seen, upgrade) is deferred to v1.0.x. Tier change
+			// is recorded; no background sender starts. The only event
+			// type that actually reaches the wire today is bug_report
+			// via `smirror report-bug --submit`. See PRIVACY.md
+			// "Currently shipped vs. deferred" for the full table.
+			fmt.Println("Bug-report submission via `smirror report-bug --submit` is now enabled.")
+			fmt.Println("Note: install_census events (first_seen, upgrade) are deferred to v1.0.x;")
+			fmt.Println("the tier change is recorded but no background sender starts in this build.")
 		}
 	case telemetry.TierReliability:
 		fmt.Println("Tier set to Reliability. Thank you for opting in.")
@@ -344,9 +353,12 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 			if existing, _ := st.GetMeta(metaInstallID); existing == "" {
 				_ = st.SetMeta(metaInstallID, telemetry.GenerateInstallID())
 			}
-			fmt.Println("first_seen event will be queued at next opportunity.")
+			fmt.Println("Bug-report submission via `smirror report-bug --submit` is now enabled.")
+			fmt.Println("Note: install_census + reliability_snapshot events are deferred to v1.0.x;")
+			fmt.Println("the tier change is recorded but no background sender starts in this build.")
 		} else if prev == telemetry.TierStandard {
-			fmt.Println("Reliability deltas will attach to the next upgrade event.")
+			fmt.Println("Note: reliability_snapshot is deferred to v1.0.x. Functionally identical to")
+			fmt.Println("Standard tier today; tier change recorded for when the pipeline lands.")
 		}
 	}
 

@@ -1,5 +1,26 @@
 // Durable on-disk queue for telemetry events.
 //
+// **STATUS (FINDING 17, round-5 validation memo, 2026-05-03):** this
+// type is **scaffolding** for the install-event submit pipeline
+// deferred to v1.0.x (see PRIVACY.md "Currently shipped vs.
+// deferred"). It is currently **dead code in production** — no
+// `cmd/` or `internal/` caller instantiates a Queue. It is retained
+// in tree because:
+//
+//   - The first_seen / upgrade / reliability_snapshot submit pipeline
+//     (FINDING 16) is the natural caller; deleting and re-adding the
+//     queue when that lands would be churn for no benefit.
+//   - The implementation is well-tested (queue_test.go) and the
+//     atomic-rename + dead-letter semantics are non-trivial; rewriting
+//     them in v1.0.x would re-incur the design cost.
+//
+// Maintenance constraint: do NOT wire a Queue to anything in `cmd/`
+// without also implementing the install-event submit pipeline that
+// FINDING 16 calls out. Half-wiring (e.g., a goroutine that drains
+// the queue but no producer that fills it) makes "is install-census
+// shipping" ambiguous and is the failure mode FINDING 16 already
+// caught.
+//
 // Events are written to disk before any network I/O is attempted, so
 // a crash, reboot, or transient outage doesn't lose them. The background
 // dispatcher claims oldest-first and either Completes (success) or
@@ -174,7 +195,9 @@ func (q *Queue) DeadLetter(claimPath string) error {
 
 // SweepStaleClaims moves any files in 'sending' older than maxAge back to
 // the pending queue. Recovers from crashes that left files claimed but
-// unfinished. Call once at startup.
+// unfinished. Intended caller: the install-event submit pipeline at
+// startup (deferred to v1.0.x per FINDING 16; today there is no
+// startup caller — see the package docstring's STATUS note).
 func (q *Queue) SweepStaleClaims(maxAge time.Duration) (int, error) {
 	sendingDir := filepath.Join(q.dir, "sending")
 	entries, err := os.ReadDir(sendingDir)
@@ -203,8 +226,10 @@ func (q *Queue) SweepStaleClaims(maxAge time.Duration) (int, error) {
 }
 
 // PurgeAll deletes every queued file (pending, sending, dead-letter).
-// Used by `smirror telemetry off` to drop unsent events when the user
-// revokes consent.
+// Intended caller: `smirror telemetry none` (the opt-out subcommand;
+// the earlier `telemetry off` doc comment was a stale reference to a
+// subcommand that never shipped under that name — fixed in 0.9.97-dev
+// per FINDING 17). Drops unsent events when the user revokes consent.
 //
 // Returns the number of files deleted.
 func (q *Queue) PurgeAll() (int, error) {

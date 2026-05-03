@@ -126,6 +126,37 @@ var (
 	// "x:..." for a single-letter remote name).
 	reRemoteURI = regexp.MustCompile(
 		`\b([A-Za-z][A-Za-z0-9_-]{0,30}):([A-Za-z0-9_./\\\-]+)`)
+
+	// FINDING 19 (round-5 validation memo, 2026-05-03): `https://`
+	// is on urlSchemeAllow for safety (so URLs in error messages and
+	// bug-reference links survive intact), but webhook URLs encode
+	// secrets in the path component. Slack
+	// (`https://hooks.slack.com/services/T_/B_/<token>`), Discord
+	// (`https://discord.com/api/webhooks/<id>/<token>`), and the
+	// alt-spelling `discordapp.com` all match this pattern. The
+	// `alert_webhook_url` config key (SelectiveMirror's anomaly-alert
+	// destination) is exactly the field most likely to contain such a
+	// URL, and it can leak via:
+	//   - the user pasting their config into the GitHub-issue body
+	//   - log lines that mention the URL (slog Warn lines, retry
+	//     diagnostics, etc.)
+	//
+	// Two layered regexes:
+	//
+	//   reAlertWebhookKeyed — `alert_webhook_url[=:]<URL>`. Catches
+	//     the explicit config-line case. Redacts the entire URL,
+	//     keeping the key for diagnostic value.
+	//
+	//   reKnownWebhookHost — known webhook hostnames followed by a
+	//     path. Catches the URL in any context (log, prose, raw
+	//     paste). Redacts the path component, keeping the host
+	//     ("hooks.slack.com" tells the maintainer "this is a Slack
+	//     webhook" without revealing the secret).
+	reAlertWebhookKeyed = regexp.MustCompile(
+		`(?i)\b(alert_webhook_url|webhook_url|alert_url)\s*[=:]\s*\S+`)
+
+	reKnownWebhookHost = regexp.MustCompile(
+		`(?i)\bhttps?://(hooks\.slack\.com|discord(?:app)?\.com/api/webhooks|hooks\.zapier\.com)/\S+`)
 )
 
 var urlSchemeAllow = map[string]bool{
@@ -146,9 +177,73 @@ var urlSchemeAllow = map[string]bool{
 // rerunning the system-validation suite. Sanitization is idempotent
 // (running it twice produces the same output as running it once).
 func SanitizeReport(report string, opts SanitizeOptions) string {
-	// 1. Credentials FIRST. If we let path substitution run first and
-	//    a token value happened to be a path-shaped string, we'd lose
-	//    the chance to redact via name=value pairing.
+	// 0. Webhook URLs FIRST. FINDING 19 (round-5 validation memo,
+	//    2026-05-03): `https://` is in urlSchemeAllow so generic URLs
+	//    pass through (preserving error-message links etc.), but
+	//    webhook URLs encode secrets in the path component. Run these
+	//    before steps 1+ so the secret is gone before the rest of the
+	//    pipeline looks at the URL.
+	//
+	//    0a. Keyed form: `alert_webhook_url=URL` / `alert_webhook_url:
+	//        URL` / `webhook_url=URL`. Replaces the whole URL with
+	//        `<REDACTED>`, preserving the key for diagnostic value.
+	report = reAlertWebhookKeyed.ReplaceAllStringFunc(report, func(m string) string {
+		sepIdx := strings.IndexAny(m, "=:")
+		if sepIdx <= 0 {
+			return "<REDACTED>"
+		}
+		return m[:sepIdx+1] + "<REDACTED>"
+	})
+	//    0b. Known-webhook-host form: any URL whose host is a recognized
+	//        webhook provider (Slack / Discord / Zapier). Redacts the
+	//        path component, preserving the host so the maintainer can
+	//        see "this is a Slack webhook" without seeing the token.
+	report = reKnownWebhookHost.ReplaceAllStringFunc(report, func(m string) string {
+		// Find the protocol+host prefix (https://hooks.slack.com),
+		// then return prefix + "/<REDACTED>".
+		// e.g. https://hooks.slack.com/services/T0/B0/x → https://hooks.slack.com/<REDACTED>
+		schemeEnd := strings.Index(m, "://")
+		if schemeEnd < 0 {
+			return "<REDACTED>"
+		}
+		hostStart := schemeEnd + 3
+		pathStart := strings.Index(m[hostStart:], "/")
+		if pathStart < 0 {
+			return m // no path; nothing secret to strip
+		}
+		return m[:hostStart+pathStart] + "/<REDACTED>"
+	})
+
+	// 1. Bearer / Basic FIRST — before reCredential. FINDING 18 (round-5
+	//    validation memo, 2026-05-03): the prior ordering ran reCredential
+	//    first, which matched "Authorization: Bearer eyJ.foo.bar.baz" as
+	//    key="Authorization" + sep=":" + value="Bearer" (the value-shape
+	//    regex stops at the space after "Bearer"), replacing with
+	//    "Authorization:<REDACTED>" — and the actual token survived
+	//    intact. Running reBearerSpace first replaces "Bearer
+	//    eyJ.foo.bar.baz" → "Bearer <REDACTED>" before reCredential
+	//    sees it, so the token is gone regardless of whether an
+	//    "Authorization:" prefix is present.
+	//
+	//    Step 2 below (reCredential on the now-redacted string) will
+	//    additionally collapse "Authorization: Bearer" → "Authorization:
+	//    <REDACTED>" so the leading scheme word also disappears in the
+	//    keyed case. The double replacement is idempotent and produces
+	//    "Authorization:<REDACTED> <REDACTED>" — slightly noisy but
+	//    correct; the actual secret is gone.
+	report = reBearerSpace.ReplaceAllStringFunc(report, func(m string) string {
+		// First whitespace separates the scheme from the token.
+		for i, c := range m {
+			if c == ' ' || c == '\t' {
+				return m[:i] + " <REDACTED>"
+			}
+		}
+		return "<REDACTED>"
+	})
+	// 2. Credential key=value / key: value pairs. Runs after step 1 so
+	//    a `Bearer <token>` or `Basic <token>` value has already been
+	//    redacted by the time the credential regex looks for `bearer`
+	//    or `authorization` as a key.
 	report = reCredential.ReplaceAllStringFunc(report, func(m string) string {
 		// Preserve the leading key + separator. The match has the
 		// form "key<ws><sep><ws>value"; find the separator and keep
@@ -158,17 +253,6 @@ func SanitizeReport(report string, opts SanitizeOptions) string {
 			return "<REDACTED>"
 		}
 		return m[:sepIdx+1] + "<REDACTED>"
-	})
-	// 1b. Bearer/Basic with whitespace separator. We replace the value
-	//     but keep the scheme word visible.
-	report = reBearerSpace.ReplaceAllStringFunc(report, func(m string) string {
-		// First whitespace separates the scheme from the token.
-		for i, c := range m {
-			if c == ' ' || c == '\t' {
-				return m[:i] + " <REDACTED>"
-			}
-		}
-		return "<REDACTED>"
 	})
 
 	// 2. Path-prefix substitutions. Longest-first ensures a parent

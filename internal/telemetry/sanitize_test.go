@@ -335,3 +335,71 @@ func TestSanitizeReport_MirrorNameShortNameSkipped(t *testing.T) {
 		t.Errorf("short name (<3 chars) should be skipped, but substitution occurred: %q", got)
 	}
 }
+
+// FINDING 18 (round-5 validation memo, 2026-05-03): the prior regex
+// ordering ran reCredential before reBearerSpace, which caused
+// "Authorization: Bearer <token>" to be partially redacted —
+// "Authorization:<REDACTED> <token>" — leaking the actual token. The
+// fix is to run reBearerSpace first so the token is gone before
+// reCredential consumes the "Bearer" keyword as the value of
+// "Authorization:".
+func TestSanitizeReport_BearerWithSpace_DoesNotLeakToken(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		secret string
+	}{
+		{"authorization-bearer", "Authorization: Bearer eyJ.foo.bar.baz", "eyJ.foo.bar.baz"},
+		{"authorization-basic",  "Authorization: Basic dXNlcjpwYXNz",  "dXNlcjpwYXNz"},
+		{"bare-bearer",          "Got Bearer ghp_secrettoken_abc123 from server", "ghp_secrettoken_abc123"},
+		{"bare-basic",           "log: Basic dXNlcjpwYXNz received",  "dXNlcjpwYXNz"},
+		{"lowercase-bearer",     "auth: bearer eyJ_lower_case_token_xyz", "eyJ_lower_case_token_xyz"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeReport(tc.in, SanitizeOptions{})
+			if strings.Contains(got, tc.secret) {
+				t.Errorf("token leaked through sanitizer: input=%q output=%q", tc.in, got)
+			}
+			if !strings.Contains(got, "<REDACTED>") {
+				t.Errorf("expected <REDACTED> placeholder in output: %q", got)
+			}
+		})
+	}
+}
+
+// FINDING 19 (round-5 validation memo, 2026-05-03): webhook URLs
+// encode secrets in the path component (Slack / Discord / Zapier),
+// and `alert_webhook_url:` config dumps would expose them. The
+// sanitizer now redacts both the keyed form and known webhook hosts.
+func TestSanitizeReport_WebhookURL_DoesNotLeakSecret(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		secret string
+	}{
+		{"slack-keyed",         "alert_webhook_url: https://hooks.slack.com/services/T0123/B4567/secrethere", "secrethere"},
+		{"slack-bare",          "log: posting to https://hooks.slack.com/services/T0/B0/abcd1234tokenz", "abcd1234tokenz"},
+		{"discord-bare",        "https://discord.com/api/webhooks/12345/abcd_secret_token", "abcd_secret_token"},
+		{"discordapp-bare",     "https://discordapp.com/api/webhooks/999/xyz_legacy_token", "xyz_legacy_token"},
+		{"zapier-bare",         "https://hooks.zapier.com/hooks/catch/123/abcde/", "abcde"},
+		{"keyed-equals-form",   "webhook_url=https://hooks.slack.com/services/T1/B1/keyed_eq_form_secret", "keyed_eq_form_secret"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := SanitizeReport(tc.in, SanitizeOptions{})
+			if strings.Contains(got, tc.secret) {
+				t.Errorf("webhook secret leaked: input=%q output=%q", tc.in, got)
+			}
+			if !strings.Contains(got, "<REDACTED>") {
+				t.Errorf("expected <REDACTED> placeholder in output: %q", got)
+			}
+		})
+	}
+	// Sanity: a benign HTTPS URL (NOT a known webhook host) should NOT be redacted.
+	in := "see https://github.com/qraveh/SelectiveMirror/issues/123 for details"
+	got := SanitizeReport(in, SanitizeOptions{})
+	if !strings.Contains(got, "/qraveh/SelectiveMirror/issues/123") {
+		t.Errorf("benign URL was over-redacted: %q -> %q", in, got)
+	}
+}
