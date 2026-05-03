@@ -13,11 +13,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -111,9 +109,12 @@ func startSmirror(t *testing.T, cfgPath string, args ...string) *smirrorProcess 
 	cmd.Stdin = strings.NewReader("")
 
 	// On Windows, create a new process group so we can send Ctrl+C.
-	if runtime.GOOS == "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
-	}
+	// Implementation lives in helpers_pg_windows.go / helpers_pg_other.go
+	// because syscall.CreationFlags and syscall.CREATE_NEW_PROCESS_GROUP
+	// are Windows-only — referencing them from a runtime-OS-guarded
+	// branch breaks the Linux build (compile-time identifier resolution
+	// happens before runtime.GOOS check).
+	setNewProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		cancel()
