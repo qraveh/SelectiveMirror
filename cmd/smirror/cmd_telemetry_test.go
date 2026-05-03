@@ -435,6 +435,12 @@ func TestTelemetryInspect_UnknownKind_Rejected(t *testing.T) {
 // Bucket helpers
 // ---------------------------------------------------------------------------
 
+// Bucket helpers moved to internal/telemetry/buckets.go in 0.9.10x-dev
+// (FINDING 16 closure: shared between inspect and submit pipelines).
+// These thin wrappers preserve the test surface — if they pass, the
+// extracted helpers are wired correctly. The exhaustive bucket-domain
+// tests live in internal/telemetry/buckets_test.go (added 0.9.10x-dev).
+
 func TestBucketMirrorCount(t *testing.T) {
 	cases := []struct {
 		n    int
@@ -450,14 +456,17 @@ func TestBucketMirrorCount(t *testing.T) {
 		{100, "21+"},
 	}
 	for _, c := range cases {
-		if got := bucketMirrorCount(c.n); got != c.want {
-			t.Errorf("bucketMirrorCount(%d) = %q, want %q", c.n, got, c.want)
+		if got := telemetry.BucketMirrorCount(c.n); got != c.want {
+			t.Errorf("telemetry.BucketMirrorCount(%d) = %q, want %q", c.n, got, c.want)
 		}
 	}
 }
 
 func TestBucketStateDbSize_Missing(t *testing.T) {
-	if got := bucketStateDbSize("/nonexistent/path/that/should/not/be/here.db"); got != "unknown" {
-		t.Errorf("bucketStateDbSize on missing file = %q, want %q", got, "unknown")
+	// Note: in 0.9.10x-dev the helper was moved + the missing-file
+	// default changed from "unknown" to "<10MB" (FINDING 2 from the
+	// round-3 panel: every value must be a legitimate ENUM member).
+	if got := telemetry.BucketStateDBSize("/nonexistent/path/that/should/not/be/here.db"); got != "<10MB" {
+		t.Errorf("telemetry.BucketStateDBSize on missing file = %q, want %q (ENUM-valid default)", got, "<10MB")
 	}
 }

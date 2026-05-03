@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "0.9.101-dev"
+var version = "0.9.102-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -672,6 +672,18 @@ Press Ctrl+C to stop.`) {
 		st.SetMeta("instance_config_fingerprint", "")
 		st.SetMeta("instance_mirrors", "")
 	}()
+
+	// FINDING 16 closure: install-event submit pipeline. Fires
+	// first_seen + upgrade events asynchronously at startup so the
+	// daemon doesn't block on network I/O. Single-instance lock
+	// (acquired above) guarantees no concurrent submission. Tier
+	// gate + buildKey gate inside SendInstallEventsIfDue mean -dev
+	// builds and None-tier installs are silent no-ops.
+	//
+	// Detached goroutine, but bounded by a 30s context. Daemon
+	// shutdown won't wait for this; the goroutine cancels via the
+	// context's deadline in the worst case.
+	go fireInstallEventsAtStartup(cfg, st)
 
 	// Build filter engines
 	filters := buildFilters(cfg)
@@ -3364,6 +3376,12 @@ func serviceMain() {
 			st.SetMeta("instance_config_fingerprint", "")
 			st.SetMeta("instance_mirrors", "")
 		}()
+
+		// FINDING 16 closure (service-mode arm): same install-event
+		// submit hook as cmdStart. Service-mode is actually the more
+		// likely path for many users — MSI installs that opt to run
+		// as a Windows Service skip cmdStart entirely.
+		go fireInstallEventsAtStartup(cfg, st)
 
 		filters := buildFilters(cfg)
 		m := metrics.New()

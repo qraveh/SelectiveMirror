@@ -2,22 +2,27 @@
 
 **Audience**: end users of SelectiveMirror.
 **Plain-language version of**: `docs/telemetry-architecture-v2.md` (the technical spec).
-**Last updated**: 2026-05-03. Current as of 0.9.96-dev.
+**Last updated**: 2026-05-03. Current as of 0.9.10x-dev.
 
-> **What ships in 0.9.x today.** Of the four event types this
-> document describes, only **`bug_report`** is wired to a production
-> submit pipeline (via `smirror report-bug --submit`). The
-> install-census events — `first_seen`, `upgrade`, and
-> `reliability_snapshot` — are **deferred to v1.0.x**: their server-
-> side schema, client-side payload shape, and consent surface are all
-> in place, but no startup-time / upgrade-detection / reliability
-> writer calls `telemetry.contribute()` for them in this build. If
-> you opt in to Standard or Reliability today, the only event your
-> install will actually send is one categorical `bug_report` count
-> per `smirror report-bug --submit` invocation. Everything else is
-> a no-op until the install-event submit pipeline lands. See
-> the "Currently shipped vs. deferred" table below for the
-> per-event status.
+> **What ships today.** Three of the four documented event types are
+> fully wired:
+>
+> - **`bug_report`** — sent on demand via `smirror report-bug --submit`.
+> - **`first_seen`** — sent automatically once per install, on the
+>   first `smirror start` / service start at Standard or Reliability
+>   tier.
+> - **`upgrade`** — sent automatically each time the binary's version
+>   changes between runs, at Standard or Reliability tier.
+>
+> **`reliability_snapshot`** is still deferred to v1.0.x: its server
+> schema and client payload shape are in place, but the bucket
+> dimensions (anomaly count, sync-attempt count, restart count, queue-
+> depth high-water-mark) need new counters in the sync engine and
+> watcher that haven't been wired yet. Until then, **Reliability tier
+> is functionally identical to Standard tier on the wire**: both
+> contribute first_seen + upgrade + bug_report counts. The tier
+> choice is recorded so reliability deltas can flow whenever the
+> v1.0.x writer ships, without a re-consent step.
 
 ---
 
@@ -51,11 +56,11 @@ This is the strongest privacy posture an open-source tool can offer. It's also t
 
 ## Three tiers
 
-| Tier | What you contribute (architecture spec) | What ACTUALLY sends in 0.9.x | Default? |
+| Tier | What you contribute (architecture spec) | What ACTUALLY sends in 0.9.10x | Default? |
 |------|------------------------------------------|------------------------------|----------|
 | **None** | Nothing. No events, no version checks, no pings. | Same as spec. | **✅ default** |
-| **Standard** | Anonymous categorical counts: install / upgrade / bug-report bucket increments. | **Bug-report counts only.** install + upgrade events are deferred to v1.0.x — see the table below. | |
-| **Reliability** | Standard plus operational-health bucket increments at upgrade events. | **Bug-report counts only.** Reliability snapshots and the upgrade events they attach to are deferred to v1.0.x. Functionally identical to Standard tier today. | |
+| **Standard** | Anonymous categorical counts: install / upgrade / bug-report bucket increments. | **install_census + bug-report.** first_seen + upgrade + bug_report counts all wire as documented. | |
+| **Reliability** | Standard plus operational-health bucket increments at upgrade events. | **Same as Standard today.** reliability_snapshot is still deferred to v1.0.x — the bucket dimensions need counter wiring in the sync engine. Tier choice is recorded so deltas flow when the writer ships, without re-consent. | |
 
 You can change tiers at any time:
 
@@ -89,15 +94,15 @@ The full technical detail is in `docs/telemetry-architecture-v2.md`. The functio
 
 ## Currently shipped vs. deferred
 
-The architecture supports four event types. Only one is wired to a
-production submit pipeline today:
+The architecture supports four event types. Three are fully wired
+today; the fourth (reliability_snapshot) is deferred to v1.0.x:
 
 | Event type | Documented in PRIVACY.md | Server schema | Client payload builder | Production submit pipeline | Actually sends |
 |------------|---|---|---|---|---|
 | `bug_report` | ✓ | ✓ `bug_daily_rollup` | ✓ `cmd/smirror/cmd_report_bug_submit.go` | ✓ `smirror report-bug --submit` (SM-158) | ✅ on-demand |
-| `first_seen` | ✓ | ✓ `installation_daily_rollup` | ✓ `buildInstallationPayload` (inspect-only) | **deferred to v1.0.x** | ❌ today |
-| `upgrade` | ✓ | ✓ `installation_daily_rollup` | ✓ `buildInstallationPayload` (inspect-only) | **deferred to v1.0.x** | ❌ today |
-| `reliability_snapshot` | ✓ | ✓ `reliability_daily_rollup` | ✓ `buildReliabilityPayload` (inspect-only) | **deferred to v1.0.x** | ❌ today |
+| `first_seen` | ✓ | ✓ `installation_daily_rollup` | ✓ `internal/telemetry/payloads.go` | ✓ `internal/telemetry/install_events.go` | ✅ once per install |
+| `upgrade` | ✓ | ✓ `installation_daily_rollup` | ✓ `internal/telemetry/payloads.go` | ✓ `internal/telemetry/install_events.go` | ✅ on each version transition |
+| `reliability_snapshot` | ✓ | ✓ `reliability_daily_rollup` | ✓ `internal/telemetry/payloads.go` (inspect-only defaults) | **deferred to v1.0.x** | ❌ today |
 
 What this means for you:
 
@@ -106,14 +111,21 @@ What this means for you:
   `reliability_snapshot`). The CLI computes the exact payload
   bucket dimensions and prints them. No data leaves your machine
   during inspection.
-- **Today, opting in to Standard or Reliability does not start a
-  background sender.** The install-census numbers in the
-  maintainer's weekly digest will read zero until the v1.0.x
-  pipeline lands.
-- **`smirror report-bug --submit` does still work** — it's the one
-  fully-wired contribution path. Use it when you want to file a
-  bug whose categorical bucket helps the maintainer prioritize,
-  paired with `--browser` to file the narrative on GitHub.
+- **Opting in to Standard or Reliability starts the install-event
+  sender** at the next `smirror start` (or service start). first_seen
+  fires once; upgrade fires whenever the binary's version changes
+  between runs. Both go through the same HMAC + Worker + Supabase
+  path described above.
+- **Reliability tier is identical to Standard tier on the wire today.**
+  reliability_snapshot's bucket dimensions (anomaly counts, sync-
+  attempt counters, queue depth) need writer-side counters in the
+  sync engine that aren't wired yet. The tier choice is recorded
+  so the deltas flow whenever the v1.0.x writer ships — no re-
+  consent step needed.
+- **`smirror report-bug --submit`** is still the only on-demand
+  contribution path. Use it when you want to file a bug whose
+  categorical bucket helps the maintainer prioritize, paired with
+  `--browser` to file the narrative on GitHub.
 
 ## What we collect, by tier
 

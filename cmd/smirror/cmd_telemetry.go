@@ -23,6 +23,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -336,16 +337,13 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 			if existing, _ := st.GetMeta(metaInstallID); existing == "" {
 				_ = st.SetMeta(metaInstallID, telemetry.GenerateInstallID())
 			}
-			// FINDING 16 honest-documentation note (round-5 validation
-			// memo, 2026-05-03): the install-event submit pipeline
-			// (first_seen, upgrade) is deferred to v1.0.x. Tier change
-			// is recorded; no background sender starts. The only event
-			// type that actually reaches the wire today is bug_report
-			// via `smirror report-bug --submit`. See PRIVACY.md
-			// "Currently shipped vs. deferred" for the full table.
-			fmt.Println("Bug-report submission via `smirror report-bug --submit` is now enabled.")
-			fmt.Println("Note: install_census events (first_seen, upgrade) are deferred to v1.0.x;")
-			fmt.Println("the tier change is recorded but no background sender starts in this build.")
+			// FINDING 16 closure (path a, 0.9.10x-dev): the install-
+			// event submit pipeline ships in this build. first_seen
+			// fires on the next `smirror start` (or service start).
+			// reliability_snapshot is still deferred to v1.0.x —
+			// see PRIVACY.md "Currently shipped vs. deferred."
+			fmt.Println("Bug-report submission (`smirror report-bug --submit`) is now enabled.")
+			fmt.Println("first_seen telemetry event will fire on the next `smirror start` or service start.")
 		}
 	case telemetry.TierReliability:
 		fmt.Println("Tier set to Reliability. Thank you for opting in.")
@@ -353,9 +351,10 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 			if existing, _ := st.GetMeta(metaInstallID); existing == "" {
 				_ = st.SetMeta(metaInstallID, telemetry.GenerateInstallID())
 			}
-			fmt.Println("Bug-report submission via `smirror report-bug --submit` is now enabled.")
-			fmt.Println("Note: install_census + reliability_snapshot events are deferred to v1.0.x;")
-			fmt.Println("the tier change is recorded but no background sender starts in this build.")
+			fmt.Println("Bug-report submission (`smirror report-bug --submit`) is now enabled.")
+			fmt.Println("first_seen telemetry event will fire on the next `smirror start` or service start.")
+			fmt.Println("Note: reliability_snapshot is still deferred to v1.0.x; Reliability tier")
+			fmt.Println("is functionally identical to Standard tier today.")
 		} else if prev == telemetry.TierStandard {
 			fmt.Println("Note: reliability_snapshot is deferred to v1.0.x. Functionally identical to")
 			fmt.Println("Standard tier today; tier change recorded for when the pipeline lands.")
@@ -517,178 +516,161 @@ func buildInspectPayload(cfg *config.Global, st *state.Store, eventKind string) 
 		return nil, fmt.Errorf("unknown event_kind: %q (expected first_seen, upgrade, or reliability_snapshot)", eventKind)
 	}
 
-	installID, _ := st.GetMeta(metaInstallID)
-	if installID == "" {
+	view := cfgToSystemView(cfg, st)
+	if view.InstallID == "" {
 		// inspect is read-only; don't generate-and-persist. Show a
 		// placeholder so the user sees the field exists.
-		installID = "(would be generated on first transition out of None)"
+		view.InstallID = "(would be generated on first transition out of None)"
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	reportedAt := time.Now().UTC().Format(time.RFC3339)
 
 	// FINDING 3: payload shape is event_kind-specific. install /
 	// upgrade events carry the installation_daily_rollup bucket
 	// dimensions; reliability snapshots carry the
-	// reliability_daily_rollup dimensions; the two have NO overlap
-	// beyond (event_kind, schema_version, reported_at, install_id,
-	// client_version) — the small envelope set every payload needs
-	// for HMAC verification. Pre-fix, the reliability_snapshot
-	// payload also carried install_method / os_family / os_detail /
-	// has_hooks / etc. — fields the server's _bump_reliability
-	// never reads but that travel across the network anyway. Ship
-	// only what the server consumes.
+	// reliability_daily_rollup dimensions; no overlap beyond the
+	// envelope set. Inspect uses the same builders as the production
+	// submit path (internal/telemetry/payloads.go) so what you see
+	// here IS what would be sent.
 
 	switch eventKind {
 	case "first_seen":
-		return buildInstallationPayload(cfg, "first_seen", installID, now), nil
+		return telemetry.BuildInstallationPayload("first_seen", view, reportedAt, "", ""), nil
 	case "upgrade":
-		p := buildInstallationPayload(cfg, "upgrade", installID, now)
-		// Upgrade adds two extra dimensions vs first_seen; both are
-		// non-NULL only for upgrade events.
-		priorVersion, _ := st.GetMeta("last_recorded_version")
+		// Compute upgrade-specific dimensions from state DB.
+		priorVersion, _ := st.GetMeta(telemetry.MetaLastRecordedVersion)
 		if priorVersion == "" {
 			priorVersion = "(would be filled from state DB on actual upgrade detection)"
 		}
-		p["prior_version"] = priorVersion
-		p["days_since_first_seen_bucket"] = computeDaysSinceFirstSeenBucket(st)
-		return p, nil
+		daysBucket := computeInspectDaysSinceFirstSeenBucket(st)
+		return telemetry.BuildInstallationPayload("upgrade", view, reportedAt, priorVersion, daysBucket), nil
 	case "reliability_snapshot":
-		return buildReliabilityPayload(cfg, installID, now), nil
+		// Reliability remains deferred to v1.0.x — see
+		// internal/telemetry/payloads.go::BuildReliabilitySnapshotPayload
+		// doc comment. Inspect shows the shape; production submit
+		// doesn't fire it yet.
+		p := telemetry.BuildReliabilitySnapshotPayload(view, reportedAt)
+		// state_db_size_bucket needs the path; the builder doesn't
+		// carry it on SystemView.
+		p["state_db_size_bucket"] = telemetry.BucketStateDBSize(cfg.StateDB)
+		return p, nil
 	}
 	// Unreachable.
 	return nil, fmt.Errorf("unhandled event_kind: %q", eventKind)
 }
 
-// buildInstallationPayload composes the payload for first_seen /
-// upgrade events. The fields here are EXACTLY the bucket-key columns
-// of installation_daily_rollup (see docs/telemetry-v2.sql) plus the
-// envelope set every signed payload carries.
+// fireInstallEventsAtStartup is the daemon-startup hook that
+// invokes telemetry.SendInstallEventsIfDue. Called from a goroutine
+// in cmdStart and serviceMain. Bounded by a 30-second context;
+// daemon shutdown does NOT wait for completion (the goroutine is
+// detached but self-canceling).
 //
-// FINDING 3: deliberately does NOT include `os_detail`. That field is
-// not in the rollup table and would be discarded server-side; sending
-// it widens the wire surface for no benefit.
-func buildInstallationPayload(cfg *config.Global, eventName, installID, reportedAt string) map[string]any {
-	return map[string]any{
-		// Envelope (HMAC + dispatch)
-		"event_kind":     eventName,
-		"schema_version": 1,
-		"install_id":     installID,
-		"reported_at":    reportedAt,
-		"client_version": version,
+// FINDING 16 closure: this is the function that turns "install
+// census documented but never sent" into "install census actually
+// sent." Idempotent across restarts via state-DB meta keys
+// (first_seen_at, last_recorded_version).
+//
+// On the first daemon-startup at a tier ∈ {Standard, Reliability}
+// this also writes the one-time transition notice to stderr (FINDING
+// R12/R14 light-touch consent: tell the user that install events
+// are now flowing without forcing a re-prompt).
+func fireInstallEventsAtStartup(cfg *config.Global, st *state.Store) {
+	tier := telemetry.ReadTier(st)
 
-		// installation_daily_rollup bucket-key columns
-		"install_method":      detectInstallMethod(),
-		"os_family":           strings.ToLower(runtime.GOOS),
-		"mirror_count_bucket": bucketMirrorCount(len(cfg.Projects)),
-		"background_mode":     detectBackgroundMode(),
-		"delete_policy":       string(cfg.DeletePolicy()),
-		"has_hooks":           anyMirrorHasHook(cfg),
-		"has_filters":         anyMirrorHasFilter(cfg),
-		"has_alert_webhook":   strings.TrimSpace(cfg.AlertWebhookURL) != "",
-		"has_bandwidth_limit": strings.TrimSpace(cfg.BandwidthLimit) != "",
-		"rclone_version":      bestEffortRcloneVersion(cfg),
+	// One-time transition notice. Cheap; runs before the (possibly
+	// failing) network call so the user always sees the heads-up.
+	if telemetry.ShouldShowTransitionNotice(st, tier) {
+		fmt.Fprintln(os.Stderr, telemetry.TransitionNoticeMessage)
+		// Also goes to the rotating log so service-mode users (no
+		// stderr visible) eventually see it too.
+		_ = st // (st unused here directly; ShouldShowTransitionNotice already wrote the marker)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	view := cfgToSystemView(cfg, st)
+	configDir := filepath.Dir(cfg.StateDB)
+
+	if err := telemetry.SendInstallEventsIfDue(ctx, view, st, tier, configDir, telemetry.SendOptions{}); err != nil {
+		// Errors are informational; daemon does not fail on them.
+		// The retry-counter + dead-letter mechanism inside
+		// SendInstallEventsIfDue handles the persistence story.
+		// This branch only gets hit on ErrNoBuildKey, which
+		// SendInstallEventsIfDue itself logs at WARN level.
+		_ = err
 	}
 }
 
-// buildReliabilityPayload composes the payload for reliability_snapshot
-// events. Fields match reliability_daily_rollup's bucket-key columns,
-// not installation_daily_rollup's. FINDING 3 + FINDING 2.
-//
-// FINDING 2: every value is a LEGITIMATE bucket value from the
-// matching ENUM in docs/telemetry-v2.sql, so a hypothetical submission
-// at submit-time would not fail server-side schema_violation. Pre-fix,
-// every value here was a placeholder string like "(would be computed
-// from anomaly DB)" which would fail the ENUM cast.
-//
-// Today's heuristics return defaults that match what a healthy fresh
-// install would compute (zero anomalies, low restart count, small
-// state DB). When the production reliability_snapshot submit path
-// ships, these helpers should query the live state DB / anomaly DB /
-// queue stats and return real values; the defaults here remain the
-// right behavior for inspect on a clean install.
-func buildReliabilityPayload(cfg *config.Global, installID, reportedAt string) map[string]any {
-	return map[string]any{
-		// Envelope (HMAC + dispatch)
-		"event_kind":     "reliability_snapshot",
-		"schema_version": 1,
-		"install_id":     installID,
-		"reported_at":    reportedAt,
-		"client_version": version,
-
-		// reliability_daily_rollup bucket-key columns
-		"anomaly_count_bucket":     "0",
-		"most_common_anomaly_kind": nil,
-		"sync_attempts_bucket":     "<100",
-		"sync_failures_bucket":     "<100",
-		"restart_count_bucket":     "0",
-		"max_queue_depth_bucket":   "<100",
-		"dead_letter_count_bucket": "0",
-		"state_db_size_bucket":     bucketStateDbSize(cfg.StateDB),
+// cfgToSystemView translates the CLI-side *config.Global + state DB
+// into the import-cycle-safe telemetry.SystemView the payload
+// builders consume.
+func cfgToSystemView(cfg *config.Global, st *state.Store) telemetry.SystemView {
+	installID, _ := st.GetMeta(metaInstallID)
+	return telemetry.SystemView{
+		InstallID:         installID,
+		ClientVersion:     version,
+		InstallMethod:     detectInstallMethod(),
+		BackgroundMode:    detectBackgroundMode(),
+		MirrorCountBucket: telemetry.BucketMirrorCount(len(cfg.Projects)),
+		DeletePolicy:      string(cfg.DeletePolicy()),
+		HasHooks:          anyMirrorHasHook(cfg),
+		HasFilters:        anyMirrorHasFilter(cfg),
+		HasAlertWebhook:   strings.TrimSpace(cfg.AlertWebhookURL) != "",
+		HasBandwidthLimit: strings.TrimSpace(cfg.BandwidthLimit) != "",
+		RcloneVersion:     bestEffortRcloneVersion(cfg),
 	}
 }
 
-// computeDaysSinceFirstSeenBucket reads first_seen_at from the state
-// DB if present and buckets the gap. Returns the matching ENUM value
-// or a documented placeholder when first_seen_at isn't recorded yet.
-func computeDaysSinceFirstSeenBucket(st *state.Store) string {
-	firstSeenStr, _ := st.GetMeta("first_seen_at")
+// computeInspectDaysSinceFirstSeenBucket is the inspect-only variant
+// of telemetry.ComputeDaysSinceFirstSeenBucket: it returns a human-
+// readable placeholder when first_seen_at isn't set yet (so users
+// running inspect on a fresh install see "(would be filled...)"
+// instead of an empty string that doesn't communicate intent).
+//
+// Production submit (install_events.go::maybeSendUpgrade) requires
+// first_seen_at to be set (upgrade can't fire before first_seen) so
+// it never sees the placeholder branch.
+func computeInspectDaysSinceFirstSeenBucket(st *state.Store) string {
+	firstSeenStr, _ := st.GetMeta(telemetry.MetaFirstSeenAt)
 	if firstSeenStr == "" {
-		// Not yet recorded. The submit pipeline will write this on the
-		// first contribute(); inspect can't fabricate it.
 		return "(would be filled from state DB after first_seen lands)"
 	}
 	firstSeen, err := time.Parse(time.RFC3339, firstSeenStr)
 	if err != nil {
 		return "(unparseable first_seen_at)"
 	}
-	days := int(time.Since(firstSeen).Hours() / 24)
-	switch {
-	case days <= 7:
-		return "1-7"
-	case days <= 30:
-		return "8-30"
-	case days <= 90:
-		return "31-90"
-	case days <= 365:
-		return "91-365"
-	default:
-		return ">365"
+	bucket := telemetry.ComputeDaysSinceFirstSeenBucket(firstSeen, time.Now())
+	if bucket == "" {
+		return "(unparseable first_seen_at)"
 	}
+	return bucket
 }
 
 // ---------------------------------------------------------------------------
-// Inline bucket helpers — kept here because they're used only by inspect
-// and the (deferred) submit pipeline. When SM-158 lands, these may move
-// to internal/telemetry/buckets.go.
+// Inline runtime-detection helpers used by both inspect and the production
+// submit pipeline (cfgToSystemView calls these).
+//
+// Bucket helpers themselves now live in internal/telemetry/buckets.go;
+// only the runtime-detection (cfg/state-DB → SystemView field) functions
+// remain here because they need cmd-level imports.
 // ---------------------------------------------------------------------------
-
-func bucketMirrorCount(n int) string {
-	switch {
-	case n == 0:
-		return "0"
-	case n == 1:
-		return "1"
-	case n <= 5:
-		return "2-5"
-	case n <= 20:
-		return "6-20"
-	default:
-		return "21+"
-	}
-}
 
 func detectBackgroundMode() string {
 	// Placeholder: the production logic checks SCM service state and
-	// scheduled-task presence. Inspect deliberately doesn't load those
-	// (avoid side effects), so we approximate. Real submit-time logic
-	// will be in internal/telemetry/buckets.go (SM-158).
+	// scheduled-task presence. Inspect + first_seen submit deliberately
+	// don't load those (avoid side effects + cross-package imports);
+	// production telemetry today reports "unknown" for this dimension.
+	// Real detection logic is deferred — when it lands it will move to
+	// internal/telemetry/buckets.go for both inspect and submit to use.
 	return "unknown"
 }
 
 func detectInstallMethod() string {
 	// Placeholder: production logic inspects parent process / install
-	// path / registry. Inspect returns "unknown" so the field is present
-	// and visible without triggering side effects.
+	// path / registry. Inspect + first_seen submit return "unknown" so
+	// the field is present and ENUM-valid without triggering side
+	// effects. Real detection deferred.
 	return "unknown"
 }
 
@@ -712,26 +694,9 @@ func anyMirrorHasFilter(cfg *config.Global) bool {
 }
 
 func bestEffortRcloneVersion(_ *config.Global) string {
-	// Production logic calls `rclone version --check`. Inspect avoids
-	// that subprocess so the diagnostic is always fast. Real logic in
-	// SM-158.
+	// Placeholder: production logic should call `rclone version` once
+	// at startup and cache. Inspect avoids the subprocess for speed;
+	// first_seen submit currently does the same. When the rclone
+	// detection caching lands, both consumers benefit.
 	return "(would be detected at submit time)"
-}
-
-func bucketStateDbSize(stateDBPath string) string {
-	info, err := os.Stat(stateDBPath)
-	if err != nil {
-		return "unknown"
-	}
-	mb := info.Size() / (1024 * 1024)
-	switch {
-	case mb < 10:
-		return "<10MB"
-	case mb < 100:
-		return "10-100MB"
-	case mb < 1024:
-		return "100MB-1GB"
-	default:
-		return "1GB+"
-	}
 }
