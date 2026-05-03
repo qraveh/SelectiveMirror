@@ -79,3 +79,13 @@ docs/story10.md
 system-validation/telemetry-digest-*.md
 system-validation/telemetry-operator-report-*.md
 system-validation/telemetry-published-weekly-digest-*.md
+
+# Junk drawer for non-load-bearing validation artifacts. Round-N
+# conversational deep-dive memos, one-shot adversarial Python row
+# injectors, mass-emulation harness scripts. The decisions they
+# drove land in source code (sanitize.go regexes, CLAIMS-MAP rows,
+# BugTracker SM-NNN closure notes) — the workings themselves are
+# scaffolding. Tag-day worktree-clean (runbook §4) is satisfied by
+# moving them here rather than committing them. Per-session decision;
+# files inside junk/ are NOT under document control.
+junk/
