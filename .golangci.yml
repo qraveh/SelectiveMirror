@@ -27,7 +27,9 @@ linters-settings:
 issues:
   exclude-dirs:
     - vendor
-    - internal/telemetry  # not yet integrated
+    # internal/telemetry was excluded as "not yet integrated" through 0.9.x.
+    # Telemetry v2 shipped live in v1.0.0 (CLAIMS-MAP gate at 25/28 GREEN);
+    # the package is now lint-gated like every other internal/ package.
   exclude-rules:
     - path: _test\.go
       linters:

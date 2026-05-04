@@ -24,7 +24,7 @@ The MSI is the recommended path on Windows. The ZIP is for portable use; both ar
 
 ### MSI installer (recommended)
 
-Download `SelectiveMirror.msi` from [Releases](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to the system PATH and registers an uninstaller entry. perMachine install (`%ProgramFiles%\SelectiveMirror\`) — admin elevation required. Background registration is **not** automatic; pick the privilege model after install with `smirror task install` (per-user, no admin) or `smirror service install` (LocalSystem, admin + admin-owned config). See [SECURITY.md](SECURITY.md#scope) for the trust model.
+Download `SelectiveMirror.msi` from [Releases](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to the system PATH and registers an uninstaller entry. perMachine install (`%ProgramFiles%\SelectiveMirror\`) — admin elevation required. Background registration is **not** automatic; pick the privilege model after install with `smirror task install` (per-user, no admin) or `smirror service install` (LocalSystem, admin + admin-owned config). **If you're not sure, use `smirror task install`** — per-user mode covers the typical single-developer case without elevation. See [SECURITY.md](SECURITY.md#scope) for the trust model.
 
 **SmartScreen on first install (v1.0 — pre-SignPath)**
 
@@ -52,7 +52,7 @@ Download `SelectiveMirror_<version>_windows_amd64.zip` from [Releases](https://g
 
 ### Compatibility and rollback
 
-The local state database (`~/.selectivemirror/state.db`, perMachine: `%ProgramData%\SelectiveMirror\state.db`) is migrated forward on each startup. As of v0.9.20-dev, downgrading the binary to a version that does not know the current schema **will refuse to start** rather than silently misbehave (GAP-7). This protects against undefined-behavior on rows the newer binary wrote.
+The local state database (`~/.selectivemirror/state.db`, perMachine: `%ProgramData%\SelectiveMirror\state.db`) is migrated forward on each startup. Since v1.0.0, downgrading the binary to a version that does not know the current schema **will refuse to start** rather than silently misbehave (GAP-7). This protects against undefined-behavior on rows the newer binary wrote.
 
 If you need to revert to an older version:
 
@@ -157,7 +157,7 @@ Per-mirror `delete_policy` overrides the global setting. If neither is set, the 
 - [x] **Phase 2.5** -- Distribution: GoReleaser, WiX MSI installer, rclone auto-provisioning, smoke-test gate
 - [ ] **Phase 3** -- USN journal recovery: fast restart reconciliation
 - [x] **Phase 4** -- OSS polish: CI, issue templates, documentation, winget manifest
-- [x] **Phase 5** -- Telemetry: opt-in analytics + update check (Supabase backend, Cloudflare Worker proxy, MSI consent UI; live since 0.9.4-dev)
+- [x] **Phase 5** -- Telemetry: opt-in analytics + update check (Supabase backend, Cloudflare Worker proxy, MSI consent UI; live since v1.0.0)
 - [x] **Phase 6** -- Anomaly detection: classification, recording, rotation, webhook alerts
 - [x] **Phase 7** -- Hooks: pre/post-sync hook execution with environment variables
 

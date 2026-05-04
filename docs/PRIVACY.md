@@ -2,7 +2,7 @@
 
 **Audience**: end users of SelectiveMirror.
 **Plain-language version of**: `docs/telemetry-architecture-v2.md` (the technical spec).
-**Last updated**: 2026-05-03. Current as of 0.9.10x-dev.
+**Last updated**: 2026-05-04. Current as of v1.0.0.
 
 > **What ships today.** Three of the four documented event types are
 > fully wired:
@@ -56,7 +56,7 @@ This is the strongest privacy posture an open-source tool can offer. It's also t
 
 ## Three tiers
 
-| Tier | What you contribute (architecture spec) | What ACTUALLY sends in 0.9.10x | Default? |
+| Tier | What you contribute (architecture spec) | What ACTUALLY sends in v1.0.0 | Default? |
 |------|------------------------------------------|------------------------------|----------|
 | **None** | Nothing. No events, no version checks, no pings. | Same as spec. | **✅ default** |
 | **Standard** | Anonymous categorical counts: install / upgrade / bug-report bucket increments. | **install_census + bug-report.** first_seen + upgrade + bug_report counts all wire as documented. | |

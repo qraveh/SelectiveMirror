@@ -4,9 +4,9 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.9.x   | Yes       |
-| 0.8.x   | Yes (best-effort backports for security-critical fixes only) |
-| < 0.8   | No        |
+| 1.0.x   | Yes       |
+| 0.9.x   | Yes (best-effort backports for security-critical fixes only) |
+| < 0.9   | No        |
 
 ## Reporting a Vulnerability
 
@@ -42,7 +42,7 @@ SelectiveMirror handles file paths, rclone credentials (indirectly via rclone's 
 
 ## Code Signing
 
-**Current status (pre-v1.0)**: `smirror.exe` and `SelectiveMirror.msi` are NOT Authenticode-signed. SmartScreen will warn on first download from a GitHub release ("Microsoft Defender SmartScreen prevented an unrecognized app from starting"). Click "More info" → "Run anyway" to proceed. Once the winget submission lands, `winget install RavehNeeman.SelectiveMirror` will be available; winget has its own trust chain and bypasses SmartScreen for verified manifests.
+**Current status (v1.0.0 onward)**: `smirror.exe` and `SelectiveMirror.msi` ship unsigned pending SignPath Foundation issuance — see CHANGELOG `[1.0.0]` "Bugs known at tag" for the open remediation track and the "Plan" subsection below. SmartScreen will warn on first download from a GitHub release ("Microsoft Defender SmartScreen prevented an unrecognized app from starting"). Click "More info" → "Run anyway" to proceed. Once the winget submission lands, `winget install RavehNeeman.SelectiveMirror` will be available; winget has its own trust chain and bypasses SmartScreen for verified manifests.
 
 **Integrity verification today**: `selfupdate` and manual downloads can be verified against `checksums.txt` (SHA-256) published with each release. As of v0.9.27 the release pipeline also produces [GitHub build-provenance attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds), verifiable with `gh attestation verify <artifact> --repo qraveh/SelectiveMirror`. Provenance proves the binary was built by this repository's CI on the tagged commit; checksum verification proves the bytes you have are the bytes CI uploaded. Neither is a substitute for an Authenticode signature, but together they cover the supply-chain attack surface that a single hash file does not (compromised release pipeline taints the checksum file alongside the binaries; the GitHub-side attestation is signed by the GitHub Actions OIDC issuer, which a release-pipeline compromise cannot forge).
 
