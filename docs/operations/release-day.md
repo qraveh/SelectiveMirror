@@ -161,6 +161,43 @@ This is no longer release-day work; it's the steady-state cadence covered by [te
 
 ---
 
+## Tag-rollback / re-tag procedure (PR-PRE-D1)
+
+When a tag-day pipeline step fails after the tag was pushed but before you've clicked Publish on the draft release, the recovery path is **delete-and-re-tag** (not amend, not force-update). The release.yml workflow leaves the GitHub Release as Draft until human approval, so this rollback never affects published bytes — but it does need to clean up four artifacts: the git tag (locally + remote), the draft GitHub Release, any partially-uploaded build-provenance attestations, and (if applicable) the winget submission PR.
+
+**When to invoke this procedure**:
+
+- `Assert tag matches source version` fails on release.yml (Failure A) — most common; the version-bump commit didn't land cleanly.
+- `gh attestation verify` roundtrip fails on the just-uploaded MSI (Failure B) — OIDC issuer hiccup or `attest-build-provenance` regression.
+- `Verify published MSI matches local` (PR-Q5) catches a GitHub upload race (Failure C) — published hash ≠ local hash.
+- MSI smoke trips on a runner-image change (Failure D) — windows-latest image churn (WiX 6 vs 7 has bitten before).
+- HMAC build-key fingerprint reads `none` or `invalid` (Failure E) — `SMIRROR_TELEMETRY_MASTER_KEY` secret missing or rotated.
+
+**Procedure**:
+
+1. **Confirm the draft release is unpublished.** `gh release view v<X.Y.Z>` — the body should say "Draft". If it's already published, this procedure does NOT apply (selfupdate users would re-download); ship a v<X.Y.Z+1> patch instead.
+2. **Delete the draft release.** `gh release delete v<X.Y.Z> --yes`. This also removes uploaded assets (MSI, ZIP, checksums.txt).
+3. **Delete provenance attestations** (if any made it through). `gh attestation list <local-msi-path> --repo qraveh/SelectiveMirror` to enumerate; delete via the GitHub UI (Actions → Attestations) — there is no `gh attestation delete` subcommand as of 2026-05.
+4. **Delete the tag.** `git push --delete origin v<X.Y.Z>` then `git tag -d v<X.Y.Z>` locally. Order matters: remote first so a stale local tag can't be re-pushed by accident.
+5. **(If Failure A)** Fix `var version` in `cmd/smirror/main.go`, commit (`<X.Y.Z>: release-fix: <one-line reason>`), push.
+6. **(If Failure D)** Pin the runner image in `.github/workflows/release.yml` (`runs-on: windows-2022` instead of `windows-latest`) — this is the most defensive single edit; keep until the underlying churn is understood.
+7. **Re-run release-dryrun.yml** with `intended-tag=v<X.Y.Z> -f ref=master` and confirm green before re-tagging.
+8. **Re-tag and re-push.** `git tag -a v<X.Y.Z> -m "..."` + `git push origin v<X.Y.Z>`.
+9. **Watch the new release.yml run** via sm-keeper Mode B until both `release` and `msi` jobs are green and the draft body matches CHANGELOG `[X.Y.Z]`.
+10. **(If a winget PR was opened against the failed tag)** close it with a comment pointing at the new tag. The next successful release auto-submits a fresh PR if `WINGET_SUBMIT_ENABLED=1`.
+
+**Why delete-and-re-tag rather than force-update**: a force-pushed tag preserves the original tag-creation timestamp and confuses `selfupdate`'s comparison logic; provenance attestations bind to the original SHA and don't migrate. Clean delete + re-create gives sm-keeper Mode B a single chronology to monitor.
+
+**What this procedure does NOT cover** (escalate before acting):
+
+- Tag is already published (`Draft: false`). Selfupdate users have started downloading. Ship a patch release; don't try to un-publish.
+- The winget-pkgs PR has merged. Microsoft's manifest store has accepted the failed-tag's bytes. Ship a patch release; don't try to un-merge.
+- Provenance attestations have been consumed by a downstream verifier (e.g., a customer's policy engine). Same answer: patch forward.
+
+**Coverage gap acknowledgment**: the procedure above has been documented but has never been exercised against a real failed tag. v1.0.0 is the first tag against this re-tag-aware infrastructure. If any step fails or has stale instructions, edit this file in the same hotfix commit and surface the gap to sm-keeper for the next-release retro.
+
+---
+
 ## Appendix — Why no automatic publish
 
 The release-pipeline jobs leave the GitHub Release as **Draft**. Final publication is a human click. This is deliberate:
