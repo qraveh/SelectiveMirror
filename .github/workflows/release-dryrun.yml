@@ -80,6 +80,33 @@ jobs:
         shell: pwsh
         run: gcc --version
 
+      # System-validation tests further down the pipeline invoke smirror
+      # against a real rclone binary (cli_test.go::TestCLI_DryRun,
+      # scenario_test.go::TestScenario_FileCreate_Sync_Verify, all the
+      # panel-round tests, etc.). Most of those tests do NOT call
+      # requireRclone(t), so they FAIL when rclone is absent rather
+      # than skipping. v1.0.0 dryrun caught this gap on first contact:
+      # ~95 tests "failed" against tip 32b38e5 simply because windows-
+      # latest doesn't ship with rclone preinstalled.
+      #
+      # Pin to v1.73.2 (the SelectiveMirror minimum-supported version
+      # per CompatCheck()). Direct download from rclone.org for
+      # determinism — chocolatey's rclone package is on a 24h delay
+      # behind upstream.
+      - name: Install rclone (v1.73.2)
+        shell: pwsh
+        run: |
+          $url = 'https://downloads.rclone.org/v1.73.2/rclone-v1.73.2-windows-amd64.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'rclone.zip'
+          $dest = Join-Path $env:RUNNER_TEMP 'rclone'
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $exe = Get-ChildItem $dest -Recurse -Filter rclone.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "rclone.exe not found after extract"; exit 1 }
+          Add-Content -Path $env:GITHUB_PATH -Value $exe.Directory.FullName
+          & $exe.FullName version
+
       - name: go vet
         run: go vet ./...
 
@@ -109,15 +136,26 @@ jobs:
               $line = $_.Trim()
               if ($line -and -not $line.StartsWith('#')) { $line }
           })
+          # Pin the JSON output to an absolute path so the Push/Pop-Location
+          # dance below cannot misalign Tee-Object's write with Get-Content's
+          # read. Pre-fix the path was `../system-validation-results.json`,
+          # which resolved differently in the two contexts:
+          #   inside Push-Location system-validation: <repo>/system-validation-results.json
+          #   after Pop-Location:                     <repo>/../...  (parent of repo)
+          # The mismatch was masked when all tests passed (script exited
+          # before the Get-Content). On v1.0.0 dryrun the script reached
+          # the parser branch and tripped "Cannot find path" because it
+          # looked one level above the runner workspace.
+          $resultsPath = Join-Path $env:GITHUB_WORKSPACE 'system-validation-results.json'
           Push-Location system-validation
-          go test -count=1 -json ./... | Tee-Object -FilePath ../system-validation-results.json | Out-Null
+          go test -count=1 -json ./... | Tee-Object -FilePath $resultsPath | Out-Null
           $exitCode = $LASTEXITCODE
           Pop-Location
           if ($exitCode -eq 0) {
               Write-Host "system-validation: all tests pass"
               exit 0
           }
-          $events = @(Get-Content ../system-validation-results.json | ForEach-Object { $_ | ConvertFrom-Json })
+          $events = @(Get-Content $resultsPath | ForEach-Object { $_ | ConvertFrom-Json })
           $failed = $events | Where-Object { $_.Action -eq 'fail' -and $_.Test } | ForEach-Object { ($_.Test -split '/')[0] } | Sort-Object -Unique
           $unexpected = @($failed | Where-Object { $allowed -notcontains $_ })
           if ($unexpected.Count -gt 0) {

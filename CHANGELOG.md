@@ -51,7 +51,7 @@ For customers doing vendor due-diligence or reading the v1.0.0 release with a co
 
 ### v1.0 release-prep changes (this commit)
 
-- Source `cmd/smirror/main.go::version` bumped 0.9.66-dev → **1.0.0** (R-3, pre-authorized per the standing-authorization block in `docs/iso-audit-required-actions-2026-04-29.md`).
+- Source `cmd/smirror/main.go::version` bumped 0.9.115-dev → **1.0.0** (R-3, pre-authorized per the standing-authorization block in `docs/iso-audit-required-actions-2026-04-29.md`). The dev cadence drifted from the originally planned 0.9.66-dev cut because of the 22-commit Telemetry-validation pause (0.9.75 → 0.9.96-dev) plus the four-persona pre-tag review (0.9.110 → 0.9.115-dev: junk/-triage, soft-caveats, re-tag procedure documentation).
 - `README.md` ISO disclosure language tightened: "external review committed for v1.0.1" replaced with the audit's proposed Non-Conformity-by-Choice framing (R-6).
 - `docs/VV-Plan.md` §1.1 V&V table corrected: "integration tests" moved from Validation/Method (category error per ISO/IEC/IEEE 29148:2018 §A.2 and 29119-1:2022 vocabulary) to Verification/Method; Validation/Method becomes "User acceptance, field testing, beta feedback" (R-8). BugTracker `SM-152` status flipped open → fixed (R-11).
 - `docs/iso-compliance.md` Source-documents-audited block refreshed to current revisions (R-9); §10.4 Change log gains a `v1.0 baseline (2026-05-01)` row (R-10).

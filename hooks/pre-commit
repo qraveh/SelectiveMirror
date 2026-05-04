@@ -1,0 +1,69 @@
+#!/bin/bash
+# Pre-commit hook: auto-increment patch version in cmd/smirror/main.go
+# if any source or doc files are staged and the version wasn't already
+# bumped in this commit.
+#
+# Format: var version = "MAJOR.MINOR.PATCH-dev"
+# Effect: PATCH -> PATCH+1, main.go staged automatically.
+
+VERSION_FILE="cmd/smirror/main.go"
+
+# Only act if there are staged changes to tracked files
+staged=$(git diff --cached --name-only -- '*.go' '*.md' '*.yaml' '*.yml' '*.wxs' '*.wxi' '*.ps1' '*.vbs')
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+# Check if version was already bumped manually in this commit
+if git diff --cached --name-only | grep -q "^${VERSION_FILE}$"; then
+    old_ver=$(git show HEAD:"${VERSION_FILE}" 2>/dev/null | sed -n 's/^var version = "\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+    new_ver=$(git diff --cached -- "${VERSION_FILE}" | sed -n 's/^+var version = "\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
+    if [ -n "$new_ver" ] && [ "$old_ver" != "$new_ver" ]; then
+        exit 0
+    fi
+fi
+
+# Read current version from working tree
+current=$(sed -n 's/^var version = "\([0-9]*\.[0-9]*\.[0-9]*\)\(-[a-z]*\)\{0,1\}".*/\1 \2/p' "$VERSION_FILE")
+if [ -z "$current" ]; then
+    echo "pre-commit: WARNING: could not find version in $VERSION_FILE, skipping auto-bump"
+    exit 0
+fi
+
+major=$(echo "$current" | cut -d. -f1)
+minor=$(echo "$current" | cut -d. -f2)
+patch=$(echo "$current" | cut -d. -f3 | cut -d' ' -f1)
+# Extract suffix like "-dev" (the sed pattern puts a space before it)
+suffix=$(echo "$current" | sed -n 's/[0-9.]* //p')
+
+if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then
+    echo "pre-commit: WARNING: could not parse version, skipping auto-bump"
+    exit 0
+fi
+
+# Skip auto-bump when sitting on a release-version (no -dev suffix).
+# This is the tag-target case: maintainer intends to commit changes
+# AGAINST the v$major.$minor.$patch tag-promotion. Auto-bumping would
+# generate a misleading "1.0.1" or "1.0.2" string in commits that are
+# really still part of the v1.0.0 release prep.
+#
+# When the actual tag is pushed and post-release work resumes, the
+# maintainer manually moves the version forward (e.g., 1.0.0 -> 1.0.1-dev)
+# and the auto-bump cadence resumes from there.
+if [ -z "$suffix" ]; then
+    echo "pre-commit: version ${major}.${minor}.${patch} is release-shape (no -dev); skipping auto-bump (tag-target invariant)"
+    exit 0
+fi
+
+new_patch=$((patch + 1))
+
+old_full="${major}.${minor}.${patch}${suffix}"
+new_full="${major}.${minor}.${new_patch}${suffix}"
+
+# Write the new version
+sed -i "s|var version = \"${old_full}\"|var version = \"${new_full}\"|" "$VERSION_FILE"
+
+# Stage the version file
+git add "$VERSION_FILE"
+
+echo "pre-commit: version ${old_full} -> ${new_full}"

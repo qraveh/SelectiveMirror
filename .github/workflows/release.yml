@@ -66,6 +66,26 @@ jobs:
         shell: pwsh
         run: gcc --version
 
+      # System-validation tests invoke smirror against a real rclone
+      # binary (cli_test.go, scenario_test.go, panel_findings_round*).
+      # Most don't call requireRclone(t) so they fail rather than skip
+      # when rclone is absent. Pinned to v1.73.2 (CompatCheck minimum).
+      # v1.0.0 dryrun caught this gap; same fix mirrored from
+      # release-dryrun.yml.
+      - name: Install rclone (v1.73.2)
+        shell: pwsh
+        run: |
+          $url = 'https://downloads.rclone.org/v1.73.2/rclone-v1.73.2-windows-amd64.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'rclone.zip'
+          $dest = Join-Path $env:RUNNER_TEMP 'rclone'
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $exe = Get-ChildItem $dest -Recurse -Filter rclone.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "rclone.exe not found after extract"; exit 1 }
+          Add-Content -Path $env:GITHUB_PATH -Value $exe.Directory.FullName
+          & $exe.FullName version
+
       - name: go vet
         run: go vet ./...
 
@@ -114,15 +134,22 @@ jobs:
               $line = $_.Trim()
               if ($line -and -not $line.StartsWith('#')) { $line }
           })
+          # Pin JSON output to an absolute path. Pre-fix `../system-validation-
+          # results.json` resolved to <repo>/system-validation-results.json
+          # inside Push-Location but to the runner's PARENT dir after
+          # Pop-Location, so any non-zero go-test exit (e.g. allowlisted
+          # failures present) tripped "Cannot find path". v1.0.0 dryrun
+          # caught this on first contact (run 25303927445).
+          $resultsPath = Join-Path $env:GITHUB_WORKSPACE 'system-validation-results.json'
           Push-Location system-validation
-          go test -count=1 -json ./... | Tee-Object -FilePath ../system-validation-results.json | Out-Null
+          go test -count=1 -json ./... | Tee-Object -FilePath $resultsPath | Out-Null
           $exitCode = $LASTEXITCODE
           Pop-Location
           if ($exitCode -eq 0) {
               Write-Host "system-validation: all tests pass"
               exit 0
           }
-          $events = @(Get-Content ../system-validation-results.json | ForEach-Object { $_ | ConvertFrom-Json })
+          $events = @(Get-Content $resultsPath | ForEach-Object { $_ | ConvertFrom-Json })
           $failed = $events | Where-Object { $_.Action -eq 'fail' -and $_.Test } | ForEach-Object { ($_.Test -split '/')[0] } | Sort-Object -Unique
           $unexpected = @($failed | Where-Object { $allowed -notcontains $_ })
           if ($unexpected.Count -gt 0) {
