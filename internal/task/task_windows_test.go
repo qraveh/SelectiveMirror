@@ -215,7 +215,7 @@ func TestStop_RealError(t *testing.T) {
 func TestQuery_ParsesLastRun(t *testing.T) {
 	xmlResp := `<?xml version="1.0" encoding="UTF-16"?><Task/>`
 	listResp := `
-HostName:          MSI
+HostName:          WORKSTATION
 TaskName:          \SelectiveMirror
 Next Run Time:     4/19/2026 9:00:00 AM
 Status:            Ready

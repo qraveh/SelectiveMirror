@@ -21,7 +21,7 @@ docs/operations/deploy-telemetry-v2.md.
 
 Usage:
     # Direct against Supabase (skip the Worker for end-to-end DB checks):
-    export SUPABASE_URL="https://qkspigvkniiiwxggdvbr.supabase.co"
+    export SUPABASE_URL="https://<your-project-ref>.supabase.co"
     export SUPABASE_SERVICE_ROLE_KEY="<service_role_jwt>"
     export TELEMETRY_MASTER_KEY="<the master key from Vault>"
     python3 scripts/telemetry-v2-smoke-test.py

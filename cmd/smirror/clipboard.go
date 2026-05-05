@@ -15,7 +15,7 @@ import (
 //              minimal installations; an informative error is returned
 //              so the caller can fall back to printing the report.
 //
-// PF-E5 (panel review 2026-04-28): the alternative to --browser for
+// PF-E5: the alternative to --browser for
 // `smirror report-bug`. Browser-based submit puts the report in a URL
 // query string which then ends up in browser history; clipboard is the
 // privacy-preserving alternative.

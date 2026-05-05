@@ -133,7 +133,7 @@ func TestLoad_DuplicateNames(t *testing.T) {
 	}
 }
 
-// BUG-1 (panel review 2026-04-28): case-only collisions like "WorkProject"
+// BUG-1: case-only collisions like "WorkProject"
 // vs "workproject" must also be rejected. On case-insensitive Windows NTFS
 // they resolve to the same on-disk path and the same state-DB key, so two
 // watchers would race on the same files.
@@ -324,7 +324,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 // Panel-review 2026-04-28 — config validation hardening
 // =========================================================================
 
-// GAP-1: rclone_extra_flags denylist. Network-listener flags, log-file
+// rclone_extra_flags denylist. Network-listener flags, log-file
 // redirection, and config-swap flags must be rejected.
 func TestValidate_RcloneExtraFlags_DenylistGlobal(t *testing.T) {
 	cases := []struct {
@@ -381,7 +381,7 @@ func TestValidate_RcloneExtraFlags_AllowsBenign(t *testing.T) {
 	}
 }
 
-// GAP-1: per-mirror flag list is also validated.
+// per-mirror flag list is also validated.
 func TestLoad_RcloneExtraFlags_PerMirrorRejected(t *testing.T) {
 	p := writeConfig(t, `mirrors:
   - name: a
@@ -400,7 +400,7 @@ func TestLoad_RcloneExtraFlags_PerMirrorRejected(t *testing.T) {
 	}
 }
 
-// GAP-2: rclone_config must point to a regular file. Bogus paths are
+// rclone_config must point to a regular file. Bogus paths are
 // rejected at config load (not deferred to first sync).
 func TestLoad_RcloneConfig_MissingPathRejected(t *testing.T) {
 	p := writeConfig(t, `mirrors:
@@ -435,7 +435,7 @@ rclone_config: %q
 	}
 }
 
-// GAP-3: overlapping local_paths (parent / child) rejected.
+// overlapping local_paths (parent / child) rejected.
 func TestLoad_OverlappingLocalPaths_Rejected(t *testing.T) {
 	parent := t.TempDir()
 	child := filepath.Join(parent, "sub")
@@ -476,7 +476,7 @@ func TestLoad_SameLocalPath_DifferentNames_Rejected(t *testing.T) {
 	}
 }
 
-// GAP-4: drive-root local_path rejected.
+// drive-root local_path rejected.
 func TestValidate_LocalPath_DriveRootRejected(t *testing.T) {
 	if filepath.Separator != '\\' {
 		t.Skip("drive-root semantics are Windows-specific")
@@ -576,7 +576,7 @@ func TestValidate_LocalPath_UNCRejected(t *testing.T) {
 	}
 }
 
-// GAP-5: traversal-shaped remote rejected.
+// traversal-shaped remote rejected.
 func TestValidate_Remote_TraversalRejected(t *testing.T) {
 	cases := []string{
 		"local:../../etc",
@@ -608,11 +608,11 @@ func TestValidate_Remote_NormalAllowed(t *testing.T) {
 }
 
 // =========================================================================
-// PR-S6 (panel review pre-release 2026-04-28) — Unicode-confusable bypass
-// of GAP-1 denylist + alert_min_severity enum validation
+// review item — Unicode-confusable bypass
+// of # denylist + alert_min_severity enum validation
 // =========================================================================
 
-// PR-S6: a flag whose name carries any non-ASCII glyph is rejected
+// review item: a flag whose name carries any non-ASCII glyph is rejected
 // before denylist matching. This blocks `--rс` (Cyrillic 'с' U+0441) and
 // `--rс-addr`-style lookalikes that would otherwise slip past the
 // `--rc` ASCII prefix check.
@@ -645,7 +645,7 @@ func TestValidate_RcloneExtraFlags_NonASCIIRejected(t *testing.T) {
 	}
 }
 
-// PR-S6: alert_min_severity must be one of the canonical severity strings.
+// review item: alert_min_severity must be one of the canonical severity strings.
 // A typo like `erro` previously passed Validate() and silently demoted
 // filtering (severityAtLeast returns 0 for unknown thresholds).
 func TestValidate_AlertMinSeverity_RejectsTypo(t *testing.T) {

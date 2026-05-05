@@ -247,10 +247,10 @@ For each package, identify:
 | Total functions | 184 → grown with anomaly/hooks/telemetry/fsutil packages |
 | Functions at 0% | 137 (74.5%) at baseline; reduced materially but watcher still has 8 of 27 functions at 0% (NewManager, Start, Stop, eventLoop, healthMonitor, isLinkToDir, removeRecursive, WatchCount) |
 | Unit test count | 530+ → **650+** (656 top-level Test/Fuzz across 16 packages; 871 incl. subtests) |
-| System-validation tests (panel review rounds 2-13) | new artifact class; ~140 tests across 12 round files (+ Round 12 fuzz / rclone matrix, Round 13 cloud-backend) |
+| System-validation tests (multi-role review rounds 2-13) | new artifact class; ~140 tests across 12 round files (+ a fuzz / rclone-matrix round, and a cloud-backend round) |
 | Integration tests | 66 + 11 stress → 123 integration cases |
 | Fuzz tests | 2 targets (filter, config); 30s × 2 targets, 18M+ execs clean |
-| Test code lines | 6,798 (Go) + 1,150 (PowerShell) at baseline; grown with panel-review tests |
+| Test code lines | 6,798 (Go) + 1,150 (PowerShell) at baseline; grown with review-driven tests |
 
 ### 5.2 Per-Package Analysis
 
@@ -274,7 +274,7 @@ For each package, identify:
 | telemetry | 76.8% | +1.4 from 75.4% | SanitizeReport + tier work raised coverage |
 | watcher | **59.5%** | +42.9 from stale 16.6% | The "critical gap" was based on a stale baseline (SM-155); actual coverage was already ~59%. 8 of 27 functions still at 0% (NewManager, Start, Stop, eventLoop, healthMonitor, isLinkToDir, removeRecursive, WatchCount); these need dependency-injection refactor (X-04, P2). |
 | **Total internal/** | **66.4%** | +30.6 from stale 35.8% | v1.0 target was 60% — exceeded. |
-| cmd/smirror | (not aggregated) | — | Glue code; coverage comes from system-validation suite + panel-review rounds, not unit tests. |
+| cmd/smirror | (not aggregated) | — | Glue code; coverage comes from system-validation suite + review-driven rounds, not unit tests. |
 
 #### Per-package narratives (updated)
 

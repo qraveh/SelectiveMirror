@@ -1,6 +1,6 @@
 # rclone Stall Detection — design v2 (post-review)
 
-**Status**: revised after multirole BMad panel (Winston / Amelia / Adversarial / Edge-case Hunter), 2026-04-27.
+**Status**: revised after a multi-role panel review (architect / dev / independent reviewer / edge-case hunter), 2026-04-27.
 **Author**: Claude (with project owner Raveh).
 **Predecessor**: design v1 (kept in git history of this file).
 
@@ -133,7 +133,7 @@ LivenessProbe func(handle uintptr) Signals
 
 No `Clock` interface diffusing through the package. No build-tag `proc_other.go` — the `LivenessProbe` field swap covers cross-platform tests on the dev box. (`proc_windows.go` provides the production probe via build tag.)
 
-## 9. Acceptance criteria (from Amelia, slightly tightened)
+## 9. Acceptance criteria (from the dev role-context, slightly tightened)
 
 - **AC-LV-01** `runRclone` no longer wraps the rclone subprocess in `context.WithTimeout(5min)` unless `SMIRROR_DISABLE_LIVENESS=1`.
 - **AC-LV-02** `commonFlags` includes `--contimeout 30s --timeout 60s --low-level-retries 3` in addition to existing flags. `deleteFlags` includes the same except `--low-level-retries`.
@@ -163,7 +163,7 @@ No `Clock` interface diffusing through the package. No build-tag `proc_other.go`
 - Anomaly kinds added in `internal/anomaly/anomaly.go` (~10 LOC)
 - Tests `internal/sync/liveness_test.go` (~250 LOC)
 
-**Total ~615 LOC.** Higher than v1's 320 — Amelia's recalibration was correct.
+**Total ~615 LOC.** Higher than v1's 320 — the dev-role recalibration was correct.
 
 ## 11. What's deliberately deferred
 

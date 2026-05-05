@@ -1,6 +1,6 @@
 name: Telemetry emulation
 
-# Quincy's CI gate (round-3 panel, 2026-04-30): exercises the v2
+# CI gate: exercises the v2
 # telemetry stack end-to-end against a local Supabase instance on every
 # PR that touches the schema, the smoke test, the Worker, or the v2
 # Go-side primitives. Does NOT touch live infrastructure.
@@ -38,6 +38,11 @@ on:
       - 'scripts/telemetry-report.py'
       - 'internal/telemetry/**'
       - '.github/workflows/telemetry-emulation.yml'
+
+# Default to read-only token at workflow scope. The job runs entirely
+# against a local Supabase emulator; no write scopes needed.
+permissions:
+  contents: read
 
 jobs:
   emulate:

@@ -10,7 +10,7 @@
        MSI requires a strict x.y.z[.w] numeric ProductVersion. Any
        "-dev" suffix from source must be stripped before passing here. -->
   <?ifndef ProductVersion ?>
-    <?define ProductVersion = "0.8.0" ?>
+    <?define ProductVersion = "1.0.0" ?>
   <?endif ?>
 
   <!-- Stable GUIDs. DO NOT change after first release. -->

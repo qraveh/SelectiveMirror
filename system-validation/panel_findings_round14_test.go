@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Round 14: destructive delete-policy contract checks from the BMAD audit panel.
+// Round 14: destructive delete-policy contract checks from the round-14 multi-role panel review.
 // These are black-box tests: the suite drives smirror.exe and observes local
 // rclone-backend side effects, without importing production code.
 

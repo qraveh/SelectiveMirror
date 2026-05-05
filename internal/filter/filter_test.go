@@ -1064,7 +1064,7 @@ func TestIsStrictSubset(t *testing.T) {
 	}
 }
 
-// PF-E1 (panel review 2026-04-28): regression-document the actual
+// PF-E1: regression-document the actual
 // behavior of negation patterns under excluded directories. The panel
 // system-validation harness logged this without asserting; we log the
 // same pattern here so a future contributor "fixing" the perceived

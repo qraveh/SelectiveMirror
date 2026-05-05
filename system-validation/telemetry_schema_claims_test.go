@@ -1,6 +1,6 @@
 // Schema-conformance tests for the telemetry v2 architecture.
 //
-// Origin: Quincy (System Validation), telemetry round-3 panel,
+// Origin: System Validation review,
 // 2026-04-30. Maps directly to claims in
 // system-validation/CLAIMS-MAP.md:
 //
@@ -426,7 +426,7 @@ func lineContaining(s string, offset int) string {
 }
 
 // ---------------------------------------------------------------------------
-// Drift detection — bug_unknown_share view (Mary's round-3 panel fix)
+// Drift detection — bug_unknown_share view (drift-detection follow-up)
 // ---------------------------------------------------------------------------
 //
 // Under v2 the client picks bug_kind from a closed taxonomy at submit
@@ -443,7 +443,7 @@ func TestTelemetryV2Schema_HasBugUnknownShareView(t *testing.T) {
 	sql := readV2SQL(t)
 
 	if !strings.Contains(sql, "CREATE OR REPLACE VIEW telemetry.bug_unknown_share") {
-		t.Errorf("v2 SQL must define the bug_unknown_share view (Mary's drift-detection)")
+		t.Errorf("v2 SQL must define the bug_unknown_share view (drift-detection)")
 	}
 	// The view must apply the k-anon floor (>= 5 reports per version)
 	// before exposing rows. We grep for the literal as the simplest

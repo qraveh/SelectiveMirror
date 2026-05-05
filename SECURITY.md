@@ -17,7 +17,7 @@ If you discover a security vulnerability in SelectiveMirror, please report it re
    - Description of the vulnerability
    - Steps to reproduce
    - Potential impact
-3. You will receive a response within 72 hours.
+3. The maintainer aims for a first response within 7 days. SelectiveMirror is a single-developer project; please size your expectation accordingly. If a vulnerability is being actively exploited and you receive no response within 7 days, opening a public issue marked "URGENT — security" is appropriate.
 
 ## Scope
 
@@ -46,9 +46,9 @@ SelectiveMirror handles file paths, rclone credentials (indirectly via rclone's 
 
 **Integrity verification today**: `selfupdate` and manual downloads can be verified against `checksums.txt` (SHA-256) published with each release. As of v0.9.27 the release pipeline also produces [GitHub build-provenance attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds), verifiable with `gh attestation verify <artifact> --repo qraveh/SelectiveMirror`. Provenance proves the binary was built by this repository's CI on the tagged commit; checksum verification proves the bytes you have are the bytes CI uploaded. Neither is a substitute for an Authenticode signature, but together they cover the supply-chain attack surface that a single hash file does not (compromised release pipeline taints the checksum file alongside the binaries; the GitHub-side attestation is signed by the GitHub Actions OIDC issuer, which a release-pipeline compromise cannot forge).
 
-**Plan (post-v1.0)**: applying to **SignPath Foundation** (free EV code-signing for vetted open-source projects). Once the foundation cert is issued the release pipeline gains a SignPath GitHub Action between MSI build and upload — every tag automatically produces signed artifacts. The cert is project-bound; no per-version re-application. SmartScreen reputation builds quickly under EV.
+**Plan (post-v1.0)**: SelectiveMirror is applying to [**SignPath Foundation**](https://signpath.org/apply) (free EV code-signing for vetted open-source projects) — the foundation's application gate is "released in the form to be signed", which v1.0.0 satisfies. Once the foundation cert is issued, the release pipeline gains a SignPath GitHub Action between MSI build and upload — every tag automatically produces signed artifacts. The cert is project-bound; no per-version re-application. SmartScreen reputation builds quickly under EV.
 
-If SignPath Foundation declines or response time is slow, the fallback is **Microsoft Trusted Signing** (cloud-hosted OV at $120/year, no hardware token, integrates via `azure/trusted-signing-action`). Self-signed certificates are explicitly rejected as a path — they don't help SmartScreen and confuse users into thinking a binary is verified when it isn't.
+If SignPath Foundation declines or wall-clock review is too slow, the fallback is [**Microsoft Trusted Signing**](https://learn.microsoft.com/en-us/azure/trusted-signing/) (cloud-hosted OV, integrates via `azure/trusted-signing-action`; pricing per Microsoft's published rates). Self-signed certificates are explicitly rejected as a path — they don't help SmartScreen and confuse users into thinking a binary is verified when it isn't.
 
 ## Hook Security (pre_sync_hook / post_sync_hook)
 
@@ -72,7 +72,7 @@ Hooks are user-provided shell commands executed by smirror before/after each fil
 
 **Security requirements (enforced by smirror):**
 1. **Admin-owned config when running as Service (SEC-C5, service-wide as of 0.8.51-dev)**. If smirror is installed as a Windows Service, it refuses to start unless the config file is owned by Administrators or LocalSystem. This is enforced at `smirror service install` time and again at service startup. The requirement was originally scoped to hook-bearing configs only; it was widened because `rclone_path` / `rclone_extra_flags` / delete-policy / filter rules also give a non-admin config-writer arbitrary-code-execution-as-SYSTEM. Remedy: move config to an admin-writable-only location such as `%ProgramData%\SelectiveMirror\config.yaml`, or use per-user task mode instead (`smirror task install` — no admin required, no SYSTEM).
-2. **Shell-metacharacter rejection (SEC-C5)**. Before spawning a hook, smirror rejects any environment value (`SMIRROR_PROJECT`, `SMIRROR_FILE`, `SMIRROR_REMOTE`, `SMIRROR_EVENT`) containing `& | < > " ^ $ \` ( ) ;` or control characters. These characters in a filename — e.g., `a&calc.exe` on Windows — would be interpreted as shell operators if the hook script references the variable. Rejection is logged and the hook is skipped for that specific event.
+2. **Shell-metacharacter rejection (SEC-C5)**. Before spawning a hook, smirror rejects any environment value (`SMIRROR_PROJECT`, `SMIRROR_FILE`, `SMIRROR_REMOTE`, `SMIRROR_EVENT`) containing any of: `& | < > " ^ $ \` ( ) ;` (POSIX shell metacharacters), `% !` (cmd.exe variable expansion + delayed expansion), control characters `0x00–0x1f`, or Unicode RTL-override / left-to-right-override / zero-width-space / zero-width-non-joiner / zero-width-joiner / BOM. These characters in a filename — e.g., `a&calc.exe` on Windows or `file%PATH%.txt` — would be interpreted as shell operators or expanded to environment values if the hook script references the variable. Rejection is logged and the hook is skipped for that specific event.
 3. **Always quote variables** in hook scripts anyway. The metachar filter is defense-in-depth; writing `echo "%SMIRROR_FILE%"` (Windows) or `echo "$SMIRROR_FILE"` (Unix) is still good practice.
 4. **Avoid hooks in Service mode** unless necessary. The LocalSystem account has unrestricted access to the machine.
 

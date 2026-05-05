@@ -9,7 +9,7 @@
 
 **Project root**: `C:\SelectiveMirror\`
 **Author**: Raveh (smirror@qodeh.com)
-**Status**: v0.9.x-dev (Phases 1, 1.5, 2, 2.5, 4, 5, 6, 7 complete; Phase 3 USN journal pending). v0.9.0 released 2026-04-18; v0.9.26 (2026-04-29) is the latest published tag. Phase 5 telemetry: **architecture v2 (stream-aggregate-and-discard)** is the current and only design — `docs/telemetry-architecture-v2.md`, `docs/telemetry-v2.sql`. No personal data is stored on the telemetry server by construction. The v1 schema (raw `ingest_envelope` + normalized tables) was a leftover never wired client-side after SM-160; its drop SQL is in `docs/operations/sql/drop-v1-leftover.sql`. MSI consent **registry** wired since v0.9.4-dev — the in-installer tier-selection **dialog** is shipping in the current development cycle (was tracked as the "pending UI checkbox" in `installer/TelemetryConsent.wxi`). `smirror telemetry forget` is not a command (no record to forget).
+**Status**: v1.0.0 — first stable release. Phases 1, 1.5, 2, 2.5, 4, 5, 6 complete; Phase 3 (USN journal recovery) deferred; Phase 7 (pre/post-sync hooks) deferred from v1.0 per `docs/RESOLUTION-2026-04-29-hooks-deferred.md`. Telemetry: opt-in (default off), three-tier consent (None / Standard / Reliability), stream-aggregate-and-discard architecture — see `docs/telemetry-architecture-v2.md`, `docs/PRIVACY.md`, `docs/telemetry-v2.sql`. No personal data is stored on the telemetry server by construction. `smirror telemetry forget` is not a command (no record to forget under the v2 architecture).
 **License**: MIT
 **Language**: Go 1.26+
 
@@ -55,8 +55,8 @@ smirror sync-now
 # Check status + metrics
 smirror status
 
-# Investigate a file
-smirror explain Orch CLAUDE.md
+# Investigate a file (mirror-name + relative path inside that mirror)
+smirror explain MyProject README.md
 ```
 
 ---
@@ -73,7 +73,7 @@ smirror explain Orch CLAUDE.md
 | `smirror list-filters [mirror]` | Show effective filter rules |
 | `smirror explain <mirror> <path>` | Explain include/exclude status, matched rule, sync state |
 | `smirror project-stats [mirror]` | File counts + line counts per mirror (alias: `stats`) |
-| `smirror report-bug [flags]` | Generate diagnostic report (`--stdout`, `--open`) |
+| `smirror report-bug [flags]` | Generate diagnostic report (`--stdout`, `--browser`, `--clipboard`, `--submit`) |
 | `smirror remote [remote_path]` | Show or set the default rclone remote for new mirrors |
 | `smirror addmirror <path...> [flags]` | Add directories as mirrors (`-dest`, `--delete`, `--initial-sync`; aliases: `add-mirror`, `add`) |
 | `smirror unmirror <name\|path> [flags]` | Remove mirror from config, clean state DB (`--purge-remote`, `--yes`; aliases: `removemirror`, `remove-mirror`, `remove`) |
@@ -157,7 +157,7 @@ File: `~/.selectivemirror/config.yaml`
 
 - **mirrors**: List of watched directories with rclone remote destinations
 - **global_excludes**: Patterns applied to all projects (.gitignore syntax)
-- **delete_policy**: `ignore`, `delete` (default), or `quarantine`
+- **delete_policy**: `ignore`, `delete`, or `quarantine` (default)
 - **quarantine_days**: Days to keep quarantined files (default 30)
 - **alert_webhook_url**: HTTP endpoint for incident-based anomaly alerts (empty = disabled)
 - **alert_min_severity**: Minimum severity to alert: info, warning, error (default), critical
@@ -169,11 +169,11 @@ Controls what happens on the remote when a file is deleted locally.
 
 | Policy | Batch verb | On delete event | Use case |
 |--------|-----------|-----------------|----------|
-| `delete` (default) | `rclone sync` | `rclone deletefile` | Mirror deletions to remote |
+| `quarantine` (default) | `rclone copy` | `rclone moveto .quarantine/` | Soft-delete with 30-day recovery window |
+| `delete` | `rclone sync` | `rclone deletefile` | Mirror deletions to remote |
 | `ignore` | `rclone copy` | no action | Preserve remote as archive |
-| `quarantine` | `rclone copy` | `rclone moveto .quarantine/` | Soft-delete with recovery window |
 
-**Precedence**: per-mirror `delete_policy` > global `delete_policy` > default (`delete`). If neither mirror nor global specifies a policy, the default is `delete`.
+**Precedence**: per-mirror `delete_policy` > global `delete_policy` > default (`quarantine`). If neither mirror nor global specifies a policy, the default is `quarantine`.
 
 ### report-bug output
 
@@ -250,9 +250,20 @@ Follows [semver](https://semver.org/) (`MAJOR.MINOR.PATCH`):
 
 ---
 
-## Immediate Use Case
+## Originating use case
 
-Mirror `C:\ClaudeWork`, `C:\Orch`, `C:\HPL`, `C:\Zotero` → Google Drive `AI-hub/` folder for inter-AI orchestration. Replaces the LLM-dependent PostToolUse hook in Claude Code.
+Mirror local working directories (e.g. `C:\Projects\<name>`) → an
+rclone-supported remote (Google Drive, S3, Dropbox, OneDrive, SFTP,
+…) so that file changes propagate to the remote on-write rather than
+on a polling schedule. The "selective" in the name comes from per-
+project `.syncignore` filters; the "mirror" is rclone, invoked one
+file at a time on quiescence-stable changes.
+
+Common deployments include: developer-laptop → cloud-backup of work
+directories, replacing periodic-script approaches; coordination
+between machines that don't share a filesystem; and structured
+state-handoff between long-running tools that emit files into a
+watched directory.
 
 ---
 

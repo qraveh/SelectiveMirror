@@ -385,7 +385,7 @@ func (e *Engine) Generation() uint64 {
 // IsExcluded returns true if the relative path should be excluded from sync.
 // relPath should use forward slashes. Safe for concurrent use.
 //
-// BUG-R3-1 (panel review Round 3, decision recorded 2026-04-29): smirror
+// BUG-R3-1: smirror
 // deliberately diverges from one corner of the gitignore specification.
 // Spec: "It is not possible to re-include a file if a parent directory
 // of that file is excluded." (Reason: git skips excluded directories

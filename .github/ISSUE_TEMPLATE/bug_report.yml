@@ -1,6 +1,6 @@
 name: Bug Report
 description: Report a bug in SelectiveMirror
-title: ""
+title: "[Bug]: "
 labels: ["bug"]
 body:
   - type: markdown
@@ -58,14 +58,17 @@ body:
   - type: input
     id: install_id
     attributes:
-      label: Install ID
+      label: Install ID (optional)
       description: |
-        Anonymous local-database identifier. Auto-filled when this issue
-        was opened via `smirror report-bug --browser`. Lets us correlate
-        this public issue with structured telemetry already received from
-        your client. Random UUID, no personal information; safe to keep,
-        safe to redact. Leave blank if you opened the issue manually.
-      placeholder: e.g. f47ac10b-58cc-4372-a567-0e02b2c3d479
+        **Optional.** A random UUID generated locally on first run; not
+        derived from any personal information and not logged anywhere
+        outside your machine until you choose to share it. If you'd like
+        the maintainer to correlate this issue with telemetry your client
+        has already sent (and you have telemetry enabled), paste the
+        value `smirror status` prints under "install_id". Otherwise leave
+        blank — it is **not** required to file a bug report. Note that
+        anything you paste into a GitHub issue is publicly visible.
+      placeholder: leave blank unless you want to opt-in to correlation
 
   - type: textarea
     id: environment

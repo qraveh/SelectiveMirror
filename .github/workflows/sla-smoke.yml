@@ -45,29 +45,25 @@ jobs:
         with:
           go-version: '1.26.1'
 
-      - name: Install rclone (winget)
+      - name: Install rclone
+        # Direct download from downloads.rclone.org. Matches release.yml /
+        # release-dryrun.yml (single source of truth for the pinned
+        # version). Replaces a prior winget-based path that reported
+        # success but didn't reliably land the binary on PATH or at the
+        # documented %LOCALAPPDATA%\Microsoft\WinGet\Packages\... fallback
+        # location on windows-2025 runners.
         shell: pwsh
         run: |
-          # winget is available on windows-latest. --accept-* avoids the
-          # interactive prompt; --silent suppresses progress UI.
-          winget install Rclone.Rclone `
-              --accept-package-agreements `
-              --accept-source-agreements `
-              --silent `
-              --disable-interactivity
-          # Verify the binary is on PATH.
-          $rclone = Get-Command rclone -ErrorAction SilentlyContinue
-          if (-not $rclone) {
-              # Fallback: the system PATH update may not have propagated.
-              # Try the standard winget install location.
-              $candidate = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Rclone.Rclone_Microsoft.Winget.Source_8wekyb3d8bbwe\rclone.exe"
-              if (Test-Path $candidate) {
-                  echo "$([System.IO.Path]::GetDirectoryName($candidate))" >> $env:GITHUB_PATH
-              } else {
-                  Write-Error "rclone not found after winget install"
-                  exit 1
-              }
-          }
+          $url = 'https://downloads.rclone.org/v1.73.2/rclone-v1.73.2-windows-amd64.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'rclone.zip'
+          $dest = Join-Path $env:RUNNER_TEMP 'rclone'
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          Expand-Archive -Path $zip -DestinationPath $dest -Force
+          $exe = Get-ChildItem $dest -Recurse -Filter rclone.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "rclone.exe not found after extract"; exit 1 }
+          Add-Content -Path $env:GITHUB_PATH -Value $exe.Directory.FullName
+          & $exe.FullName version
 
       - name: Build smirror.exe
         env:

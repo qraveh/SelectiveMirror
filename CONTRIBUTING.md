@@ -68,6 +68,16 @@ docs/                    User, installation, and developer manuals
 5. Update documentation if your change affects user-facing behavior.
 6. Submit a pull request with a clear description of the change.
 
+## AI-assisted contributions
+
+Heavy use of AI pair-programming is welcome and expected — much of this codebase was authored that way. The contract is the same as for any contribution:
+
+- **You** are responsible for understanding what your PR does. Submitting code you can't explain is the same problem regardless of who or what wrote the first draft.
+- **You** affirm you have the right to contribute it (Developer Certificate of Origin standard — see [https://developercertificate.org](https://developercertificate.org)).
+- If a tool (Claude, ChatGPT, Copilot, etc.) materially shaped a commit, a `Co-Authored-By:` trailer is appropriate but not required. Whether to include one is your call.
+
+Tests are non-negotiable: if you can't write them, the AI you're pairing with should be able to.
+
 ## Code Style
 
 - Follow standard Go conventions (`gofmt`, `go vet`).

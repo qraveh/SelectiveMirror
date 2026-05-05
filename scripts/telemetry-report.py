@@ -32,7 +32,7 @@ Designed for a single-maintainer project at low volume — the report
 gracefully degrades to "n is too small for analysis; pipeline is
 alive" when there's not enough data to draw conclusions.
 
-Form factor and design: see panel review (Mary the Analyst,
+Form factor and design: see panel review (analyst role,
 2026-04-28; rounds 3-5) and docs/telemetry-architecture-v2.md.
 
 Usage:
@@ -322,7 +322,7 @@ def sparkline(values: list) -> str:
     return "".join(SPARK_BARS[min(int(v / mx * 8), 8)] for v in values)
 
 
-# SM-166 + PANEL-2 (BMAD review 2026-05-03): the Markdown cell
+# SM-166 + PANEL-2: the Markdown cell
 # escaper used to live here as a copy. PANEL-2 found that the
 # operator-report had its own near-identical-but-not-identical copy,
 # and divergence between the two is itself a privacy bug (whichever

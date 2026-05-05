@@ -98,11 +98,11 @@ type Store struct {
 	// it. Callers (daemon entry points) should warn-log when this is true
 	// AND the surrounding user data dir already existed — could mean the
 	// user accidentally wiped state.db and is about to lose sync history.
-	// GAP-8.
+	//
 	WasFreshOpen bool
 
 	// WasZeroByteOpen is true if state.db existed but was empty. Same
-	// caller treatment as WasFreshOpen. GAP-8.
+	// caller treatment as WasFreshOpen.
 	WasZeroByteOpen bool
 }
 
@@ -126,7 +126,7 @@ type FileState struct {
 
 // Open creates or opens the state database.
 //
-// GAP-8: callers can detect "fresh / re-created DB" via the WasFreshOpen
+// callers can detect "fresh / re-created DB" via the WasFreshOpen
 // hint set on the returned Store. Daemon-mode commands (smirror start,
 // sync-now) should warn-log when WasFreshOpen is true if the user data
 // dir already existed — silent re-creation could mean "user accidentally
@@ -146,7 +146,7 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("state DB path %q is a symlink; refused (SEC-H7)", dbPath)
 	}
 
-	// GAP-8: classify the open as fresh/zero-byte/normal so callers can
+	// # classify the open as fresh/zero-byte/normal so callers can
 	// surface a warning. Stat before SQLite touches the file.
 	wasFresh := false
 	wasZero := false
@@ -196,7 +196,7 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("creating schema: %w", schemaErr)
 	}
 
-	// GAP-7 (panel review 2026-04-28): refuse to open a state DB whose
+	// # refuse to open a state DB whose
 	// schema_version is HIGHER than this binary supports. A downgrade
 	// scenario (newer binary writes schema 17 → user runs older 0.9.12
 	// binary that knows only schemas 0..12) used to silently skip the
@@ -223,7 +223,7 @@ func Open(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("migration: %w", err)
 	}
 
-	// Tier-2 #7 (validation panel 2026-04-29): defense against silent
+	// # defense against silent
 	// corruption. SQLite can persist torn pages or partially-written WAL
 	// segments after an unclean shutdown; the daemon would then operate
 	// on quietly inconsistent state for hours before `smirror
@@ -331,7 +331,7 @@ const vacuumInterval = 7 * 24 * time.Hour
 // statements (PruneOldLogs, DeleteProject) free pages internally but
 // do not return them to the filesystem — the state-DB file grows
 // monotonically across the daemon's lifetime even on a steady-state
-// workload. Tier-2 #6 (validation panel 2026-04-29).
+// workload. 
 //
 // Returns true if VACUUM was run, false if skipped because the last
 // run was recent. Errors are returned for the caller to decide

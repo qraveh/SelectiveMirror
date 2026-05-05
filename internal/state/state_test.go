@@ -78,7 +78,7 @@ func TestMarkDaemonStartup_Sets(t *testing.T) {
 // migration count, which then triggered migration re-runs on the next
 // daemon startup.
 //
-// (After GAP-7 panel-review fix this test is partly obsoleted: Open now
+// (After # panel-review fix this test is partly obsoleted: Open now
 // REFUSES to operate on a DB whose recorded schema_version exceeds
 // len(migrations). To test the no-downgrade invariant we use a value
 // equal to len(migrations), where Open is allowed to proceed.)
@@ -116,7 +116,7 @@ func TestOpen_DoesNotDowngradeSchemaVersion(t *testing.T) {
 	}
 }
 
-// GAP-7 (panel review 2026-04-28): Open must REFUSE to operate when the
+// Open must REFUSE to operate when the
 // recorded schema_version is higher than len(migrations). The downgrade
 // scenario (newer binary writes schema 17 → user runs older binary that
 // knows only 0..12) used to silently skip migrations and operate at the

@@ -2,7 +2,7 @@
 
 **Audience**: end users of SelectiveMirror.
 **Plain-language version of**: `docs/telemetry-architecture-v2.md` (the technical spec).
-**Last updated**: 2026-05-04. Current as of v1.0.0.
+**Current as of**: v1.0.0.
 
 > **What ships today.** Three of the four documented event types are
 > fully wired:
@@ -14,7 +14,7 @@
 > - **`upgrade`** — sent automatically each time the binary's version
 >   changes between runs, at Standard or Reliability tier.
 >
-> **`reliability_snapshot`** is still deferred to v1.0.x: its server
+> **`reliability_snapshot`** is not yet implemented: its server
 > schema and client payload shape are in place, but the bucket
 > dimensions (anomaly count, sync-attempt count, restart count, queue-
 > depth high-water-mark) need new counters in the sync engine and
@@ -60,7 +60,7 @@ This is the strongest privacy posture an open-source tool can offer. It's also t
 |------|------------------------------------------|------------------------------|----------|
 | **None** | Nothing. No events, no version checks, no pings. | Same as spec. | **✅ default** |
 | **Standard** | Anonymous categorical counts: install / upgrade / bug-report bucket increments. | **install_census + bug-report.** first_seen + upgrade + bug_report counts all wire as documented. | |
-| **Reliability** | Standard plus operational-health bucket increments at upgrade events. | **Same as Standard today.** reliability_snapshot is still deferred to v1.0.x — the bucket dimensions need counter wiring in the sync engine. Tier choice is recorded so deltas flow when the writer ships, without re-consent. | |
+| **Reliability** | Standard plus operational-health bucket increments at upgrade events. | **Same as Standard today.** reliability_snapshot is not yet implemented — the bucket dimensions need counter wiring in the sync engine. Tier choice is recorded so deltas flow when the writer ships, without re-consent. | |
 
 You can change tiers at any time:
 
@@ -95,14 +95,14 @@ The full technical detail is in `docs/telemetry-architecture-v2.md`. The functio
 ## Currently shipped vs. deferred
 
 The architecture supports four event types. Three are fully wired
-today; the fourth (reliability_snapshot) is deferred to v1.0.x:
+today; the fourth (reliability_snapshot) is not yet implemented:
 
 | Event type | Documented in PRIVACY.md | Server schema | Client payload builder | Production submit pipeline | Actually sends |
 |------------|---|---|---|---|---|
 | `bug_report` | ✓ | ✓ `bug_daily_rollup` | ✓ `cmd/smirror/cmd_report_bug_submit.go` | ✓ `smirror report-bug --submit` (SM-158) | ✅ on-demand |
 | `first_seen` | ✓ | ✓ `installation_daily_rollup` | ✓ `internal/telemetry/payloads.go` | ✓ `internal/telemetry/install_events.go` | ✅ once per install |
 | `upgrade` | ✓ | ✓ `installation_daily_rollup` | ✓ `internal/telemetry/payloads.go` | ✓ `internal/telemetry/install_events.go` | ✅ on each version transition |
-| `reliability_snapshot` | ✓ | ✓ `reliability_daily_rollup` | ✓ `internal/telemetry/payloads.go` (inspect-only defaults) | **deferred to v1.0.x** | ❌ today |
+| `reliability_snapshot` | ✓ | ✓ `reliability_daily_rollup` | ✓ `internal/telemetry/payloads.go` (inspect-only defaults) | **not yet implemented** | ❌ today |
 
 What this means for you:
 

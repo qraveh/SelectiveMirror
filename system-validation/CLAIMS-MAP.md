@@ -1,6 +1,6 @@
 # CLAIMS-MAP — every PRIVACY.md / architecture-v2 claim mapped to a test ID
 
-**Origin**: Quincy (System Validation), telemetry round-3 panel, 2026-04-30.
+**Origin**: System Validation review, 2026-04-30.
 **Owner**: Raveh.
 **Rule**: every assertion in `docs/PRIVACY.md` and `docs/telemetry-architecture-v2.md` containing the words *"never"*, *"only"*, *"anonymous"*, or a numeric quantity must appear in this table with a test ID. **If a claim has no test, either delete the claim or write the test.** Do not ship v1.0 with unverified marketing prose.
 
@@ -44,7 +44,7 @@ A claim is **GREEN** when the linked test exists, runs in CI (or the smoke harne
 | **A-07** | "Aggregate counters are monotonic — counts only go up." (UPSERT increments, never decrements) | architecture-v2 "Threat model: replay" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_CountersMonotonic` | GREEN | 2026-04-30 |
 | **A-08** | "Bug-report narratives are NOT a telemetry event." (only categorical bucket, no narrative column) | architecture-v2 "What we moved off the telemetry path" | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_NoNarrativeColumns` | GREEN | 2026-04-30 |
 | **A-09** | "5 acceptance cases pass: bad HMAC, good HMAC, schema violation, unknown event, retired forget." | architecture-v2 "Logging guards" + smoke test | `scripts/telemetry-v2-smoke-test.py` | all five `case_*` | GREEN | (smoke test wired in `.github/workflows/telemetry-emulation.yml`, 2026-04-30) |
-| **A-10** | "Bug-kind drift detection: per-version unknown share is queryable." | (new — Mary's round-3 panel fix) | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_HasBugUnknownShareView` | GREEN | 2026-04-30 |
+| **A-10** | "Bug-kind drift detection: per-version unknown share is queryable." | (new — drift-detection follow-up) | `system-validation/telemetry_schema_claims_test.go` | `TestTelemetryV2Schema_HasBugUnknownShareView` | GREEN | 2026-04-30 |
 
 ---
 
@@ -73,7 +73,7 @@ There are no AMBER claims remaining.
 
 ---
 
-## v1.0 validation gate (Quincy's recommendation)
+## v1.0 validation gate
 
 Before tag, the percentage of GREEN claims must be **≥ 90%** of all *non-deferred* claims (excluding A-01 which requires a benchmark harness, and C-15 which is a humans-don't-quote-issues social rule that the CI scan only catches accidents of). Deferred claims must be explicitly listed below with a target version.
 
@@ -84,7 +84,7 @@ Before tag, the percentage of GREEN claims must be **≥ 90%** of all *non-defer
 **Must be GREEN before v1.0:**
 - (none — C-05 closed 2026-05-02 with the SM-158 ship.)
 
-**Current state**: 25/28 GREEN = **89.3% total**. With A-01 + A-03 deferred (denominator 26), 25/26 = **96.2%** — **comfortably above Quincy's ≥ 90% gate**.
+**Current state**: 25/28 GREEN = **89.3% total**. With A-01 + A-03 deferred (denominator 26), 25/26 = **96.2%** — **comfortably above the ≥ 90% gate**.
 
 There are no non-deferred RED claims. Both remaining RED are explicit deferrals to v1.0.x with target work documented above.
 

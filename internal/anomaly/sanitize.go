@@ -81,10 +81,10 @@ func SetExtraSanitizePrefixes(paths []string) {
 // SanitizePath redacts the user's home directory and any registered
 // extra prefixes (SEC-M5) from file paths.
 //
-// "C:\Users\raveh\Documents\foo.txt" → "~/Documents/foo.txt"
-// "C:\Orch\some\file.txt" → "<mirror>/some/file.txt" (if C:\Orch is
+// "C:\Users\alice\Documents\foo.txt" → "~/Documents/foo.txt"
+// "C:\Projects\MyApp\some\file.txt" → "<mirror>/some/file.txt" (if
 //
-//	registered via SetExtraSanitizePrefixes)
+//	C:\Projects\MyApp is registered via SetExtraSanitizePrefixes)
 func SanitizePath(path string) string {
 	if path == "" {
 		return ""

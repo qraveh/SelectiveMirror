@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
-	"unsafe"
 
 	"github.com/mattn/go-isatty"
 	"github.com/qraveh/SelectiveMirror/internal/config"
@@ -18,52 +16,18 @@ import (
 )
 
 // resolveRealPath resolves symlinks, junctions, and other reparse points to
-// the final physical path. On Windows, uses GetFinalPathNameByHandle which
-// resolves NTFS junctions that filepath.EvalSymlinks does not (SM-138).
-// Falls back to filepath.EvalSymlinks → filepath.Abs on failure.
-func resolveRealPath(path string) string {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return path
-	}
-
-	p, err := syscall.UTF16PtrFromString(abs)
-	if err != nil {
-		return abs
-	}
-	h, err := syscall.CreateFile(p,
-		syscall.GENERIC_READ,
-		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
-		nil,
-		syscall.OPEN_EXISTING,
-		syscall.FILE_FLAG_BACKUP_SEMANTICS,
-		0)
-	if err != nil {
-		// Fall back to EvalSymlinks
-		if r, err := filepath.EvalSymlinks(abs); err == nil {
-			return r
-		}
-		return abs
-	}
-	defer func() { _ = syscall.CloseHandle(h) }()
-
-	kernel32 := syscall.NewLazyDLL("kernel32.dll")
-	getFinalPath := kernel32.NewProc("GetFinalPathNameByHandleW")
-
-	buf := make([]uint16, 512)
-	n, _, _ := getFinalPath.Call(
-		uintptr(h),
-		uintptr(unsafe.Pointer(&buf[0])),
-		uintptr(len(buf)),
-		0,
-	)
-	if n == 0 || n >= uintptr(len(buf)) {
-		return abs
-	}
-	result := syscall.UTF16ToString(buf[:n])
-	result = strings.TrimPrefix(result, `\\?\`)
-	return result
-}
+// the final physical path. The Windows implementation uses
+// GetFinalPathNameByHandle (NTFS junction resolution that
+// filepath.EvalSymlinks does not handle on Windows; SM-138). The
+// non-Windows implementation uses filepath.EvalSymlinks → filepath.Abs.
+//
+// Implementations live in resolveRealPath_windows.go and
+// resolveRealPath_other.go. Build-tagged because the Windows path uses
+// `syscall.UTF16PtrFromString`, `syscall.CreateFile`, `syscall.NewLazyDLL`
+// — all Windows-only identifiers that fail Linux compilation when
+// referenced from a non-tagged file (caught by telemetry-emulation
+// workflow's go-build-on-Linux step against system-validation/'s
+// `cmd/smirror` build, panel pre-public-flip 2026-05-04).
 
 // cmdAddMirror handles `smirror addmirror <path> [<path2> ...] [-dest <remote>]`.
 func cmdAddMirror(configPath string, args []string) {
@@ -376,7 +340,7 @@ global_excludes:
 		}
 	}
 
-	// Tier-2 #28 (validation panel 2026-04-29): if no default_remote is
+	// # if no default_remote is
 	// configured, surface the concrete next step. Without this, the user
 	// adds a mirror with an explicit -dest, then later runs `addmirror`
 	// without -dest and gets a "no destination specified" error that

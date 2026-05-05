@@ -42,7 +42,7 @@ type SystemView struct {
 }
 
 // BuildInstallationPayload composes the wire payload for a
-// `first_seen` or `upgrade` event. FINDING 3 (round-3 panel,
+// `first_seen` or `upgrade` event. finding (review,
 // 2026-05-02): the field set is EXACTLY the bucket-key columns of
 // installation_daily_rollup plus the envelope. No `os_detail`, no
 // install-specific extras — the server reads only what's listed
@@ -134,16 +134,16 @@ func BuildInstallationPayload(
 // to be wired and exercised, which is a separate scope (panel
 // estimate: +800 LOC + benchmarking).
 //
-// Until that lands, Reliability tier is functionally identical to
-// Standard tier on the wire (both contribute first_seen + upgrade
-// + bug_report). PRIVACY.md "Currently shipped vs. deferred"
-// table marks reliability_snapshot as ❌ deferred to v1.0.x.
+// Until that writer lands, Reliability tier is functionally identical
+// to Standard tier on the wire (both contribute first_seen + upgrade
+// + bug_report). PRIVACY.md "Currently shipped vs. deferred" table
+// marks reliability_snapshot as ❌ not yet implemented.
 func BuildReliabilitySnapshotPayload(view SystemView, reportedAt string) map[string]any {
 	// This builder is intentionally NOT called by install_events.go.
 	// It is called only by the inspect path so users can preview the
-	// shape. When the v1.0.x writer lands, it will replace the
-	// ENUM-valid defaults below with real values from the new
-	// counters listed in the doc comment above.
+	// shape. When the writer lands in a later release, it will
+	// replace the ENUM-valid defaults below with real values from
+	// the new counters listed in the doc comment above.
 	if reportedAt == "" {
 		reportedAt = time.Now().UTC().Format(time.RFC3339)
 	}

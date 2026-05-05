@@ -21,7 +21,7 @@ var ErrAlreadyRunning = errors.New("another smirror instance is already running"
 // ErrStaleLockHeld is returned when the lock file's recorded PID is not
 // alive — typically a crashed previous instance whose handle the OS
 // has not yet released. Callers can wrap this and surface a clearer
-// remedy (delete the file, retry, etc.). GAP-9.
+// remedy (delete the file, retry, etc.).
 var ErrStaleLockHeld = errors.New("lock file held but recorded PID is dead")
 
 // readLockPID parses the `pid=N` line from a lock file written by
@@ -64,7 +64,7 @@ func Acquire(dataDir string) (*Lock, error) {
 // exclusive access. Returns ErrAlreadyRunning if another process holds
 // the lock. The parent directory is created if missing.
 //
-// GAP-9: if AcquirePath fails because another process appears to hold
+// if AcquirePath fails because another process appears to hold
 // the file lock, the recorded PID is checked against the OS process
 // list. If the PID is no longer alive (the previous instance crashed
 // without cleaning up), we surface ErrStaleLockHeld with the dead PID —
@@ -97,7 +97,7 @@ func AcquirePath(lockPath string) (*Lock, error) {
 	// Try to acquire an exclusive lock (platform-specific)
 	if err := lockFile(f); err != nil {
 		f.Close()
-		// GAP-9: classify before returning. Read PID from the locked
+		// # classify before returning. Read PID from the locked
 		// file (we can't read while it's locked by us, but we can read
 		// the file we failed to lock — opening a separate handle for
 		// reading is allowed; lockFile is advisory).

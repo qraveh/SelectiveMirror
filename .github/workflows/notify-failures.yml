@@ -1,0 +1,75 @@
+name: Notify on scheduled failure
+
+# Files (or comments on) a GitHub issue when a scheduled workflow
+# fails on master. Closes the visibility gap discovered 2026-05-04:
+# SLA smoke had been red for 6 consecutive nights without anyone
+# noticing because scheduled-workflow failures don't surface on any
+# commit's status checks, don't appear in PR review, and don't
+# generate notifications by default — they only show up on the
+# Actions tab if you go look.
+#
+# Scope: scheduled (cron) failures only on master. Push-triggered
+# failures already get a red X next to the commit and are visible
+# without help. workflow_dispatch failures are operator-initiated
+# and visible to whoever clicked Run.
+#
+# Dedup: one open issue per (workflow, branch). Subsequent failures
+# comment on the existing issue rather than creating a new one. Close
+# the issue once the workflow goes green.
+
+on:
+  workflow_run:
+    workflows:
+      - 'SLA smoke'
+      - 'Telemetry weekly digest'
+      - 'Telemetry worker probe'
+    types: [completed]
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  notify:
+    if: >
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == 'master' &&
+      github.event.workflow_run.event == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: File or update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          WF_URL: ${{ github.event.workflow_run.html_url }}
+          WF_RUN_ID: ${{ github.event.workflow_run.id }}
+          WF_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          title="[CI] ${WF_NAME} red on master"
+          # List up to 100 open issues and find an exact-title match
+          # in jq. We don't use --search because GitHub's search
+          # treats brackets as separators and gives unreliable hits
+          # on titles like "[CI] ...".
+          existing=$(gh issue list --state open --limit 100 \
+                       --json number,title \
+                       --jq "[.[] | select(.title == \"${title}\")][0].number // empty")
+          today=$(date -u +%Y-%m-%d)
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body \
+              "Failed again on ${today}: run [\`${WF_RUN_ID}\`](${WF_URL}) at \`${WF_HEAD_SHA:0:7}\`."
+          else
+            gh issue create --title "${title}" --body "$(cat <<EOF
+          Workflow **${WF_NAME}** failed its scheduled run on master.
+
+          - Run: ${WF_URL}
+          - HEAD: \`${WF_HEAD_SHA:0:7}\`
+          - First-failure date: ${today}
+
+          Subsequent failures of this workflow on master will comment on this issue. Close it once the workflow returns to green.
+          EOF
+          )"
+          fi

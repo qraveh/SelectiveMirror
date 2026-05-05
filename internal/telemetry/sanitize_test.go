@@ -336,7 +336,7 @@ func TestSanitizeReport_MirrorNameShortNameSkipped(t *testing.T) {
 	}
 }
 
-// FINDING 18 (round-5 validation memo, 2026-05-03): the prior regex
+// FINDING 18 (validation review, 2026-05-03): the prior regex
 // ordering ran reCredential before reBearerSpace, which caused
 // "Authorization: Bearer <token>" to be partially redacted —
 // "Authorization:<REDACTED> <token>" — leaking the actual token. The
@@ -368,7 +368,7 @@ func TestSanitizeReport_BearerWithSpace_DoesNotLeakToken(t *testing.T) {
 	}
 }
 
-// FINDING 19 (round-5 validation memo, 2026-05-03): webhook URLs
+// FINDING 19 (validation review, 2026-05-03): webhook URLs
 // encode secrets in the path component (Slack / Discord / Zapier),
 // and `alert_webhook_url:` config dumps would expose them. The
 // sanitizer now redacts both the keyed form and known webhook hosts.

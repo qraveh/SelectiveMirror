@@ -26,7 +26,10 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-SUPABASE_URL = "https://qkspigvkniiiwxggdvbr.supabase.co"
+SUPABASE_URL = os.environ.get(
+    "SUPABASE_URL",
+    "https://<your-project-ref>.supabase.co",
+)
 INGEST_PATH = "/rest/v1/ingest_envelope"
 TEST_VERSION = "0.8.5"
 

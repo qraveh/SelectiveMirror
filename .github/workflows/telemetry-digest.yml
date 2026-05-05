@@ -37,6 +37,12 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
+# Default to read-only at workflow scope. The digest job overrides
+# below with the writes it actually needs (commit + PR for the
+# weekly digest file).
+permissions:
+  contents: read
+
 jobs:
   digest:
     runs-on: ubuntu-latest
@@ -95,7 +101,12 @@ jobs:
 
           branch="${{ steps.week.outputs.branch }}"
           git config user.name  "smirror-telemetry-bot"
-          git config user.email "telemetry@selectivemirror.local"
+          # users.noreply.github.com is the documented bot-author form;
+          # anything ending in .local is mDNS scope and gets bounce-
+          # checked off real mail. The numeric prefix is the github-
+          # actions[bot] account ID, kept stable so commit-author
+          # filtering keeps working across repo renames.
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add "$out"
           # Multi-line commit message via printf -F-. The prior literal-

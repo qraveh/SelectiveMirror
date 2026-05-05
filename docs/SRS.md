@@ -188,9 +188,9 @@ SelectiveMirror is the **missing link**: real-time + selective + backend-agnosti
 
 | ID | Requirement | Priority | Rationale | Status |
 |----|------------|----------|-----------|--------|
-| FR-DEL-01 | System SHALL support three delete policies as cleanly separated configuration profiles: `ignore`, `delete`, `quarantine`. No mixing — each profile activates a complete, self-contained code path. | Must | Clean separation prevents complexity leaks. Default is `delete`. | Done (`mirror` kept as deprecated alias as of v0.5.0) |
+| FR-DEL-01 | System SHALL support three delete policies as cleanly separated configuration profiles: `ignore`, `delete`, `quarantine`. No mixing — each profile activates a complete, self-contained code path. | Must | Clean separation prevents complexity leaks. Default is `quarantine` (safer for first-time users; v1.0 flip). | Done (`mirror` kept as deprecated alias as of v0.5.0) |
 | FR-DEL-02 | `ignore` policy SHALL preserve remote files when local files are deleted | Must | Remote acts as append-only backup | Done |
-| FR-DEL-03 | `delete` policy (default) SHALL immediately delete remote files when local files are deleted. Ghost cleanup also uses immediate delete. | Must | Code projects have git as safety net; clean exact mirror. | Done |
+| FR-DEL-03 | `delete` policy SHALL immediately delete remote files when local files are deleted. Ghost cleanup also uses immediate delete. | Must | Code projects have git as safety net; clean exact mirror when explicitly opted into. | Done |
 | FR-DEL-04 | `quarantine` policy SHALL move remote files to `.quarantine/<timestamp>/` on local delete. Ghost cleanup (orphans/leaks) also quarantined, not deleted. Fully self-contained mode. | Must | Recovery use case: documents, research, non-VCS content. All destructive operations go through quarantine when enabled. | Done |
 | FR-DEL-05 | Quarantine retention SHALL be configurable (default 30 days) with auto-purge enforced during reconciliation | Must | Without enforcement, `quarantine_days` is a promise without delivery. Config field must be honored. | Done (v0.5.0) |
 | FR-DEL-06 | Delete events SHALL be prioritized over sync events in the queue | Must | Stale remote files are a consistency hazard; deletes must not queue behind syncs | Done |
@@ -434,7 +434,7 @@ This section is organized by ISO/IEC 25010 quality characteristics (2011 layout 
 
 | ID | Requirement | Rationale | Target | Status |
 |----|------------|-----------|--------|--------|
-| NFR-UE-01 | Default delete policy SHALL be `delete` (mirror local deletions to remote). Deletion safety is provided by the `delete_policy: quarantine` option for non-VCS content and by git as the safety net for code projects. | Code projects have git as safety net; an archive-preserving default was considered (`ignore`) but rejected because it creates silent remote-local divergence for the typical user. Users whose workflows require archive semantics set `delete_policy: ignore` or `quarantine` explicitly. | Default = delete | Met |
+| NFR-UE-01 | Default delete policy SHALL be `quarantine` (move remote files to `.quarantine/` on local delete; 30-day recovery window). Strict 1:1 deletion mirroring is available via explicit `delete_policy: delete`; archive-preserving behavior via `delete_policy: ignore`. | Quarantine-as-default is the safer first-time-user choice — a misconfigured `local_path` or accidental `rm -rf` does not immediately destroy remote data. The v1.0 flip from `delete` to `quarantine` (FR-DEL-01) is a deliberate breaking-default change made before there is an installed base. | Default = quarantine | Met |
 | NFR-UE-02 | `test-mirrors` SHALL validate configuration before first sync can run | Catch misconfigs before they cause damage | 13+ checks including remote reachability | Met |
 | NFR-UE-03 | `dry-run` SHALL exist for every destructive operation (sync, ghost cleanup) | Users must be able to preview before committing | Full preview with no side effects | Met |
 | NFR-UE-04 | Single-instance lock SHALL prevent concurrent processes from corrupting state | Two instances = guaranteed corruption | File-based lock with stale detection | Met |
@@ -505,7 +505,7 @@ This section is organized by ISO/IEC 25010 quality characteristics (2011 layout 
 
 #### 4.6.5 Authenticity
 
-*Stub NFRs (added 2026-04-29 per F-4 of the ISO audit re-evaluation): the project shipped substantive Authenticity engineering — TOCTOU defenses, NTFS reparse-point handling, state-DB symlink rejection, service-mode symlink-reject — without a corresponding NFR home. Full elaboration with measurement functions per ISO/IEC 25023 §5.2 is deferred to v1.0.1 (recommendation δ of `docs/iso-compliance-review-2026-04-29.md`). Stubs are sufficient to give the engineering surface a doc-traceable home for v1.0.*
+*Stub NFRs: the project shipped substantive Authenticity engineering — TOCTOU defenses, NTFS reparse-point handling, state-DB symlink rejection, service-mode symlink-reject — without a corresponding NFR home until v1.0. Full elaboration with measurement functions per ISO/IEC 25023 §5.2 is deferred to v1.0.1 (tracked in `docs/iso-compliance.md` action register). Stubs are sufficient to give the engineering surface a doc-traceable home for v1.0.*
 
 | ID | Requirement | Rationale | Target | Status |
 |----|------------|-----------|--------|--------|
@@ -517,7 +517,7 @@ This section is organized by ISO/IEC 25010 quality characteristics (2011 layout 
 
 | ID | Requirement | Rationale | Target | Status |
 |----|------------|-----------|--------|--------|
-| NFR-RS-01 | Configuration validation SHALL reject inputs that would enable command injection, path traversal, or rclone-flag denylist bypass. | GAP-1..5 + SEC-M batch closed concrete attack vectors (rclone_extra_flags `--rc` / `--log-file` / `--config` / `--password-command` denylist with non-ASCII confusables also blocked; remote-name traversal-shape rejection; control-character rejection in identifiers). | `Validate()` enforces denylist + traversal-shape + control-char regex; PR-S6 blocks ASCII/Unicode confusables for flag names. | Met (`internal/config/config.go::validateRcloneExtraFlags`, `Validate`) |
+| NFR-RS-01 | Configuration validation SHALL reject inputs that would enable command injection, path traversal, or rclone-flag denylist bypass. | GAP-1..5 + SEC-M batch closed concrete attack vectors (rclone_extra_flags `--rc` / `--log-file` / `--config` / `--password-command` denylist with non-ASCII confusables also blocked; remote-name traversal-shape rejection; control-character rejection in identifiers). | `Validate()` enforces denylist + traversal-shape + control-char regex; ASCII/Unicode confusables blocked for flag names. | Met (`internal/config/config.go::validateRcloneExtraFlags`, `Validate`) |
 | NFR-RS-02 | Hooks SHALL execute in a Job Object on Windows so child processes are killed when the parent times out. | SEC-M14 / PF-A5: a runaway hook subprocess could outlive smirror and leak resources. | Windows Job Object kill-tree on timeout. | Met (`internal/hooks/hooks.go` Windows path) |
 | NFR-RS-03 | Hash verification of downloaded rclone binary SHALL precede installation. | SEC-H11: the auto-installer downloads rclone from `downloads.rclone.org`; an MITM-substituted binary would gain the install privilege of the running user. | Compare against `.sha256` sibling fetched from same server before extracting. | Met (`installer/install-rclone.ps1`) |
 
@@ -978,7 +978,7 @@ collected during v0.6.0 field usage — hardening priorities guided by real fail
 | **32-mirror load test** | NFR-CA-01 | Medium | Medium — resource contention at scale |
 | **100K-file stress test** | NFR-CA-02 | Medium | Medium — state DB performance under load |
 | **Documentation audit** | — | Medium | Low |
-| **Security audit** | NFR-SEC-* | Medium | Medium — self-audit (`docs/security-audit-2026-04-18.md`) + adversarial multi-role panel reviews are the project's standing process |
+| **Security audit** | NFR-SEC-* | Medium | Medium — self-audit (`docs/security-audit-2026-04-18.md`) + multi-role panel reviews are the project's standing process |
 | **Release packaging** | — | Small | Low |
 
 ### 11.8 Implementation Priorities (Decision Framework)

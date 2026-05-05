@@ -8,7 +8,7 @@ Both consumers import from here:
   - `system-validation/telemetry-operator-report.py` — operator debug
     view, no k-anon floor, NOT for publication.
 
-Background: PANEL-2 (BMAD multi-role panel review, 2026-05-03) found
+Background: PANEL-2 (multi-role panel review) found
 two near-identical `md_*` escape functions in the two scripts with
 subtle differences. Divergence between the operator-debug and
 publish-safe escapers is *itself* a privacy bug — the operator might

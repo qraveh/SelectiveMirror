@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// GAP-6 (panel review 2026-04-28): when --config is given multiple times,
+// when --config is given multiple times,
 // last-wins. Previous behavior broke out of the parsing loop on the FIRST
 // occurrence and left subsequent --config args in the stripped slice.
 func TestExtractConfigPath_LastWins(t *testing.T) {

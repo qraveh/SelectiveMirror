@@ -40,7 +40,7 @@ type Signals struct {
 type LivenessProbe func(handle uintptr) (Signals, error)
 
 // stderrBufCap is the maximum number of bytes captured into the
-// per-rclone stderr buffer. Tier-2 #19 (validation panel 2026-04-29):
+// per-rclone stderr buffer. 
 // `rclone --verbose --verbose` against a backend with 100K files can
 // emit hundreds of MB of stderr; capturing it all into a strings.Builder
 // is a heap-blowup vector that has no upside (we only need a slice for
@@ -202,7 +202,7 @@ func runWithSupervisor(
 	activity := &activityWriter{lastNs: &lastActivityNs, lastLine: &lastLine}
 
 	// Stderr capture preserved for diagnostic logging. Stdout still routed
-	// to os.Stdout for foreground operators. Tier-2 #19: capture is capped
+	// to os.Stdout for foreground operators. # capture is capped
 	// at stderrBufCap to defend against rclone --verbose blowing up heap.
 	stderrBuf := newBoundedStderr()
 	cmd.Stdout = io.MultiWriter(os.Stdout, activity)

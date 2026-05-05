@@ -27,7 +27,7 @@ const (
 	KindSyncStalled       Kind = "Sync:Stalled"  // multi-signal flatline: rclone wedged below its own retry layer
 	KindSyncLsJsonSlow    Kind = "Sync:LsJsonSlow" // info: lsjson elapsed past warn threshold, but still alive
 	KindSyncFailure       Kind = "Sync:Failure"
-	KindStateError        Kind = "State:Error" // state-DB write failure (audit log row, sync_state row, meta key) — Tier-2 #13/#14
+	KindStateError        Kind = "State:Error" // state-DB write failure (audit log row, sync_state row, meta key) — defense-in-depth
 )
 
 // Severity levels for anomalies.
@@ -79,7 +79,7 @@ type Recorder struct {
 	// OnRecord is called after each anomaly is recorded. Set before use; not thread-safe to change.
 	// Intended for alerting integration (webhook, notification).
 	//
-	// PF-A8 (panel review 2026-04-28): the callback runs in a dedicated
+	// PF-A8: the callback runs in a dedicated
 	// goroutine, NOT in Record's calling goroutine, so a slow webhook
 	// never blocks the sync engine. Anomalies overflow a bounded channel
 	// rather than back-pressuring; overflow is counted in droppedCallbacks

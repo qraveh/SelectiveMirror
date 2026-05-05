@@ -519,7 +519,7 @@ func TestSendInstallEventsIfDue_FirstSeen_NoForbiddenFields(t *testing.T) {
 	// Forbidden fields. These ARE NOT in installation_daily_rollup
 	// and would represent leakage if the binary transmitted them.
 	forbidden := []string{
-		"os_detail",     // FINDING 3 (round-3 panel)
+		"os_detail",     // FINDING 3 (review)
 		"prior_version", // upgrade-only field; first_seen must not carry it
 		"days_since_first_seen_bucket", // upgrade-only
 		"hostname", "user", "username",

@@ -12,9 +12,9 @@ func TestRenderXML_BasicFields(t *testing.T) {
 		Author:           "TestAuthor",
 		Description:      "Test desc",
 		RegistrationTime: time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC),
-		UserPrincipal:    `MSI\raveh`,
+		UserPrincipal:    `WORKSTATION\alice`,
 		Command:          `C:\Program Files\SelectiveMirror\smirror.exe`,
-		Arguments:        `start --config "C:\Users\raveh\.selectivemirror\config.yaml"`,
+		Arguments:        `start --config "C:\Users\alice\.selectivemirror\config.yaml"`,
 	}
 	out, err := def.RenderXML()
 	if err != nil {
@@ -30,7 +30,7 @@ func TestRenderXML_BasicFields(t *testing.T) {
 		`<Description>Test desc</Description>`,
 		`<URI>\SelectiveMirror</URI>`,
 		`<LogonTrigger>`,
-		`<UserId>MSI\raveh</UserId>`,
+		`<UserId>WORKSTATION\alice</UserId>`,
 		`<LogonType>InteractiveToken</LogonType>`,
 		`<RunLevel>LeastPrivilege</RunLevel>`,
 		`<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>`,
@@ -39,7 +39,7 @@ func TestRenderXML_BasicFields(t *testing.T) {
 		`<Interval>PT1M</Interval>`,
 		`<Count>3</Count>`,
 		`<Command>C:\Program Files\SelectiveMirror\smirror.exe</Command>`,
-		`<Arguments>start --config &#34;C:\Users\raveh\.selectivemirror\config.yaml&#34;</Arguments>`,
+		`<Arguments>start --config &#34;C:\Users\alice\.selectivemirror\config.yaml&#34;</Arguments>`,
 		`<WorkingDirectory>C:\Program Files\SelectiveMirror</WorkingDirectory>`,
 	}
 	for _, want := range wantSubstrings {

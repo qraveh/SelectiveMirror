@@ -115,14 +115,14 @@ jobs:
         env:
           CGO_ENABLED: 1
 
-      # PR-PRE-M3 (pre-release status panel 2026-05-03): same allowlist
+      # release-pipeline review: same allowlist
       # ↔ CHANGELOG linter as release.yml. Catches drift before the
       # test suite runs.
       - name: Lint allowlist vs CHANGELOG
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File scripts/check-allowlist-vs-changelog.ps1
 
-      # PR-PRE-M1 (pre-release status panel 2026-05-03): allowlist read
+      # release-pipeline review: allowlist read
       # from system-validation/allowlist.txt — single source of truth
       # shared with release.yml. The previous in-line `$allowed = @(...)`
       # had drifted (release.yml was empty; this file still tolerated
@@ -136,19 +136,36 @@ jobs:
               $line = $_.Trim()
               if ($line -and -not $line.StartsWith('#')) { $line }
           })
-          # Pin the JSON output to an absolute path so the Push/Pop-Location
-          # dance below cannot misalign Tee-Object's write with Get-Content's
-          # read. Pre-fix the path was `../system-validation-results.json`,
-          # which resolved differently in the two contexts:
-          #   inside Push-Location system-validation: <repo>/system-validation-results.json
-          #   after Pop-Location:                     <repo>/../...  (parent of repo)
-          # The mismatch was masked when all tests passed (script exited
-          # before the Get-Content). On v1.0.0 dryrun the script reached
-          # the parser branch and tripped "Cannot find path" because it
-          # looked one level above the runner workspace.
-          $resultsPath = Join-Path $env:GITHUB_WORKSPACE 'system-validation-results.json'
+          # Pin the JSON output to a path OUTSIDE the GitHub workspace.
+          # Two failure modes are guarded:
+          #   (a) Path-resolution under Push/Pop-Location: a relative
+          #       `../system-validation-results.json` resolves
+          #       differently inside vs. after Push/Pop, breaking the
+          #       parser branch.
+          #   (b) Worktree-dirty under GoReleaser tag-mode: writing to
+          #       GITHUB_WORKSPACE leaves the worktree dirty if the
+          #       path isn't gitignored, and release.yml's tag-mode
+          #       rejects with "git is in a dirty state". Dryrun
+          #       snapshot mode skips this check, so the dryrun must
+          #       guard the same invariant directly.
+          # Fix: write to RUNNER_TEMP — guaranteed outside the workspace,
+          # job-bounded lifecycle. The post-step "Worktree clean?" guard
+          # below is belt-and-suspenders against any future maintainer
+          # who reroutes this back to the workspace.
+          $resultsPath = Join-Path $env:RUNNER_TEMP 'system-validation-results.json'
           Push-Location system-validation
-          go test -count=1 -json ./... | Tee-Object -FilePath $resultsPath | Out-Null
+          # -parallel 2 (was: default GOMAXPROCS = 4 on windows-latest):
+          # the system-validation suite has many tests that spawn smirror
+          # subprocesses + assert on watcher / fsnotify / rclone timing
+          # within bounded waitForFile timeouts. Default parallelism on
+          # CI runner causes flake-class failures (each dryrun fails one
+          # different test of this class — TempFileLeakOnKill, then
+          # DirectoryRename, then Queue_HighDepthGraceful, etc., none
+          # reproducible locally). Limiting to 2 parallel tests trades
+          # ~2 minutes of wall-clock for stability. v1.0.x can revisit
+          # by either de-parallelizing the timing-sensitive tests
+          # individually or strengthening their timeouts.
+          go test -count=1 -parallel 2 -json ./... | Tee-Object -FilePath $resultsPath | Out-Null
           $exitCode = $LASTEXITCODE
           Pop-Location
           if ($exitCode -eq 0) {
@@ -163,6 +180,33 @@ jobs:
               exit 1
           }
           Write-Host "system-validation: only allowlisted failures present ($($failed -join ', '))"
+          # Explicit exit 0 — without this, pwsh propagates the prior
+          # `go test` non-zero $LASTEXITCODE even though the allowlist
+          # parser determined the failures are tolerated. v1.0.0
+          # dryrun #6 caught this: log printed "only allowlisted
+          # failures present" (success branch) but step exited 1.
+          exit 0
+
+      # Worktree-clean assertion to catch the dryrun blind-spot class.
+      # Background: release.yml's tag-mode `goreleaser release` runs an
+      # implicit `git is in a dirty state` check that rejects any
+      # untracked or modified file in the workspace. release-dryrun.yml's
+      # `goreleaser release --snapshot --skip=publish` skips that check.
+      # Result: any step that leaves a stray file in the workspace passes
+      # dryrun but fails the real tag. This step replicates GoReleaser's
+      # check explicitly so future regressions of the class surface in
+      # dryrun, not at tag.
+      - name: Worktree-clean assertion (mirrors GoReleaser tag-mode check)
+        shell: pwsh
+        run: |
+          $dirty = git status --porcelain
+          if ($dirty) {
+              Write-Host "Worktree dirty post-system-validation:"
+              $dirty | ForEach-Object { Write-Host "  $_" }
+              Write-Error "release.yml's GoReleaser tag-mode would fail with 'git is in a dirty state' on the same input. Move stray writes to `$env:RUNNER_TEMP or .gitignore the offending path."
+              exit 1
+          }
+          Write-Host "Worktree clean — release.yml tag-mode would accept this state."
 
       - name: report-bug PII smoke
         shell: pwsh
@@ -219,7 +263,7 @@ jobs:
           echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_OUTPUT
           Write-Host "Located: $($exe.FullName)"
 
-      # PR-PRE-M2 (pre-release status panel 2026-05-03): mirror the
+      # release-pipeline review: mirror the
       # release.yml build-key fingerprint check so the dryrun's signal
       # is as strong as release-time. A GoReleaser config drift (env
       # var renamed, ldflag template typo) would otherwise pass dryrun
@@ -308,11 +352,28 @@ jobs:
           if (-not (Test-Path $exe)) { Write-Error "Downloaded smirror.exe missing"; exit 1 }
           $reported = (& $exe version 2>&1) -join ' '
           $expected = '${{ needs.dryrun-release.outputs.version }}'
-          if ($reported -notmatch [regex]::Escape($expected)) {
-              Write-Error "Downloaded smirror.exe reports version '$reported'; expected to contain '$expected'"
+          # In dryrun mode the binary is built via `goreleaser ... --snapshot`,
+          # which uses the latest-real-tag plus `-SNAPSHOT-<short-sha>` as the
+          # version (GoReleaser default snapshot template). v1.0.0 dryrun #7
+          # caught the over-strict assertion here: binary reported
+          # "0.9.26-SNAPSHOT-7b8140f" but the step expected "1.0.0".
+          # Accept either: the intended-tag version (real release.yml path)
+          # OR the snapshot pattern (dryrun path). The point of this step
+          # is to verify the artifact downloaded successfully and is a
+          # bona-fide build of THIS commit, not to enforce the version
+          # string itself — that's PR-R2's job upstream.
+          $shortSha = '${{ github.sha }}'.Substring(0, 7)
+          $snapshotPattern = "SNAPSHOT-${shortSha}"
+          if ($reported -notmatch [regex]::Escape($expected) -and
+              $reported -notmatch [regex]::Escape($snapshotPattern)) {
+              Write-Error "Downloaded smirror.exe reports version '$reported'; expected to contain '$expected' or '$snapshotPattern'"
               exit 1
           }
-          Write-Host "OK: smirror.exe reports version containing '$expected'"
+          if ($reported -match [regex]::Escape($snapshotPattern)) {
+              Write-Host "OK: smirror.exe reports goreleaser-snapshot version (dryrun mode); contains '$snapshotPattern'"
+          } else {
+              Write-Host "OK: smirror.exe reports version containing '$expected'"
+          }
 
       - name: Build MSI (using artifact binary; -SkipGoBuild)
         run: powershell -ExecutionPolicy Bypass -File installer\build-msi.ps1 -Version ${{ needs.dryrun-release.outputs.version }} -SkipGoBuild

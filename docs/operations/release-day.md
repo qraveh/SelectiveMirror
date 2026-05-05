@@ -1,6 +1,6 @@
 # Release-day playbook
 
-**Audience**: maintainer (Raveh) and the [SM-keeper agent](../../.claude/agents/sm-keeper.md). PR-PM3 (panel review pre-release 2026-04-28).
+**Audience**: maintainer and the [release-day operator workflow](../../.claude/agents/sm-keeper.md).
 **Companion**: [release-runbook.md](release-runbook.md) ends when the tag is pushed; this file picks up there.
 
 The release pipeline is autonomous after tag-push. This playbook describes what to LOOK AT and WHEN, plus what to do if any of it goes wrong.
@@ -34,7 +34,7 @@ Where to look:
 
 What you're checking:
 - The "MSI smoke test" step prints `ALL CHECKS PASSED`.
-- The "Verify published MSI matches local" step prints `OK: published MSI matches local <hash>`. PR-Q5 (panel review pre-release 2026-04-28) — confirms GitHub didn't corrupt or substitute the MSI between upload and CDN propagation.
+- The "Verify published MSI matches local" step prints `OK: published MSI matches local <hash>` — confirms GitHub didn't corrupt or substitute the MSI between upload and CDN propagation.
 
 **Hard stop signals at T+10m**:
 - MSI smoke fails on a SEC-C2 invariant. Don't publish the draft. Investigate `installer/smoke-test.ps1` output; almost always `Package.wxs` or a recent dotnet/wix change.
@@ -44,14 +44,14 @@ What you're checking:
 
 ## T+15m — Set release body and (optionally) publish
 
-What's happening: the `release` job's final step ran `scripts/extract-changelog.ps1` and `gh release edit --notes-file release-notes.md`. The release body now carries the hand-written CHANGELOG section (PR-W4). The release is still in **Draft** state.
+What's happening: the `release` job's final step ran `scripts/extract-changelog.ps1` and `gh release edit --notes-file release-notes.md`. The release body now carries the hand-written CHANGELOG section. The release is still in **Draft** state.
 
 Where to look:
-- Open the draft release in the browser: `gh release view v0.9.X --web`.
+- Open the draft release in the browser: `gh release view v1.0.X --web`.
 - Read the body. It should be the corresponding `## [X.Y.Z]` section from CHANGELOG.md, with a one-line provenance note at the top.
 
 What you're checking:
-- Body looks right. Known-issues section visible to readers. Compatibility/rollback note present (PR-W2 surfaces via the README link).
+- Body looks right. Known-issues section visible to readers. Compatibility/rollback note present (surfaces via the README link).
 - Both assets are attached: `SelectiveMirror.msi` and `SelectiveMirror_<version>_windows_amd64.zip`.
 - Build-provenance attestations are visible (`gh attestation list <artifact>`).
 
@@ -67,7 +67,7 @@ What's happening: the `msi` job's `Generate winget manifest` step has produced `
 
 Where to look:
 - Workflow artifacts: `gh run view <run-id> --log` (or the GitHub UI workflow page).
-- microsoft/winget-pkgs PRs by you: https://github.com/microsoft/winget-pkgs/pulls?q=author%3A<your-github-handle>
+- microsoft/winget-pkgs PRs by qraveh: https://github.com/microsoft/winget-pkgs/pulls?q=author%3Aqraveh
 
 What you're checking:
 - Manifest YAML matches the new version, has the correct InstallerUrl + InstallerSha256.
@@ -91,9 +91,9 @@ Where to look:
 
 What to check:
 1. Download the MSI from the release URL. Run `certutil -hashfile SelectiveMirror.msi SHA256` and compare to `checksums.txt`.
-2. Run `gh attestation verify SelectiveMirror.msi --repo qraveh/SelectiveMirror`. Should print one verified attestation (PR-S4). (CI now runs this same command in-pipeline — see PR-PRE-M4 — but a tester re-run from the user's network is still meaningful.)
+2. Run `gh attestation verify SelectiveMirror.msi --repo qraveh/SelectiveMirror`. Should print one verified attestation. (CI runs this same command in-pipeline, but a tester re-run from the user's network is still meaningful.)
 3. Click through SmartScreen warning. Install completes.
-4. **PR-PRE-D2 (pre-release status panel 2026-05-03): MSI consent dialog visual capture.** During the install wizard, when the "Telemetry preference" dialog (`TelemetryTierDlg` from `installer/TelemetryConsent.wxi`) appears, take a screenshot. Commit it to `screenshots/v<version>/install-telemetry-dialog.png` along with the rest of the release-day evidence. Anchors maturity-dashboard row 3 (MSI consent UI 🟡 → confirms the dialog actually rendered for THIS release; without the artifact the row stays informally 🟡 forever).
+4. **MSI consent dialog visual capture.** During the install wizard, when the "Telemetry preference" dialog (`TelemetryTierDlg` from `installer/TelemetryConsent.wxi`) appears, take a screenshot. Commit it to `screenshots/v<version>/install-telemetry-dialog.png` along with the rest of the release-day evidence. Anchors maturity-dashboard row 3 (MSI consent UI 🟡 → confirms the dialog actually rendered for THIS release; without the artifact the row stays informally 🟡 forever).
 5. `smirror version` reports the right version.
 6. `smirror selfupdate --check` notices no newer version (since this IS the newest).
 7. From a previously-installed older version on a different machine: `smirror selfupdate` actually picks up the new release.
@@ -132,7 +132,7 @@ What you're checking:
 **If the envelope count is zero at T+24h AND telemetry is supposed to be enabled** (RELEASE_ALLOW_NO_TELEMETRY_KEY was NOT set, MSI consent dialog defaulted users into a non-`none` tier) — investigate. Check Cloudflare Worker logs for ingestion-side errors, then the binary's own derived-key header. Since smirror does not retry forever, an early-window outage means lost data, not delayed data.
 
 **If a recurring signature appears**:
-- See [telemetry-ops.md § Incident: a bad version reported in the wild](telemetry-ops.md#incident-a-bad-version-reported-in-the-wild) for blocklist / patch-and-ship guidance.
+- See [telemetry-ops.md § Bad-version recovery](telemetry-ops.md#bad-version-recovery) for blocklist / patch-and-ship guidance.
 - For a Critical regression, the typical answer is "ship a 0.9.(X+1) with the fix and let upgrade events resolve it" — GAP-7 means you cannot ask users to downgrade.
 
 ---
@@ -161,7 +161,7 @@ This is no longer release-day work; it's the steady-state cadence covered by [te
 
 ---
 
-## Tag-rollback / re-tag procedure (PR-PRE-D1)
+## Tag-rollback / re-tag procedure
 
 When a tag-day pipeline step fails after the tag was pushed but before you've clicked Publish on the draft release, the recovery path is **delete-and-re-tag** (not amend, not force-update). The release.yml workflow leaves the GitHub Release as Draft until human approval, so this rollback never affects published bytes — but it does need to clean up four artifacts: the git tag (locally + remote), the draft GitHub Release, any partially-uploaded build-provenance attestations, and (if applicable) the winget submission PR.
 
@@ -169,7 +169,7 @@ When a tag-day pipeline step fails after the tag was pushed but before you've cl
 
 - `Assert tag matches source version` fails on release.yml (Failure A) — most common; the version-bump commit didn't land cleanly.
 - `gh attestation verify` roundtrip fails on the just-uploaded MSI (Failure B) — OIDC issuer hiccup or `attest-build-provenance` regression.
-- `Verify published MSI matches local` (PR-Q5) catches a GitHub upload race (Failure C) — published hash ≠ local hash.
+- `Verify published MSI matches local` catches a GitHub upload race (Failure C) — published hash ≠ local hash.
 - MSI smoke trips on a runner-image change (Failure D) — windows-latest image churn (WiX 6 vs 7 has bitten before).
 - HMAC build-key fingerprint reads `none` or `invalid` (Failure E) — `SMIRROR_TELEMETRY_MASTER_KEY` secret missing or rotated.
 
@@ -183,10 +183,10 @@ When a tag-day pipeline step fails after the tag was pushed but before you've cl
 6. **(If Failure D)** Pin the runner image in `.github/workflows/release.yml` (`runs-on: windows-2022` instead of `windows-latest`) — this is the most defensive single edit; keep until the underlying churn is understood.
 7. **Re-run release-dryrun.yml** with `intended-tag=v<X.Y.Z> -f ref=master` and confirm green before re-tagging.
 8. **Re-tag and re-push.** `git tag -a v<X.Y.Z> -m "..."` + `git push origin v<X.Y.Z>`.
-9. **Watch the new release.yml run** via sm-keeper Mode B until both `release` and `msi` jobs are green and the draft body matches CHANGELOG `[X.Y.Z]`.
+9. **Watch the new release.yml run** via the tag-day monitoring step until both `release` and `msi` jobs are green and the draft body matches CHANGELOG `[X.Y.Z]`.
 10. **(If a winget PR was opened against the failed tag)** close it with a comment pointing at the new tag. The next successful release auto-submits a fresh PR if `WINGET_SUBMIT_ENABLED=1`.
 
-**Why delete-and-re-tag rather than force-update**: a force-pushed tag preserves the original tag-creation timestamp and confuses `selfupdate`'s comparison logic; provenance attestations bind to the original SHA and don't migrate. Clean delete + re-create gives sm-keeper Mode B a single chronology to monitor.
+**Why delete-and-re-tag rather than force-update**: a force-pushed tag preserves the original tag-creation timestamp and confuses `selfupdate`'s comparison logic; provenance attestations bind to the original SHA and don't migrate. Clean delete + re-create gives the tag-day monitoring step a single chronology to monitor.
 
 **What this procedure does NOT cover** (escalate before acting):
 
@@ -194,7 +194,7 @@ When a tag-day pipeline step fails after the tag was pushed but before you've cl
 - The winget-pkgs PR has merged. Microsoft's manifest store has accepted the failed-tag's bytes. Ship a patch release; don't try to un-merge.
 - Provenance attestations have been consumed by a downstream verifier (e.g., a customer's policy engine). Same answer: patch forward.
 
-**Coverage gap acknowledgment**: the procedure above has been documented but has never been exercised against a real failed tag. v1.0.0 is the first tag against this re-tag-aware infrastructure. If any step fails or has stale instructions, edit this file in the same hotfix commit and surface the gap to sm-keeper for the next-release retro.
+**Coverage gap acknowledgment**: the procedure above has been documented but has never been exercised against a real failed tag. v1.0.0 is the first tag against this re-tag-aware infrastructure. If any step fails or has stale instructions, edit this file in the same hotfix commit and surface the gap in the next-release retro.
 
 ---
 

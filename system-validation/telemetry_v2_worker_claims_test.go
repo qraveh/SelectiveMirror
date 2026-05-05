@@ -1,6 +1,6 @@
 // Worker-side claims tests for the telemetry v2 architecture.
 //
-// Origin: Quincy + Felix (round-3 panel, 2026-04-30 afternoon).
+// Origin: System Validation review, 2026-04-30 afternoon.
 // Maps to claims in system-validation/CLAIMS-MAP.md:
 //
 //   C-13 — IP addresses are hashed with daily-rotating salt; never

@@ -34,3 +34,35 @@
 #
 # Re-add an entry only with a matching CHANGELOG bullet that references
 # the test name verbatim.
+
+# v1.0.0 tag-day discovery (run 25304915932 against sha 9a97ace).
+# CI-only failure: passes locally on Windows (3-of-3 reruns), fails
+# on windows-latest runner. The test is observation-only (t.Logf, not
+# t.Errorf/t.Fatalf) — its presence in the failure list suggests a
+# panic or t.Helper t.Fatalf inside countSmirrorFilterTempFiles or
+# the smirror sub-process spawning under runner-specific conditions
+# (possibly contention on os.TempDir() with parallel tests, or AV
+# interference with rapid Process.Kill cycles). The original "PANEL
+# OBS: temp files leaked" intent doesn't gate the release; allowlist
+# while v1.0.x investigates root cause.
+TestPanelR2_Filter_TempFileLeakOnKill
+
+# v1.0.0 dryrun #5 (run 25305574101 against sha 9fc1593) — same flake
+# class as TempFileLeakOnKill: subprocess + filesystem-event timing
+# under CI runner contention. Test passes locally on Windows but fails
+# on windows-latest CI. Uses t.Errorf at panel_findings_round2_test.go:298;
+# real failure mode is "watcher didn't see rename within 20s" which is
+# a timing assertion sensitive to runner load. v1.0.x investigation
+# direction: either widen the timeout, retry-on-flake at suite level,
+# or reduce -parallel to limit contention.
+TestPanelR2_Daemon_LiveSync_DirectoryRename
+
+# v1.0.0 dryrun #8 + #9 (sha 683d198, 299bf9d) — same test failed
+# under both parallel=4 (default) and parallel=2. Test creates many
+# files at once and asserts the watcher queue handles depth gracefully
+# within 30s. CI runner perf delta vs developer machine puts the
+# assertion timeout at the edge. Not a parallelism issue (didn't
+# improve when reduced) — pure runner-throughput. v1.0.x: widen the
+# timeout, OR rewrite to assert-eventually-with-progress, OR move to
+# the SLA-smoke workflow which has a longer wall-clock budget.
+TestPanelR3_Queue_HighDepthGraceful

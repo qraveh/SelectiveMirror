@@ -1,7 +1,7 @@
 ---
 title: "SelectiveMirror User Manual"
 author: "Raveh (smirror@qodeh.com)"
-date: "2026-03-27"
+date: "2026-05-05"
 toc: true
 toc-depth: 3
 geometry: margin=1in
@@ -113,10 +113,10 @@ SelectiveMirror uses the following rclone subcommands:
 | Subcommand | Used For |
 |---|---|
 | `copyto` | Uploading a single changed file to remote |
-| `copy` | Full-project sync (upload-only, default delete policy) |
-| `sync` | Full-project sync (mirrors deletes, when `delete_policy: mirror`) |
-| `deletefile` | Removing a single file from remote (mirror delete policy) |
-| `moveto` | Moving a file to `.quarantine/` on remote (quarantine delete policy) |
+| `copy` | Full-project sync (upload-only; used when `delete_policy` is `quarantine` (default) or `ignore`) |
+| `sync` | Full-project sync (mirrors deletes; used only when `delete_policy: delete`) |
+| `deletefile` | Removing a single file from remote (used when `delete_policy: delete`) |
+| `moveto` | Moving a file to `.quarantine/` on remote (used when `delete_policy: quarantine` — the default) |
 | `touch` | Updating modification time on remote without re-uploading content |
 | `lsjson` | Listing remote files with hashes for `verify` and ghost scan |
 | `lsd` | Checking remote connectivity during `test-mirrors` and `doctor` |
@@ -252,7 +252,7 @@ mirrors:
 rclone_path: rclone                    # path to rclone binary
 rclone_extra_flags: []                 # additional flags for all rclone calls
 bandwidth_limit: ""                    # e.g. "10M" for 10 MB/s
-delete_policy: ignore                  # ignore | mirror | quarantine
+delete_policy: quarantine              # quarantine (default) | delete | ignore
 quarantine_days: 30                    # days to keep quarantined files
 sync_workers: 4                        # concurrent sync workers (1-16)
 reconcile_interval_sec: 300            # periodic full sync interval
@@ -290,7 +290,7 @@ global_excludes:
 | `rclone_path` | string | `"rclone"` | Path to the rclone binary. Can be a bare name (searched in PATH and common locations) or an absolute path. |
 | `rclone_extra_flags` | list of strings | `[]` | Additional command-line flags appended to every rclone invocation. Use for backend-specific options. |
 | `bandwidth_limit` | string | `""` (unlimited) | Bandwidth limit passed to rclone's `--bwlimit` flag. Examples: `"10M"` (10 MB/s), `"1G"` (1 GB/s), `"500k"` (500 KB/s). |
-| `delete_policy` | string | `"ignore"` | How local file deletions are handled on remote. One of: `ignore`, `mirror`, `quarantine`. See Section 6. |
+| `delete_policy` | string | `"quarantine"` | How local file deletions are handled on remote. One of: `quarantine` (default), `delete`, `ignore`. (`mirror` is a deprecated alias for `delete`.) See Section 6. |
 | `quarantine_days` | int | `30` | Number of days to retain files in the `.quarantine/` directory on remote. Only relevant when `delete_policy: quarantine`. |
 | `sync_workers` | int | `4` | Number of concurrent sync worker goroutines. Range: 1--16. Higher values increase throughput but may trigger API rate limits on some backends. |
 | `reconcile_interval_sec` | int | `300` (5 min) | Interval in seconds between periodic full-project reconciliation passes. These catch changes invisible to fsnotify (WSL operations, network drive edits, external tools). |
@@ -550,8 +550,8 @@ Example output:
 SelectiveMirror Status
 ======================
 
-Config: C:\Users\raveh\.selectivemirror\config.yaml
-State DB: C:\Users\raveh\.selectivemirror\state.db
+Config: C:\Users\alice\.selectivemirror\config.yaml
+State DB: C:\Users\alice\.selectivemirror\state.db
 Delete policy: ignore
 
 Live Metrics (from running instance):
@@ -775,15 +775,53 @@ Show the smirror version.
 
 ```
 > smirror version
-smirror 0.8.x
+smirror 1.0.0
 ```
+
+## telemetry
+
+Show or change the opt-in telemetry tier. SelectiveMirror ships with telemetry **off by default** (the `none` tier). The full data contract — what each tier sends, what is never sent, where it goes, how to opt out — is in [PRIVACY.md](../docs/PRIVACY.md). This subsection covers the CLI surface only.
+
+Three tiers, picked once and stored in the user-side state DB:
+
+| Tier | What it sends | When |
+|------|--------------|------|
+| `none` (default) | nothing | — |
+| `standard` | `first_seen` (once, on first start after opt-in) and `upgrade` (on each version transition) — categorical buckets only, no narrative content | startup |
+| `reliability` | Same as `standard` today; tier choice is recorded so reliability_snapshot deltas flow when that writer ships in a later release | startup |
+
+`bug_report` is sent only when the user runs `smirror report-bug --submit`, regardless of tier — the same per-event-approval contract.
+
+Subcommands:
+
+```
+smirror telemetry status                    # show current tier + install_id
+smirror telemetry none                      # opt out (default)
+smirror telemetry standard                  # opt in to install events
+smirror telemetry reliability               # opt in to reliability dimensions (when shipped)
+smirror telemetry inspect [event_kind]      # show the exact payload that would be sent
+smirror telemetry policy                    # print the privacy contract URL
+```
+
+The CLI is the only way to change the tier on an installed system. The MSI installer asks once at install time and stores the choice in the user's state DB; subsequent changes go through this command. There is no `forget` operation — by construction the telemetry server stores no per-install rows.
 
 
 # 6. Delete Policies
 
-The `delete_policy` configuration field controls what happens on the remote when a file is deleted locally. There are three policies. The default is `delete`.
+The `delete_policy` configuration field controls what happens on the remote when a file is deleted locally. There are three policies. The default is `quarantine` — local deletes move the remote file to `.quarantine/` for a 30-day recovery window before auto-purging.
 
-## delete (default)
+## quarantine (default)
+
+```yaml
+delete_policy: quarantine
+quarantine_days: 30  # optional; default 30
+```
+
+When a local file is deleted, smirror moves the corresponding remote file to `<remote>/.quarantine/<original-path>.<UTC-timestamp>` rather than deleting it. The quarantined file is retained for `quarantine_days` and then auto-purged on the next reconciliation pass. This is the safest default for first-time users: a misconfigured `local_path` or an accidental `rm -rf` doesn't immediately destroy remote data; you have a 30-day window to recover.
+
+**rclone mapping**: full-project syncs use `rclone copy` (upload-only, never deletes remote files); single-file delete events use `rclone moveto <remote-path> <remote>/.quarantine/<relative-path>.<timestamp>`. Timestamp format is `YYYYMMDDTHHMMSSZ` (UTC), for example `.quarantine/src/old-module.go.20260327T100000Z`.
+
+## delete
 
 ```yaml
 delete_policy: delete
@@ -812,25 +850,6 @@ Local deletions are **not propagated** to the remote. The remote retains its cop
 **rclone mapping**: Full-project syncs use `rclone copy` (upload-only, never deletes remote files). Single-file delete events are logged but no rclone command is executed.
 
 **Use case**: Backup scenarios where you want to keep deleted files recoverable on the remote.
-
-## quarantine
-
-```yaml
-delete_policy: quarantine
-quarantine_days: 30
-```
-
-Local deletions cause the remote file to be **moved** to a `.quarantine/` directory on the remote, with a timestamp suffix. Files are not permanently deleted.
-
-**rclone mapping**: Uses `rclone moveto <remote-path> <remote>/.quarantine/<relative-path>.<timestamp>`.
-
-The timestamp format is `YYYYMMDDTHHMMSSZ` (UTC), for example:
-
-```
-.quarantine/src/old-module.go.20260327T100000Z
-```
-
-**Use case**: Cautious mirroring where you want deletions to propagate but with a safety net for recovery.
 
 ### Rename Handling
 
@@ -1077,7 +1096,7 @@ Type: sftp
 Host: backup.example.com
 User: backupuser
 Port: 22
-Key File: C:\Users\raveh\.ssh\id_ed25519
+Key File: C:\Users\alice\.ssh\id_ed25519
 ```
 
 ### config.yaml Entry

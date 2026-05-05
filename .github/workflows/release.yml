@@ -89,7 +89,7 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      # Tier-2 #21 (validation panel 2026-04-29): re-run go mod verify
+      # re-run go mod verify
       # at release time. ci.yml runs it on branch pushes, but CI's
       # branch trigger does not cross-link to this tag trigger — a tag
       # pushed onto a commit whose go.sum diverges from go.mod could
@@ -105,7 +105,7 @@ jobs:
         env:
           CGO_ENABLED: 1
 
-      # PR-PRE-M3 (pre-release status panel 2026-05-03): enforce the
+      # release-pipeline review: enforce the
       # runbook §3 invariant — every test in
       # system-validation/allowlist.txt must be referenced in
       # CHANGELOG.md (typically inside `### Bugs known at tag`).
@@ -120,7 +120,7 @@ jobs:
       # panel-derived black-box tests previously did not gate release.
       # Known-RED tests listed in the allowlist (mirror of CHANGELOG
       # "Known issues" section) are tolerated; everything else blocks
-      # the release. PR-PRE-M1 (pre-release status panel 2026-05-03):
+      # the release. release-pipeline review:
       # the allowlist is now read from system-validation/allowlist.txt
       # so release.yml and release-dryrun.yml share a single source of
       # truth.
@@ -129,20 +129,35 @@ jobs:
         env:
           CGO_ENABLED: '1'
         run: |
-          # Read allowlist from shared file (PR-PRE-M1). Skip blanks and comments.
+          # Read allowlist from shared file (). Skip blanks and comments.
           $allowed = @(Get-Content system-validation/allowlist.txt | ForEach-Object {
               $line = $_.Trim()
               if ($line -and -not $line.StartsWith('#')) { $line }
           })
-          # Pin JSON output to an absolute path. Pre-fix `../system-validation-
-          # results.json` resolved to <repo>/system-validation-results.json
-          # inside Push-Location but to the runner's PARENT dir after
-          # Pop-Location, so any non-zero go-test exit (e.g. allowlisted
-          # failures present) tripped "Cannot find path". v1.0.0 dryrun
-          # caught this on first contact (run 25303927445).
-          $resultsPath = Join-Path $env:GITHUB_WORKSPACE 'system-validation-results.json'
+          # Pin JSON output to a path OUTSIDE the GitHub workspace.
+          # Two failure modes are guarded:
+          #   (a) Path-resolution under Push-Location: a relative
+          #       `../system-validation-results.json` resolves
+          #       differently inside vs. after Push/Pop, breaking the
+          #       parser branch.
+          #   (b) Worktree-dirty under GoReleaser tag-mode: writing to
+          #       GITHUB_WORKSPACE leaves the worktree dirty if the
+          #       path isn't gitignored, and tag-mode rejects with
+          #       "git is in a dirty state". Dryrun snapshot mode
+          #       skips this check, so it must be guarded directly
+          #       in release.yml.
+          # Fix: write to RUNNER_TEMP — a per-job temp dir guaranteed
+          # outside the workspace. The file lifecycle is bounded by
+          # the job. .gitignore also lists the same filename for
+          # belt-and-suspenders against any future maintainer who
+          # forgets this rationale.
+          $resultsPath = Join-Path $env:RUNNER_TEMP 'system-validation-results.json'
           Push-Location system-validation
-          go test -count=1 -json ./... | Tee-Object -FilePath $resultsPath | Out-Null
+          # -parallel 2: same rationale as release-dryrun.yml — limit
+          # subprocess + filesystem-event timing contention on the CI
+          # runner. See the dryrun-yml comment for the full v1.0.0
+          # bug-class observations.
+          go test -count=1 -parallel 2 -json ./... | Tee-Object -FilePath $resultsPath | Out-Null
           $exitCode = $LASTEXITCODE
           Pop-Location
           if ($exitCode -eq 0) {
@@ -157,6 +172,12 @@ jobs:
               exit 1
           }
           Write-Host "system-validation: only allowlisted failures present ($($failed -join ', '))"
+          # Explicit exit 0 — without this, pwsh propagates the prior
+          # `go test` non-zero $LASTEXITCODE even though the allowlist
+          # parser determined the failures are tolerated. v1.0.0
+          # dryrun #6 caught this on release-dryrun.yml; same script
+          # was here in release.yml too.
+          exit 0
 
       # PR-S5 (panel review pre-release 2026-04-28): report-bug PII
       # smoke. SM-164 / BUG-2 closed the placeholder substitution in
@@ -237,7 +258,7 @@ jobs:
           echo "EXE_PATH=$($exe.FullName)" >> $env:GITHUB_OUTPUT
           Write-Host "Located: $($exe.FullName)"
 
-      # Tier-2 #23 (validation panel 2026-04-29): assert the built
+      # assert the built
       # binary actually carries an HMAC build key. The Compute /
       # Run GoReleaser steps above can succeed and leave the ldflag
       # value empty (e.g., GoReleaser config drift, key var name
@@ -273,7 +294,7 @@ jobs:
           }
 
       # ----------------------------------------------------------------
-      # PR-PRE-F2 (pre-release status panel 2026-05-03): SignPath
+      # release-pipeline review: SignPath
       # insertion point for smirror.exe. When SignPath Foundation
       # issues the EV cert, add this step HERE — between
       # `Locate built smirror.exe` and `Upload smirror.exe artifact for
@@ -300,7 +321,7 @@ jobs:
       # (c) update SECURITY.md "Code Signing" status.
       # ----------------------------------------------------------------
 
-      # PR-PRE-F2: artifact retention bumped 7 → 90 days so a Path-A
+      # artifact retention bumped 7 → 90 days so a Path-A
       # in-place re-sign of an already-tagged release can recover the
       # exact unsigned bytes after the SignPath cert arrives. Without
       # this, the bytes are gone after a week and Path A becomes
@@ -325,7 +346,7 @@ jobs:
         with:
           subject-path: ${{ steps.locate-exe.outputs.EXE_PATH }}
 
-      # PR-PRE-M4 (pre-release status panel 2026-05-03): exercise the
+      # release-pipeline review: exercise the
       # attestation roundtrip from CI itself. Without this, a broken
       # OIDC issuer / action-version regression / token-scope drift
       # would silently produce attestations users can't verify, and
@@ -402,7 +423,7 @@ jobs:
         run: powershell -ExecutionPolicy Bypass -File installer\build-msi.ps1 -Version ${{ needs.release.outputs.version }} -SkipGoBuild
 
       # ----------------------------------------------------------------
-      # PR-PRE-F2 (pre-release status panel 2026-05-03): SignPath
+      # release-pipeline review: SignPath
       # insertion point for the MSI. Add this step HERE — between
       # `Build MSI` and `MSI smoke test`, so the smoke test exercises
       # the SIGNED installer (catches the case where signing breaks
@@ -441,7 +462,7 @@ jobs:
         with:
           subject-path: installer\bin\Release\SelectiveMirror.msi
 
-      # PR-PRE-M4 (pre-release status panel 2026-05-03): same
+      # release-pipeline review: same
       # attestation-roundtrip exercise for the MSI. Confirms the chain
       # for the artifact users actually install.
       - name: Verify build-provenance attestation roundtrip (MSI)

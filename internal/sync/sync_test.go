@@ -239,7 +239,7 @@ func TestQuiesceFile_Directory(t *testing.T) {
 	}
 }
 
-// PF-A3 (SEC-H5, panel review 2026-04-28): in service mode (Engine.
+// PF-A3: in service mode (Engine.
 // RejectSymlinkedFiles=true), symlinks to regular files are rejected
 // instead of followed. Foreground/per-user-task mode follows them as
 // before. This test exercises both modes against the same symlink.
@@ -947,10 +947,16 @@ func TestSyncFullProject_UsesGlobalDeletePolicy(t *testing.T) {
 	}
 }
 
-func TestSyncFullProject_DefaultDeletePolicy(t *testing.T) {
+func TestSyncFullProject_ExplicitDeleteDeletePolicy(t *testing.T) {
+	// Pre-public-flip 2026-05-04: default delete_policy flipped from
+	// "delete" to "quarantine". This test now sets delete_policy
+	// explicitly so it continues to verify the "sync" rclone verb is
+	// used for delete-policy=delete. A separate test
+	// TestSyncFullProject_DefaultDeletePolicy_IsQuarantine covers the
+	// new default.
 	proj := testProject(t)
+	proj.DeletePolicyStr = "delete"
 	cfg := testConfig(proj)
-	// No delete policy set → defaults to "delete" → uses "sync" verb
 
 	var verb string
 	runner := func(ctx context.Context, args []string) int {
@@ -964,7 +970,30 @@ func TestSyncFullProject_DefaultDeletePolicy(t *testing.T) {
 	e.syncFullProject(context.Background(), proj)
 
 	if verb != "sync" {
-		t.Errorf("expected 'sync' verb for default delete policy, got %q", verb)
+		t.Errorf("expected 'sync' verb for delete_policy=delete, got %q", verb)
+	}
+}
+
+func TestSyncFullProject_DefaultDeletePolicy_IsQuarantine(t *testing.T) {
+	// New v1.0 default. delete_policy unset → quarantine → "copy" verb
+	// for the batch sync (the per-file deletes go through moveto, not
+	// sync-with-delete).
+	proj := testProject(t)
+	cfg := testConfig(proj)
+
+	var verb string
+	runner := func(ctx context.Context, args []string) int {
+		verb = args[0]
+		return 0
+	}
+	e := testEngine(t, cfg, runner)
+	fe := testFilter(t)
+	e.filters = map[string]*filter.Engine{proj.Name: fe}
+
+	e.syncFullProject(context.Background(), proj)
+
+	if verb != "copy" {
+		t.Errorf("expected 'copy' verb for default (quarantine) delete policy, got %q", verb)
 	}
 }
 
@@ -1685,8 +1714,12 @@ func TestReconciliation_FullProjectSync_NoFilterEngine(t *testing.T) {
 
 // TestReconciliation_ProcessTask_RoutesToFullSync verifies that processTask
 // routes a task with empty RelPath to syncFullProject (the reconciliation path).
+// Sets delete_policy=delete explicitly because the default flipped to
+// quarantine (review); this test
+// asserts the "sync" verb specifically and so needs the delete policy.
 func TestReconciliation_ProcessTask_RoutesToFullSync(t *testing.T) {
 	proj := testProject(t)
+	proj.DeletePolicyStr = "delete"
 	cfg := testConfig(proj)
 
 	var capturedArgs []string
@@ -1703,9 +1736,9 @@ func TestReconciliation_ProcessTask_RoutesToFullSync(t *testing.T) {
 	if len(capturedArgs) == 0 {
 		t.Fatal("rclone was not called via processTask for full-project sync")
 	}
-	// Default delete policy is now "delete" → verb is "sync" (not "copy")
+	// delete_policy=delete (explicitly set above) → verb is "sync".
 	if capturedArgs[0] != "sync" {
-		t.Errorf("expected 'sync' verb for full-project sync (default delete policy), got %q", capturedArgs[0])
+		t.Errorf("expected 'sync' verb for full-project sync with delete_policy=delete, got %q", capturedArgs[0])
 	}
 }
 
@@ -2236,8 +2269,12 @@ func TestFindGhosts_NoFilterEngine(t *testing.T) {
 
 // TestCleanupGhosts_DeletesOrphans verifies that CleanupGhosts calls rclone
 // deletefile for each ghost and returns the correct count.
+// delete_policy=delete is explicit because the default flipped to
+// quarantine (review) and the
+// ghost-cleanup path uses moveto (quarantine) under the new default.
 func TestCleanupGhosts_DeletesOrphans(t *testing.T) {
 	proj := testProject(t)
+	proj.DeletePolicyStr = "delete"
 	cfg := testConfig(proj)
 
 	remoteFiles := []RemoteFile{
@@ -2578,8 +2615,11 @@ func TestCleanupGhosts_FailedDelete_PreservesState(t *testing.T) {
 
 // TestCleanupGhosts_SkipsQuarantine verifies that files in .quarantine/ are
 // never cleaned up — they are intentionally preserved for recovery.
+// delete_policy=delete is explicit (default flipped to quarantine in
+//).
 func TestCleanupGhosts_SkipsQuarantine(t *testing.T) {
 	proj := testProject(t)
+	proj.DeletePolicyStr = "delete"
 	cfg := testConfig(proj)
 
 	remoteFiles := []RemoteFile{
@@ -2617,8 +2657,12 @@ func TestCleanupGhosts_SkipsQuarantine(t *testing.T) {
 
 // TestCleanupGhosts_UsesDeletefileVerb verifies that ghost cleanup uses
 // "deletefile" (not "delete" or "purge") for each ghost file individually.
+// delete_policy=delete is explicit (default flipped to quarantine in
+//). Under quarantine, the
+// verb would be "moveto", which is exercised by other tests.
 func TestCleanupGhosts_UsesDeletefileVerb(t *testing.T) {
 	proj := testProject(t)
+	proj.DeletePolicyStr = "delete"
 	cfg := testConfig(proj)
 
 	remoteFiles := []RemoteFile{

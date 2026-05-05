@@ -6,9 +6,8 @@
 .vscode/
 .claude/*
 # Carve-out: project-shared Claude Code subagents live under
-# .claude/agents/ (PR-PM3, panel review pre-release 2026-04-28). Local
-# state (settings.local.json, worktrees/, scheduled_tasks.lock, etc.)
-# remains ignored.
+# .claude/agents/. Local state (settings.local.json, worktrees/,
+# scheduled_tasks.lock, etc.) remains ignored.
 !.claude/agents/
 !.claude/agents/**
 *.swp
@@ -71,21 +70,23 @@ __pycache__/
 # Personal narrative drafts (commit only when promoted to docs)
 docs/story10.md
 
-# Telemetry digest / operator-report snapshots — regeneratable from
-# scripts/telemetry-report.py + scripts/telemetry-debug.py. Round-N
-# point-in-time outputs land in system-validation/ during validation
-# rounds; the scripts themselves and the validation memos that
-# reference them are tracked, but the markdown snapshots are not.
+# Maintainer-side notes (preserved on disk, not redistributed)
+docs/internal/system-validation-memos/
+docs/audit-validation-report-*.md
+docs/iso-audit-required-actions-*.md
+docs/iso-audit-response-*.md
+docs/iso-compliance-review-*.md
+system-validation/telemetry_validation.md
+
+# Telemetry digest / operator-report snapshots
+# (regenerated from scripts/telemetry-report.py + scripts/telemetry-debug.py)
 system-validation/telemetry-digest-*.md
 system-validation/telemetry-operator-report-*.md
 system-validation/telemetry-published-weekly-digest-*.md
 
-# Junk drawer for non-load-bearing validation artifacts. Round-N
-# conversational deep-dive memos, one-shot adversarial Python row
-# injectors, mass-emulation harness scripts. The decisions they
-# drove land in source code (sanitize.go regexes, CLAIMS-MAP rows,
-# BugTracker SM-NNN closure notes) — the workings themselves are
-# scaffolding. Tag-day worktree-clean (runbook §4) is satisfied by
-# moving them here rather than committing them. Per-session decision;
-# files inside junk/ are NOT under document control.
+# Local scratch directory
 junk/
+
+# Release-time go-test JSON output (redirected to $RUNNER_TEMP in CI;
+# this entry is a fallback for direct repo-root writes)
+system-validation-results.json

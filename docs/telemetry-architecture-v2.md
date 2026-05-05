@@ -2,7 +2,7 @@
 
 **Status**: target architecture for SelectiveMirror v1.0. Replaces the
 v1 architecture in `telemetry-microserver-architecture.md`.
-**Adopted**: 2026-04-29, after the round-2 BMad panel review of
+**Adopted**: 2026-04-29, after a multi-role review of
 `smirror telemetry forget`.
 **Implementation status**: schema in `telemetry-v2.sql`. The earlier
 v1 schema is a server-side leftover (never wired to a live client
@@ -34,18 +34,18 @@ Cloudflare/Supabase outage surface that made `smirror telemetry forget`
 silently fail-prone, and the maintainer-abandonment scenario where data
 lives on after the project doesn't.
 
-The round-2 BMad panel converged on a deeper reframe:
+The multi-role review converged on a deeper reframe, captured as three lines of argument:
 
-- **Mary**: scope-narrowing (excluding EU users) doesn't clear CCPA /
+- **Legal/regulatory**: scope-narrowing (excluding EU users) doesn't clear CCPA /
   UK-GDPR / LGPD / PIPEDA / the cascade. The cleanest legal posture is
   *anonymity-by-construction*, where the data the regulator cares
   about doesn't exist.
-- **Quinn**: the system contradiction is "we want the user to have
+- **Systems/TRIZ**: the system contradiction is "we want the user to have
   proof of deletion, but the proof can only exist after their session
-  ends." The TRIZ resolution is to *eliminate the request-response*
+  ends." The resolution is to *eliminate the request-response*
   primitive entirely — if there's nothing to delete, there's nothing
   to prove.
-- **Victor**: in OSS, the strongest market signal a single-maintainer
+- **Market positioning**: in OSS, the strongest market signal a single-maintainer
   project has against Microsoft / Google / Resilio is "we don't watch
   you, by construction." Every architecture that *could* watch you
   pays that signal away.
@@ -147,7 +147,7 @@ does not pick the bucket — the keyword match does, deterministically,
 locally, before the contribution is signed and sent. Bundles that
 match no rule classify as `unknown`. The `bug_unknown_share` view
 surfaces the per-version unknown share over 30 days so the maintainer
-can evolve the taxonomy when it drifts (Mary's drift detection,
+can evolve the taxonomy when it drifts (drift detection,
 A-10).
 
 `severity_hint` is a small ENUM (`info` / `warning` / `error` /
@@ -336,7 +336,7 @@ $$;
 
 The rollup tables CAN contain rows with `count < 5`. Publishing those
 to the weekly digest CAN'T. The k-anon enforcement lives in
-`scripts/telemetry-report.py` (already shipped: SM-166 round-2 fix
+`scripts/telemetry-report.py` (already shipped: SM-166 fix
 extended k-anon to per-report bug rows and recurrence rows).
 
 For v2, the digest reads the rollup tables only — no per-event tables

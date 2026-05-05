@@ -803,7 +803,14 @@ function To-WslPath {
 
 function Invoke-Wsl {
     param([string]$Command)
-    $result = wsl -u raveh -e bash -c "$Command" 2>&1
+    # WSL_USER env var: optional override for the WSL distro user. Defaults
+    # to the WSL distro's default user (no -u flag) when unset.
+    $wslUser = $env:WSL_USER
+    if ([string]::IsNullOrWhiteSpace($wslUser)) {
+        $result = wsl -e bash -c "$Command" 2>&1
+    } else {
+        $result = wsl -u $wslUser -e bash -c "$Command" 2>&1
+    }
     return $result
 }
 

@@ -75,7 +75,7 @@ func (e *Engine) resetPersistentFullSyncFailures(projName string) {
 }
 
 // logAction wraps state.LogAction with anomaly emission on failure.
-// Tier-2 #13 (validation panel 2026-04-29): the audit trail must not
+// the audit trail must not
 // silently lose entries on transient state-DB errors (read-only data
 // dir, disk full, journal contention). Round 10 fault injection
 // confirmed: file synced to remote, exit 0 reported, audit-trail entry
@@ -94,7 +94,7 @@ func (e *Engine) logAction(project, relPath, action, detail string, durationMs i
 }
 
 // deleteFileState wraps state.DeleteFileState with anomaly emission on
-// failure. Tier-2 #14: failures here leave a stale sync_state row after
+// failure. # failures here leave a stale sync_state row after
 // a successful remote operation; subsequent ghost cleanup would then
 // see the row, lsjson the remote (file gone), classify as orphan, and
 // cascade-delete other state. Surfacing the error via anomaly + log
@@ -202,7 +202,7 @@ type Engine struct {
 	// (even to a regular file) instead of following it. Set to true by
 	// service-mode startup (LocalSystem) to prevent privileged exfiltration
 	// of arbitrary files via a symlink planted in a watched directory.
-	// PF-A3 / audit SEC-H5 (panel review 2026-04-28).
+	// PF-A3 / audit SEC-H5.
 	RejectSymlinkedFiles bool
 
 	// Per-file locks prevent two workers from syncing the same file simultaneously.
@@ -408,7 +408,7 @@ func (e *Engine) processTask(ctx context.Context, task Task) {
 // For symlinks to files, follows the link and checks the target.
 // Rejects symlinks to directories, non-regular files, and broken symlinks.
 //
-// PF-A3 (SEC-H5, panel review 2026-04-28): in service mode (Engine.
+// PF-A3: in service mode (Engine.
 // RejectSymlinkedFiles=true), symlinks to files are also rejected.
 // Service mode runs as LocalSystem; a symlink in a watched mirror that
 // targets `C:\Windows\System32\config\SAM` would otherwise sync the SAM
@@ -1209,7 +1209,7 @@ func (e *Engine) runWithLegacyTimeout(ctx context.Context, rclonePath string, ar
 
 	cmd := exec.CommandContext(rcloneCtx, rclonePath, args...)
 
-	// Tier-2 #19: cap stderr capture (see liveness.go::boundedStderrWriter).
+	// # cap stderr capture (see liveness.go::boundedStderrWriter).
 	stderrBuf := newBoundedStderr()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = stderrBuf

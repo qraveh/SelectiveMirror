@@ -11,7 +11,7 @@
 //   sync watcher rclone config service fs auth
 //
 // Anything that doesn't match one of those falls into "unknown" — and
-// the bug_unknown_share view will surface it for taxonomy review (Mary's
+// the bug_unknown_share view will surface it for taxonomy review (the analyst's
 // drift detection, A-10).
 //
 // bug_surface mirrors the kinds for now: the "where in the system" view

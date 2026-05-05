@@ -37,8 +37,9 @@ The Cloudflare Worker exposes only `/v1/contribute`. Legacy paths
 Before starting, confirm you have:
 
 - [ ] Supabase project access (service-role JWT or `psql` connection
-      string) for `qkspigvkniiiwxggdvbr` (or the project you're
-      deploying into).
+      string) for the project you're deploying into. The production
+      project ref is recorded in `worker/wrangler.toml` under
+      `SUPABASE_PROJECT_REF`; substitute your own when forking.
 - [ ] The `telemetry_master_key` is in Supabase Vault. Verify with:
       `SELECT name FROM vault.decrypted_secrets WHERE name = 'telemetry_master_key';`
 - [ ] Cloudflare account access via `wrangler` (run `npx wrangler whoami`

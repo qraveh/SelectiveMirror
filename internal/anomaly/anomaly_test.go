@@ -268,7 +268,7 @@ func TestSetOnRecord_NilReceiverDoesNotPanic(t *testing.T) {
 	}
 }
 
-// PF-A8 (panel review 2026-04-28): a slow OnRecord callback must not
+// PF-A8: a slow OnRecord callback must not
 // block Record(). Previously the callback ran in the calling goroutine,
 // so a webhook with a 5-second HTTP timeout blocked the sync engine for
 // the full timeout. Now the callback runs in a dedicated goroutine fed

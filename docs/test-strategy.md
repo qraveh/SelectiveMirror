@@ -51,8 +51,8 @@ The actual strategy lives across these artifacts. Each row names *what* the arti
 | **Environment** | GitHub Actions (Linux + Windows), local Windows dev tree (the production target) | `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `.github/workflows/sla-smoke.yml`, `.github/workflows/release-dryrun.yml`, `.github/workflows/telemetry-emulation.yml` |
 | **Pass/fail criteria** | `docs/iso-compliance.md` §3.1 + per-NFR target columns in `docs/SRS.md` §4.6 | versioned in repo |
 | **Test Completion Reporting** | per-release CHANGELOG `[X.Y.Z]` block (Deferred-to subsections + Known-issues subsections) + `system-validation/CLAIMS-MAP.md` for the telemetry feature | `CHANGELOG.md`, `system-validation/CLAIMS-MAP.md` |
-| **Reviews and audits** | panel reviews (`system-validation/PANEL-REVIEW-*.md`), validation memos (`system-validation/MEMO-TO-IMPL-*.md`), security audit (`docs/security-audit-2026-04-18.md`), ISO compliance audit (`docs/iso-compliance.md`) | versioned in repo |
-| **Change control** | per-commit version bump in `cmd/smirror/main.go::version` (per `CLAUDE.md` Versioning rule); BugTracker dual-numbering (R-21 v1.1) | `CLAUDE.md`, `C:\BugTracker\projects\SelectiveMirror\` |
+| **Reviews and audits** | multi-role panel review records, validation memos, security audit (`docs/security-audit-2026-04-18.md`), ISO compliance audit (`docs/iso-compliance.md`) | tracked items versioned in repo; review records retained with the maintainer |
+| **Change control** | per-commit version bump in `cmd/smirror/main.go::version` (per `CLAUDE.md` Versioning rule); SM-NNN identifiers cross-reference the maintainer-side ledger | `CLAUDE.md`; ledger retained with the maintainer |
 
 ---
 
@@ -116,7 +116,7 @@ This Test Strategy will be reviewed at every MAJOR release and at any cycle wher
 
 The following 29119 elements are knowingly not implemented:
 
-- **Independent verification body** (29119-1 §6.5.4): single-developer project; not feasible. ISO/IEC/IEEE 29148 §5.2.4 / §6.5 *Independent External Review* is treated as *Non-Conformity by Choice* (A-GOV-01) — see `docs/iso-compliance.md` §6.
+- **Independent verification body** (29119-1 §6.5.4): single-developer project; not feasible. ISO/IEC/IEEE 29148 §5.2.4 / §6.5 *Independent External Review* is treated as *deliberate non-pursuit* (A-GOV-01) — see `docs/iso-compliance.md` §6.
 - **Formal Test Manager role** (29119-1 §6.4.2): owner-developer fills both roles; documented here, not delegated.
 - **Procurement-level test reporting** (29119-1 §10): not applicable; the project is not consumed via procurement contracts.
 

@@ -131,7 +131,7 @@ func main() {
 // (assigns to *out); earlier occurrences are silently dropped. Args that
 // are not --config are preserved in original order.
 //
-// GAP-6 (panel review 2026-04-28): last-wins for --config matches kubectl/
+// last-wins for --config matches kubectl/
 // docker/gh conventions and avoids the first-wins-but-stops-iterating
 // behavior that left subsequent --config args in the slice.
 // extractConfigPath returns the residual args after stripping --config
@@ -218,7 +218,7 @@ func cliMain() {
 		os.Exit(1)
 	}
 
-	// Find config file. GAP-6 (panel review 2026-04-28): last-wins
+	// Find config file. # last-wins
 	// semantics if --config is given multiple times. Previously the first
 	// occurrence was kept and subsequent ones were left in args, which
 	// confused downstream parsers and made the "winner" depend on an
@@ -630,7 +630,7 @@ Press Ctrl+C to stop.`) {
 	}
 	defer st.Close()
 
-	// GAP-8: surface a one-line warning if state.db was missing or
+	// # surface a one-line warning if state.db was missing or
 	// zero-byte at open time. A user who accidentally rm'd the DB is
 	// about to lose all sync history (everything will be re-uploaded
 	// on the next reconciliation). The daemon path proceeds anyway —
@@ -706,8 +706,9 @@ Press Ctrl+C to stop.`) {
 	// SEC-M5: register all per-mirror local_path prefixes so
 	// anomaly.SanitizePath redacts them in addition to the user home
 	// dir. Without this, in service mode (LocalSystem, home =
-	// C:\Windows\System32) project paths like C:\Orch and C:\HPL leak
-	// into anomaly logs and webhook payloads unredacted.
+	// C:\Windows\System32) project paths outside the user-home tree
+	// (e.g. C:\Projects\MyApp, D:\Work) would leak into anomaly logs
+	// and webhook payloads unredacted.
 	{
 		paths := make([]string, 0, len(cfg.Projects))
 		for _, p := range cfg.Projects {
@@ -912,7 +913,7 @@ Examples:
 	syncFailed := false
 	for _, proj := range projects {
 		if err := syncEngine.SyncFullProject(ctx, proj); err != nil {
-			// Tier-2 #26: surface a concrete next-step instead of a bare error.
+			// # surface a concrete next-step instead of a bare error.
 			fmt.Fprintf(os.Stderr, "Sync failed for %s: %v\n  Try: smirror test-mirrors %s\n",
 				proj.Name, err, proj.Name)
 			syncFailed = true
@@ -921,7 +922,7 @@ Examples:
 
 	// Clean up ghost files (LEAKs + ORPHANs) on remote
 	totalCleaned := 0
-	ghostFailed := false // Tier-2 #27: ghost-cleanup error must change the exit code
+	ghostFailed := false // # ghost-cleanup error must change the exit code
 	for _, proj := range projects {
 		cleaned, err := syncEngine.CleanupGhosts(ctx, proj)
 		if err != nil {
@@ -940,7 +941,7 @@ Examples:
 		os.Exit(ExitError)
 	}
 	if ghostFailed {
-		// Tier-2 #27: previously logged-and-continued silently. Sync-now's
+		// # previously logged-and-continued silently. Sync-now's
 		// contract includes ghost cleanup, so a partial failure must
 		// surface as a non-zero exit. ExitDrift is the natural code:
 		// "diagnostic found drift" — ghost-cleanup failures leave drift
@@ -1022,7 +1023,7 @@ Examples:
 }
 
 // statusEmitSanitized reads status.json and writes a redacted form
-// to stdout. Tier-2 #22 / SEC-M-4: sharing-time sanitizer for the
+// to stdout. SEC-M-4: sharing-time sanitizer for the
 // status payload. Per validation-session recommendation D
 // (system-validation/MEMO-TO-IMPL-2026-04-29.md):
 //
@@ -1115,7 +1116,7 @@ Examples:
 		return
 	}
 
-	// Tier-2 #22 / SEC-M-4: extract --sanitize / --for-sharing flag
+	// SEC-M-4: extract --sanitize / --for-sharing flag
 	// before passing args through rejectUnknownFlags. Sharing-time
 	// sanitizer recommended by the validation session as the
 	// resolution to the SEC-L4 (raw status.json for local debug)
@@ -1785,7 +1786,7 @@ Shows: filter status, matched rule, remote path, local file info
 (size, modified, MD5), max_file_size_mb check, and sync state.
 
 Examples:
-  smirror explain Orch CLAUDE.md
+  smirror explain MyProject README.md
   smirror explain MyProject src/main.go`) {
 		return
 	}
@@ -1794,7 +1795,7 @@ Examples:
 
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "Usage: smirror explain <mirror> <relative-path>")
-		fmt.Fprintln(os.Stderr, "Example: smirror explain Orch CLAUDE.md")
+		fmt.Fprintln(os.Stderr, "Example: smirror explain MyProject README.md")
 		os.Exit(ExitConfigError)
 	}
 
@@ -3101,7 +3102,7 @@ func heartbeatLoop(ctx context.Context, st *state.Store, cfg *config.Global, m *
 					slog.Info("anomaly archives rotated", "removed", removed)
 				}
 
-				// Tier-2 #6 (validation panel 2026-04-29): VACUUM the state
+				// # VACUUM the state
 				// DB at most once a week. PruneOldLogs above frees pages
 				// internally but does not return them to the OS; without
 				// VACUUM the file grows monotonically. Errors are non-fatal
@@ -3236,7 +3237,7 @@ func serviceMain() {
 
 	// When the SCM starts the service, args come from the service config.
 	// Parse --config with the same last-wins semantics as cliMain
-	// (GAP-6, panel review 2026-04-28).
+	//.
 	configPath := config.DefaultConfigPath()
 	_ = extractConfigPath(os.Args[1:], &configPath)
 
@@ -3419,9 +3420,10 @@ func serviceMain() {
 		syncEngine := msync.NewEngine(cfg, st, filters, m)
 		syncEngine.Anomaly = anomalyRecorder
 		// PF-A3 / audit SEC-H5: in service mode (LocalSystem), refuse to
-		// follow any symlink in a watched directory. A symlink under e.g.
-		// C:\Orch\.tricky targeting C:\Windows\System32\config\SAM would
-		// otherwise sync the SAM hive to the configured remote.
+		// follow any symlink in a watched directory. A symlink in any
+		// watched mirror (e.g. C:\Projects\MyApp\.tricky) targeting
+		// C:\Windows\System32\config\SAM would otherwise sync the SAM
+		// hive to the configured remote.
 		syncEngine.RejectSymlinkedFiles = true
 		if cfg.PreSyncHook != "" || cfg.PostSyncHook != "" || hasProjectHooks(cfg) {
 			syncEngine.Hooks = hooks.New(30 * time.Second)
@@ -3553,7 +3555,7 @@ func serviceMain() {
 	}
 }
 
-// currentUser returns the current username (e.g., "raveh" or "SYSTEM (LocalSystem)").
+// currentUser returns the current username (e.g., "alice" or "SYSTEM (LocalSystem)").
 func currentUser() string {
 	u, err := user.Current()
 	if err != nil {
@@ -3588,6 +3590,26 @@ func cmdService(configPath string, args []string) {
 	if subcommandHelp(args, `Usage: smirror service <action...> [flags]
 
 Windows Service management (requires "run as administrator").
+
+⚠️  Service mode runs smirror as LocalSystem — the highest-privileged
+    service account on Windows. Most users don't need this. Prefer
+    'smirror task install' (per-user, no admin elevation) unless you
+    specifically need 24×7 background sync without an interactive
+    session. The differences:
+
+      task install        per-user task; runs at logon; no admin needed
+      service install     LocalSystem; runs 24×7 even without login;
+                          requires admin-owned config (SEC-C5);
+                          if you have configured pre/post-sync hooks
+                          (Phase 7 — currently experimental, not part
+                          of v1.0 stability surface), they execute as
+                          LocalSystem too and can read/write any file
+                          on the system. The install path refuses to
+                          load a hook-bearing config from a user-
+                          writable location, but the broader privilege
+                          posture means: only use service mode if you
+                          understand why your background sync needs
+                          system-wide privileges.
 
 Actions:
   install [start]                Install service (and optionally start it)

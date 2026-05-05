@@ -258,7 +258,7 @@
 - **Misses**:
   - UNC paths `\\server\share\...`
   - Long paths `\\?\C:\very\long\path`
-  - Other-drive project paths (`D:\...`, `C:\Orch`, `C:\HPL` per CLAUDE.md — these mirrors are NOT under home)
+  - Other-drive project paths (`D:\...`, `C:\Projects\*`, `C:\Work\*` — mirrors configured outside the user-home tree)
   - Other users: `C:\Users\victim\...` when running as SYSTEM
   - OneDrive cloud-storage redirects: home prefix removed but `OneDrive - Acme Corp` company name remains
 - **Fix**: Sanitize all configured project LocalPath prefixes. Redact UNC `\\*` patterns. Replace `[A-Z]:\Users\[^\]+` to redact other usernames.

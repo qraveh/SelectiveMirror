@@ -200,10 +200,10 @@ func windowsSearchPaths() []string {
 // Example input:
 //
 //	rclone v1.68.2
-//	- os/version: Microsoft Windows 11 Home 10.0.26200.5603 (64 bit)
+//	- os/version: Microsoft Windows 11 Pro 10.0.22631.0 (64 bit)
 //	- os/kernel: windows (amd64)
 //	- os/type: windows
-//	- os/arch: amd64 (Intel(R) Core(TM) Ultra 9 275HX)
+//	- os/arch: amd64 (Intel(R) Core(TM) i7-1234X)
 //	- go/version: go1.23.4
 //	- go/linking: static
 //	- go/tags: cmount

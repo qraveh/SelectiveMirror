@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [master]
 
+# Default to read-only token at workflow scope. Individual jobs that
+# need write scopes (none in CI) would override per-job. Defense in
+# depth — a compromised step cannot push to refs, open issues, or
+# rewrite releases without the explicit elevation here.
+permissions:
+  contents: read
+
 # Node.js 20 is deprecated in GitHub Actions effective 2026-06-02; new
 # default is Node.js 24. Opt in now to silence the deprecation warning
 # and exercise the upcoming default before it lands. Safe — no action
@@ -41,9 +48,14 @@ jobs:
         run: go vet ./...
 
       - name: Lint (golangci-lint)
+        # --timeout=5m: default is 1m, which is too tight for cold-cache
+        # runs after a fresh setup-go invocation. Genuine lint regressions
+        # are still caught — only the wall-clock cap is relaxed. Five
+        # minutes is golangci-lint's own recommended ceiling for repos
+        # this size.
         run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-          golangci-lint run ./internal/... ./cmd/...
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.62.2
+          golangci-lint run --timeout=5m ./internal/... ./cmd/...
 
       - name: Unit tests with coverage
         shell: pwsh
@@ -84,7 +96,7 @@ jobs:
         # rather than re-measuring each time.
         #
         # F-3/F-6 (ISO audit re-evaluation 2026-04-29): aggregate-only gate
-        # masked a 28-point regression in internal/lock when the GAP-9
+        # masked a 28-point regression in internal/lock when the
         # stale-PID path landed without proportional test growth. Added a
         # per-package floor of 50% with an explicit waiver list. Waivers
         # need a reason and a target version; CI surfaces them but does

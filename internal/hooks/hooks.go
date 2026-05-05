@@ -27,12 +27,64 @@ import (
 //
 // We reject rather than escape because safe escaping varies by shell and by
 // quoting style in the user's hook script — we cannot know.
-const shellMetachars = "&|<>\"^$`();\n\r"
+//
+// Pre-public-flip review (panel B-tier 2026-05-04) added two vectors that
+// the prior list missed:
+//
+//   - `%` triggers cmd.exe variable expansion: `%PATH%file.txt` expands
+//     to the value of PATH followed by `file.txt`, leaking environment.
+//   - `!` triggers cmd.exe DELAYED variable expansion (when the user's
+//     hook script ran with `setlocal enabledelayedexpansion`); same
+//     expansion class as `%` but evaluated at command-execution time.
+//
+// Plus control-character vectors that the SECURITY.md doc claimed were
+// rejected ("or control characters") but the code only rejected \n\r:
+//
+//   - NUL (\x00) — POSIX command-line truncation; some shells stop reading
+//     at NUL, an attacker pads exploit strings AFTER it.
+//   - ESC (\x1b) — ANSI-injection log poisoning. A filename containing
+//     `\x1b[2J\x1b[H attacker-text` clears the terminal and overwrites
+//     visible buffer content if the hook's output reaches a terminal log.
+//   - U+202E RIGHT-TO-LEFT OVERRIDE (encoded as `\xe2\x80\xae` in UTF-8)
+//     — flips visual rendering of trailing characters; classic
+//     `safe.txt‮exe` masquerade.
+//   - U+200B/200C/200D zero-width joiners — invisible whitespace that
+//     can hide content from a reviewer eyeballing a hook command.
+//
+// The list is conservative: false positives (rejecting an actually-safe
+// filename) just mean the hook doesn't fire for that file; the user can
+// rename. False negatives (letting through a metachar that breaks shell
+// quoting) are exploitable.
+const shellMetachars = "&|<>\"^$`();%!\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\n\r"
+
+// shellUnicodeMetachars lists Unicode metacharacters the cmd.exe / POSIX
+// shell ASCII metachar list above doesn't cover. We check these as a
+// substring set rather than via strings.ContainsAny because they're
+// multi-byte in UTF-8. Strings written via Go escape sequences so the
+// source file itself doesn't carry the bytes (Go rejects U+FEFF in the
+// middle of a source file).
+var shellUnicodeMetachars = []string{
+	"‮", // RIGHT-TO-LEFT OVERRIDE
+	"‭", // LEFT-TO-RIGHT OVERRIDE
+	"​", // ZERO-WIDTH SPACE
+	"‌", // ZERO-WIDTH NON-JOINER
+	"‍", // ZERO-WIDTH JOINER
+	"\ufeff", // ZERO-WIDTH NO-BREAK SPACE (BOM)
+}
 
 // containsShellMetachar reports whether s has any character that shells
-// interpret specially.
+// interpret specially. Returns true for ASCII metachars in shellMetachars
+// OR any Unicode metachar in shellUnicodeMetachars.
 func containsShellMetachar(s string) bool {
-	return strings.ContainsAny(s, shellMetachars)
+	if strings.ContainsAny(s, shellMetachars) {
+		return true
+	}
+	for _, m := range shellUnicodeMetachars {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // Env provides context to hook scripts via environment variables.

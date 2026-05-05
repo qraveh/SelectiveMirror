@@ -1,6 +1,6 @@
 // CLI + artifact tests for the telemetry v2 architecture.
 //
-// Origin: Quincy (System Validation), telemetry round-3 panel,
+// Origin: System Validation review,
 // 2026-04-30. Maps to claims in system-validation/CLAIMS-MAP.md:
 //
 //   C-15 — bug-report narratives stay on GitHub (no quoted issue
@@ -69,7 +69,7 @@ func TestTelemetryV2Artifacts_NoQuotedNarrativeFragments(t *testing.T) {
 		// Direct cut-and-paste give-aways
 		"reproduce: i ",
 		"steps i tried:",
-		"hi raveh ",
+		"hi maintainer ",
 		"hi maintainers",
 		"thanks for your project",
 		// Forms that are almost-always issue-template artifacts
@@ -179,7 +179,7 @@ func TestTelemetryV2CLI_VersionReportsBuildKeyFingerprint(t *testing.T) {
 // Bonus: `smirror telemetry inspect` produces structured JSON
 // ---------------------------------------------------------------------------
 //
-// Felix-FAE's diagnostic for "I need to see we collect everything."
+// the FAE-role diagnostic for "I need to see we collect everything."
 // Black-box ratification of the inspect subcommand at the binary
 // level (the Go-level unit tests already cover the field-by-field
 // presence check; this just confirms the plumbing through the CLI

@@ -159,6 +159,17 @@ func (g Global) Workers() int {
 
 // parseDeletePolicy converts a string to a DeletePolicy value.
 // Handles the "mirror" → "delete" deprecation.
+//
+// Default-policy choice (review / UX
+// finding): when a user creates a fresh config without specifying
+// delete_policy explicitly, the safer default is `quarantine` — local
+// deletes move the remote file to `.quarantine/` for `quarantine_days`
+// (default 30 days) instead of being permanently deleted on the remote.
+// Pre-fix the default was `delete`, which silently propagated local
+// deletes to the remote with no recovery window — hostile for first-
+// time users who point smirror at a familiar directory and run `start`
+// without reading the config docs first. The conscious-deleter who
+// wants 1:1 mirroring sets delete_policy: delete explicitly.
 func parseDeletePolicy(s string) DeletePolicy {
 	switch DeletePolicy(s) {
 	case DeleteIgnore:
@@ -171,11 +182,15 @@ func parseDeletePolicy(s string) DeletePolicy {
 	case DeleteQuarantine:
 		return DeleteQuarantine
 	default:
-		return DeleteDelete // no policy or unrecognized → delete (mirror the deletion)
+		// Empty string OR unrecognized → quarantine (safe default).
+		// Validation rejects an explicit unrecognized value upstream
+		// (config.Validate), so this branch is reached almost
+		// exclusively when delete_policy is omitted.
+		return DeleteQuarantine
 	}
 }
 
-// DeletePolicy returns the parsed global delete policy (defaults to "delete").
+// DeletePolicy returns the parsed global delete policy (defaults to "quarantine").
 func (g Global) DeletePolicy() DeletePolicy {
 	return parseDeletePolicy(g.DeletePolicyStr)
 }
@@ -358,7 +373,7 @@ func isValidDeletePolicyString(s string) bool {
 // Validate checks the configuration for errors.
 func (g *Global) Validate() error {
 	if len(g.Projects) == 0 {
-		// Tier-2 #29 (validation panel 2026-04-29): explicit hint that
+		// # explicit hint that
 		// "no mirrors defined" can be the symptom of a YAML structural
 		// issue (a mirror entry whose first non-comment child is a
 		// `key: value` rather than `- name:` makes the parser read
@@ -417,7 +432,7 @@ func (g *Global) Validate() error {
 			g.Projects[i].MaxFileSizeMB = 100
 		}
 
-		// GAP-4 (panel review 2026-04-28): reject drive-root and other
+		// # reject drive-root and other
 		// system-wide local_path values. Watching `C:\` (or %SystemRoot%,
 		// %ProgramFiles%, etc.) recurses across millions of entries,
 		// exhausts ReadDirectoryChangesW handle buffers, and is almost
@@ -426,7 +441,7 @@ func (g *Global) Validate() error {
 			return fmt.Errorf("mirror %q: local_path %q rejected: %s", p.Name, p.LocalPath, reason)
 		}
 
-		// GAP-5: reject traversal-shaped remote paths (e.g. `local:../../etc`).
+		// # reject traversal-shaped remote paths (e.g. `local:../../etc`).
 		// rclone-remote syntax is `remote:path`. After the colon, `..`
 		// segments are almost always either a typo or a deliberate escape
 		// attempt. Cheap defense-in-depth — failure is otherwise deferred
@@ -436,7 +451,7 @@ func (g *Global) Validate() error {
 		}
 	}
 
-	// GAP-3: detect overlapping mirror local_paths. If parent and child
+	// # detect overlapping mirror local_paths. If parent and child
 	// are both mirrored, every event under the child fires on both
 	// watchers, FairQueue gets two tasks, two rclone processes burn API
 	// quota, and the remote diverges based on which finishes first.
@@ -444,9 +459,9 @@ func (g *Global) Validate() error {
 		return err
 	}
 
-	// GAP-2: validate rclone_config path if set. rclone treats this as
+	// # validate rclone_config path if set. rclone treats this as
 	// the credentials store; pointing it at a missing/non-regular file
-	// silently degrades sync, and combined with GAP-1 it's a pivot
+	// silently degrades sync, and combined with # it's a pivot
 	// vector if the file is later created by an attacker who can write
 	// the path.
 	if g.RcloneConfig != "" {
@@ -459,7 +474,7 @@ func (g *Global) Validate() error {
 		}
 	}
 
-	// GAP-1 (CRITICAL): reject dangerous rclone_extra_flags. The list is
+	// # (CRITICAL): reject dangerous rclone_extra_flags. The list is
 	// appended verbatim into every rclone invocation; flags like --rc
 	// expose an unauthenticated control plane on localhost (full
 	// filesystem access as the smirror principal — LocalSystem in service
@@ -494,7 +509,7 @@ func (g *Global) Validate() error {
 		}
 	}
 
-	// PR-S6 (panel review pre-release 2026-04-28): validate alert_min_severity
+	// review item: validate alert_min_severity
 	// against the canonical severity set. Without this, a typo like
 	// `alert_min_severity: erro` silently demotes filtering — the lookup
 	// in severityAtLeast() falls to the default-0 branch, so every severity
@@ -509,14 +524,14 @@ func (g *Global) Validate() error {
 		}
 	}
 
-	// SM-190 (validation panel 2026-04-29): validate delete_policy values
+	// SM-190: validate delete_policy values
 	// at both global and per-mirror scope. Without this, a typo like
 	// `delete_policy: ignor` (the user meaning `ignore`) silently falls
 	// through parseDeletePolicy's default branch and becomes destructive
 	// `delete` — the user's archive-mode mirror would propagate every
 	// local delete to the remote, the opposite of intent.
 	if !isValidDeletePolicyString(g.DeletePolicyStr) {
-		return fmt.Errorf("delete_policy %q is not recognized (must be one of: ignore, delete, mirror, quarantine; empty defaults to delete)", g.DeletePolicyStr)
+		return fmt.Errorf("delete_policy %q is not recognized (must be one of: ignore, delete, mirror, quarantine; empty defaults to quarantine)", g.DeletePolicyStr)
 	}
 	for _, p := range g.Projects {
 		if !isValidDeletePolicyString(p.DeletePolicyStr) {
@@ -569,7 +584,7 @@ func isBlockedIP(ip net.IP) bool {
 // system-wide (drive root, SystemRoot, ProgramFiles, ProgramData) and
 // should not be a mirror source. Empty string means OK to use.
 //
-// GAP-4 (panel review 2026-04-28). On Windows these paths recurse over
+// On Windows these paths recurse over
 // millions of entries, blow past ReadDirectoryChangesW buffer caps, and
 // are almost always misconfigurations. On other platforms `/` is
 // similarly never a valid mirror source. Volumes (`E:\`, etc.) are also
@@ -621,7 +636,7 @@ func isUnsafeLocalPath(p string) string {
 	// a user pointing at `C:\Windows\Logs` (672 system files) or
 	// `C:\ProgramData\Microsoft` (thousands) sailed through while only
 	// `C:\Windows` (literally) was blocked. The exact-match policy
-	// failed the GAP-4 stated intent ("recurses over millions of
+	// failed the # stated intent ("recurses over millions of
 	// entries… almost always misconfigurations"). Now blocks any path
 	// at-or-under each system directory; separator-boundary check on
 	// the prefix prevents `C:\WindowsApps` (a sibling) from spuriously
@@ -649,7 +664,7 @@ func isUnsafeLocalPath(p string) string {
 // isUnsafeRemote returns a non-empty reason if the rclone remote spec
 // contains traversal segments after the colon. rclone remote syntax is
 // `remote-name:relative/path`; `..` segments are either typos or
-// attempts to escape the remote root. GAP-5 (panel review 2026-04-28).
+// attempts to escape the remote root.
 func isUnsafeRemote(r string) string {
 	colon := strings.IndexByte(r, ':')
 	if colon < 0 {
@@ -674,7 +689,7 @@ func isUnsafeRemote(r string) string {
 
 // validateNoLocalPathOverlap rejects configurations where one mirror's
 // local_path is a strict prefix of another's (parent/child overlap).
-// GAP-3 (panel review 2026-04-28).
+//
 func validateNoLocalPathOverlap(projects []Project) error {
 	type entry struct {
 		name string
@@ -713,7 +728,7 @@ func validateNoLocalPathOverlap(projects []Project) error {
 // rcloneExtraFlagDenylist is the set of rclone flag names that smirror
 // refuses to accept in `rclone_extra_flags` (global or per-mirror).
 // Each is rejected because it changes WHAT rclone executes vs HOW a
-// transfer behaves — see GAP-1 (panel review 2026-04-28).
+// transfer behaves — see
 //
 // Categories:
 //   - --rc, --rc-*       : exposes a control-plane HTTP listener
@@ -769,7 +784,7 @@ var rcloneExtraFlagDenylist = struct {
 // the error message. Both separate-form (`--flag value`) and `=`-form
 // (`--flag=value`) are caught.
 //
-// PR-S6 (panel review pre-release 2026-04-28): the denylist match is
+// review item: the denylist match is
 // done after a strict ASCII check on the flag name. rclone's flag
 // namespace is entirely ASCII; a non-ASCII glyph in the flag name (e.g.
 // Cyrillic 'с' U+0441 standing in for ASCII 'c' in `--rc`) is either a
@@ -800,7 +815,7 @@ func validateRcloneExtraFlags(where string, flags []string) error {
 		if eq := strings.Index(raw, "="); eq > 0 {
 			name = raw[:eq]
 		}
-		// PR-S6: ASCII-only check on flag name. r > 127 catches every
+		// review item: ASCII-only check on flag name. r > 127 catches every
 		// non-ASCII byte, including the BMP confusables (Cyrillic а/с/о/р/у,
 		// Greek ο/α, fullwidth forms, etc.) and non-BMP characters.
 		for _, r := range name {
@@ -809,7 +824,7 @@ func validateRcloneExtraFlags(where string, flags []string) error {
 			}
 		}
 		if rcloneExtraFlagDenylist.exact[name] {
-			return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; this flag changes what rclone executes — see docs/SECURITY.md GAP-1 / SM-183)", where, name)
+			return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; this flag changes what rclone executes — see docs/SECURITY.md # / SM-183)", where, name)
 		}
 		for _, p := range rcloneExtraFlagDenylist.prefix {
 			// Any flag whose name starts with `--rc` is rejected. This
@@ -818,7 +833,7 @@ func validateRcloneExtraFlags(where string, flags []string) error {
 			// reserves the `--rc*` prefix for the remote-control plane,
 			// so there are no false positives among rclone's other flags.
 			if strings.HasPrefix(name, p) {
-				return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; --rc* flags expose an unauthenticated control plane — see docs/SECURITY.md GAP-1)", where, name)
+				return fmt.Errorf("%s rclone_extra_flags: %q is not allowed (denylist; --rc* flags expose an unauthenticated control plane)", where, name)
 			}
 		}
 	}

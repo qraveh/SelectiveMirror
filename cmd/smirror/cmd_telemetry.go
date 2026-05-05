@@ -8,7 +8,7 @@
 //   smirror telemetry standard              Opt in to install census + bug counts
 //   smirror telemetry reliability           Above + reliability snapshot at upgrade
 //   smirror telemetry policy                Open docs/PRIVACY.md (or print path)
-//   smirror telemetry inspect               Felix-FAE preview: print the EXACT payload
+//   smirror telemetry inspect               Print the EXACT payload
 //                                           the client would build right now, without
 //                                           signing or sending. Read-only diagnostic.
 //   smirror telemetry forget                REMOVED in v2 — returns error pointing at PRIVACY.md
@@ -283,23 +283,22 @@ func cmdTelemetryStatus(configPath string, args []string) {
 		fmt.Println()
 		fmt.Println("bug reports:        enabled, per-event approval required")
 		fmt.Println("install events:     sent at first_seen and on each upgrade")
-		// FINDING 25 residual (round-7 validation memo, 2026-05-03):
-		// the prior "bucketed deltas attached to upgrade events ONLY"
-		// claim was a lie — reliability_snapshot has no production
-		// writer (FINDING 16, deferred to v1.0.x). Path-a closure in
-		// 0.9.102-dev shipped first_seen + upgrade but explicitly
-		// not reliability_snapshot. Status display now matches the
-		// honest cmdTelemetrySet output.
-		fmt.Println("reliability:        deferred to v1.0.x (Reliability tier is functionally")
-		fmt.Println("                    identical to Standard tier today; the tier choice is")
-		fmt.Println("                    recorded so deltas flow when the v1.0.x writer ships)")
+		// The earlier "bucketed deltas attached to upgrade events ONLY"
+		// description was inaccurate: reliability_snapshot has no
+		// production writer in v1.0.0 (not yet implemented). The
+		// first_seen + upgrade payloads ship today; reliability_snapshot
+		// does not. Status display below reflects the actual shipped
+		// behavior, matching cmdTelemetrySet.
+		fmt.Println("reliability:        identical to standard tier on the wire (the tier")
+		fmt.Println("                    choice is recorded; reliability dimensions ship")
+		fmt.Println("                    in a later release)")
 		if installID != "" {
 			fmt.Printf("install_id:         %s (anonymous, never stored server-side)\n", installID)
 		}
 		fmt.Println()
 		fmt.Println("Change tier:")
 		fmt.Println("  smirror telemetry none          Stop all telemetry")
-		fmt.Println("  smirror telemetry standard      Same wire output today; preserves choice for v1.0.x")
+		fmt.Println("  smirror telemetry standard      Same wire output today; preserves your choice")
 	}
 }
 
@@ -346,11 +345,11 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 			if existing, _ := st.GetMeta(metaInstallID); existing == "" {
 				_ = st.SetMeta(metaInstallID, telemetry.GenerateInstallID())
 			}
-			// FINDING 16 closure (path a, 0.9.10x-dev): the install-
-			// event submit pipeline ships in this build. first_seen
-			// fires on the next `smirror start` (or service start).
-			// reliability_snapshot is still deferred to v1.0.x —
-			// see PRIVACY.md "Currently shipped vs. deferred."
+			// The install-event submit pipeline ships in this build:
+			// first_seen fires on the next `smirror start` (or service
+			// start). reliability_snapshot is not yet implemented — see
+			// PRIVACY.md "Currently shipped vs. deferred" for the
+			// scope-of-shipped-behavior section.
 			fmt.Println("Bug-report submission (`smirror report-bug --submit`) is now enabled.")
 			fmt.Println("first_seen telemetry event will fire on the next `smirror start` or service start.")
 		}
@@ -362,11 +361,11 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 			}
 			fmt.Println("Bug-report submission (`smirror report-bug --submit`) is now enabled.")
 			fmt.Println("first_seen telemetry event will fire on the next `smirror start` or service start.")
-			fmt.Println("Note: reliability_snapshot is still deferred to v1.0.x; Reliability tier")
-			fmt.Println("is functionally identical to Standard tier today.")
+			fmt.Println("Note: Reliability tier is identical to Standard on the wire today;")
+			fmt.Println("reliability dimensions ship in a later release.")
 		} else if prev == telemetry.TierStandard {
-			fmt.Println("Note: reliability_snapshot is deferred to v1.0.x. Functionally identical to")
-			fmt.Println("Standard tier today; tier change recorded for when the pipeline lands.")
+			fmt.Println("Note: Reliability is identical to Standard on the wire today; the")
+			fmt.Println("tier change is recorded for when reliability dimensions ship.")
 		}
 	}
 
@@ -429,7 +428,7 @@ func openInBrowser(target string) {
 }
 
 // ---------------------------------------------------------------------------
-// inspect — Felix's "show me what would be sent" diagnostic
+// inspect — the "show me what would be sent" diagnostic
 // ---------------------------------------------------------------------------
 //
 // The most-asked question by the maintainer under stream-aggregate-
@@ -509,7 +508,7 @@ be obvious).`) {
 // SignPayload + the contribute() RPC would receive. Mirrors the
 // payload shape documented in docs/telemetry-architecture-v2.md AND
 // the rollup-table bucket-key tuple in docs/telemetry-v2.sql —
-// FINDING 3 (round-3 panel, 2026-05-02) requires those two stay in
+// FINDING 3 requires those two stay in
 // lockstep. The client must transmit ONLY what the server's rollup
 // table consumes, so the discard contract is byte-for-byte tight.
 //
@@ -554,7 +553,7 @@ func buildInspectPayload(cfg *config.Global, st *state.Store, eventKind string) 
 		daysBucket := computeInspectDaysSinceFirstSeenBucket(st)
 		return telemetry.BuildInstallationPayload("upgrade", view, reportedAt, priorVersion, daysBucket), nil
 	case "reliability_snapshot":
-		// Reliability remains deferred to v1.0.x — see
+		// Reliability is not yet implemented in production — see
 		// internal/telemetry/payloads.go::BuildReliabilitySnapshotPayload
 		// doc comment. Inspect shows the shape; production submit
 		// doesn't fire it yet.

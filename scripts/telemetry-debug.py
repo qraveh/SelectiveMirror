@@ -113,7 +113,7 @@ psycopg = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
-# Markdown escape — PANEL-2 (BMAD review 2026-05-03).
+# Markdown escape — PANEL-2.
 #
 # Imported from scripts/_telemetry_md.py — the single source of truth
 # for the Markdown table-cell escaper. Both this script and
@@ -212,7 +212,7 @@ def banner_block() -> list[str]:
     """The 'INTERNAL — DO NOT PUBLISH' framing that runs at the top
     AND bottom of the report.
 
-    Panel item 5 (P2, BMAD round 9): the prior version called itself
+    Panel item 5 (P2,): the prior version called itself
     an "Operator Report" — a name that sounds publishable. The
     canonical artifact is the published weekly digest
     (`scripts/telemetry-report.py`); this one is the un-floored
@@ -276,7 +276,7 @@ def _classification_bucket(v: str, releases: dict) -> str:
 
 
 def render_real_data_baseline(cur, releases) -> None:
-    """PANEL-3 (BMAD review 2026-05-03): Mary's "Section 0 — Real-data
+    """PANEL-3: the panel's "Section 0 — Real-data
     baseline."
 
     The user's framing — *"we do not store raw data, so the report
@@ -380,7 +380,7 @@ def render_freshness(cur) -> None:
         print("submit pipeline shipped in 0.9.102-dev (commit 11285cb), but rollups stay empty ")
         print("until a CI-signed binary at Standard or Reliability tier runs `smirror start`.)_")
     else:
-        # Panel item 6 (P2, BMAD round 9): use UTC date for the
+        # Panel item 6 (P2,): use UTC date for the
         # freshness arithmetic, not local. The rollup_date column is
         # stored as a UTC date by the server's _bump_* functions
         # (`(reported_at)::TIMESTAMPTZ::DATE`), so comparing against
@@ -409,7 +409,7 @@ def render_freshness(cur) -> None:
 
 
 def render_headline_counts(cur) -> None:
-    # Panel item 11 (P3, BMAD round 9): "raw" → "un-floored." The
+    # Panel item 11 (P3,): "raw" → "un-floored." The
     # word "raw" is overloaded in the privacy contract (raw payloads
     # are the v1 antipattern that v2 architecturally eliminated).
     # The accurate description is that this section bypasses the
@@ -432,7 +432,7 @@ def render_headline_counts(cur) -> None:
 def render_versions_seen(cur, releases) -> None:
     print("## 2 — Every smirror version seen in telemetry")
     print()
-    # PANEL-1 (BMAD review 2026-05-03): the prior implementation used
+    # PANEL-1: the prior implementation used
     # nested FULL OUTER JOINs with `ON COALESCE(av.client_version,
     # bv.client_version) = rv.client_version`, which silently dropped
     # versions that only ever fired reliability snapshots — when both
@@ -536,7 +536,7 @@ def render_release_timeline(cur, releases) -> None:
 
 
 def _empty_state_msg(table: str) -> str:
-    """Panel item 7 (P2, BMAD round 9): empty-state message links to
+    """Panel item 7 (P2,): empty-state message links to
     the FINDING-16 deferral context so the operator immediately
     knows whether "no rows" means "broken pipeline" or "we
     haven't shipped that pipeline yet."
@@ -547,8 +547,8 @@ def _empty_state_msg(table: str) -> str:
 
     bug_daily_rollup empty means no `report-bug --submit` calls yet.
 
-    reliability_daily_rollup empty is FINDING-16 PERSISTENT — the
-    reliability_snapshot writer is deferred to v1.0.x; this rollup
+    reliability_daily_rollup empty is expected — the
+    reliability_snapshot writer is not yet implemented; this rollup
     will stay empty until the sync-engine + watcher counters land.
     """
     if table == "installation_daily_rollup":
@@ -568,7 +568,7 @@ def _empty_state_msg(table: str) -> str:
 
 
 def render_raw_dumps(cur, full_dump: bool = False) -> None:
-    """Panel item 8 (P2, BMAD round 9): raw dumps now opt-in. Default
+    """Panel item 8 (P2,): raw dumps now opt-in. Default
     truncates each table to top-10 rows with a "Showing X of N"
     note; pass `--full-dump` for the prior 30-row behavior. Most
     operator visits are first-pass triage — if they need deeper
@@ -726,7 +726,7 @@ def main() -> int:
     ap.add_argument("--confirm-internal-only",
                     action="store_true",
                     help="Acknowledge this is an internal report and won't be published. Required.")
-    # Panel item 8 (P2, BMAD round 9): raw dumps are opt-in.
+    # Panel item 8 (P2,): raw dumps are opt-in.
     ap.add_argument("--full-dump",
                     action="store_true",
                     help="Show top-30 rows per rollup table in Section 4 (default top-10).")
@@ -786,7 +786,7 @@ def main() -> int:
     # the utf-8 reconfigure landed.)
     for line in banner_block():
         print(line)
-    # Panel item 5 (P2, BMAD round 9): title flipped from "Operator
+    # Panel item 5 (P2,): title flipped from "Operator
     # Report" (sounds publishable) to "INTERNAL — Operator View"
     # (the framing the banner above just primed). The canonical
     # publishable artifact is the WEEKLY DIGEST; this is its
@@ -830,7 +830,7 @@ def main() -> int:
     print("---")
     print()
 
-    # PANEL-3 (BMAD review 2026-05-03): Section 0 must come BEFORE
+    # PANEL-3: Section 0 must come BEFORE
     # everything else — under FINDING 16 reality the operator's first
     # question is "is this real-user data or test-marker injection?"
     # If the answer is "0 real users," the operator can stop reading.

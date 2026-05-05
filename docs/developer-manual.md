@@ -1,7 +1,7 @@
 ---
 title: "SelectiveMirror Developer Manual"
 author: "Raveh (smirror@qodeh.com)"
-date: "2026-03-27"
+date: "2026-05-05"
 toc: true
 toc-depth: 3
 geometry: margin=1in
@@ -87,7 +87,7 @@ The core data flow follows a pipeline pattern:
 
 **Hash-based deduplication.** Before invoking rclone, the engine computes an MD5 hash of the local file and compares it against the last known hash in the state database. If the hash and mtime are unchanged and the previous sync succeeded (exit code 0), the file is skipped entirely.
 
-**Three-tier delete policy.** Local file deletions can be handled with `ignore` (do nothing on remote), `delete` (default — delete remote file; `mirror` is a deprecated alias), or `quarantine` (move to `.quarantine/` with timestamp). Rename events always force-delete the old remote path regardless of policy.
+**Three-tier delete policy.** Local file deletions can be handled with `ignore` (do nothing on remote), `delete` (delete remote file; `mirror` is a deprecated alias), or `quarantine` (default — move to `.quarantine/` with timestamp; 30-day recovery window). Rename events always force-delete the old remote path regardless of policy.
 
 
 # rclone Subprocess Architecture
@@ -301,7 +301,7 @@ Creates a filter engine with no global excludes and no `.syncignore`, useful whe
 | `anomaly` | `internal/anomaly/` | 11-category classification, JSON-lines recording, 30-day/50MB rotation, causal hypothesis templates, path sanitization |
 | `hooks` | `internal/hooks/` | Pre/post-sync shell command execution (cmd.exe /C on Windows, sh -c on Unix), 30s timeout, shell-metachar rejection in env |
 | `task` | `internal/task/` | Per-user Scheduled Task registration via `schtasks.exe` + XML task definitions. Schema 1.2 (Windows 7+). Runner indirection for test injection. |
-| `telemetry` | `internal/telemetry/` | Three-tier opt-in consent (None/Standard/Reliability), tier-gated startup update check, shared report sanitizer (bug-report + crash), version-derived HMAC signer (SM-168, shipped pre-round-2), length-first JSONB-canonical JSON, bug-report classifier (`classify.go`), payload builders (`payloads.go`), bucket helpers (`buckets.go`), HTTP client (`contribute.go`), install-event submit pipeline (`install_events.go` — first_seen + upgrade detection at daemon startup). Server-side: stream-aggregate-and-discard (no personal data on disk by construction); Supabase RPC + Cloudflare Worker proxy. Shipped: `smirror telemetry` runtime CLI (SM-157, 0.9.83-dev), `report-bug --submit` pipeline (SM-158, 0.9.89-dev), install-event submit (FINDING 16 closure, 0.9.10x-dev). **Deferred to v1.0.x:** `reliability_snapshot` writer — server schema + client payload builder + inspect-time defaults are in place, but the bucket dimensions (anomaly_count, sync_attempts, sync_failures, restart_count, max_queue_depth, dead_letter_count) need counter wiring in `internal/sync` + `internal/watcher`. The `queue.go` durable-on-disk queue is also deferred-but-staged (FINDING 17): the install_events.go writer uses simpler retry-counter-with-dead-letter today; queue gets wired when reliability_snapshot lands. See `docs/telemetry-architecture-v2.md`, `docs/PRIVACY.md` "Currently shipped vs. deferred" table, and `docs/cli-telemetry-command.md`. |
+| `telemetry` | `internal/telemetry/` | Three-tier opt-in consent (None/Standard/Reliability), tier-gated startup update check, shared report sanitizer (bug-report + crash), version-derived HMAC signer (SM-168), length-first JSONB-canonical JSON, bug-report classifier (`classify.go`), payload builders (`payloads.go`), bucket helpers (`buckets.go`), HTTP client (`contribute.go`), install-event submit pipeline (`install_events.go` — first_seen + upgrade detection at daemon startup). Server-side: stream-aggregate-and-discard (no personal data on disk by construction); Supabase RPC + Cloudflare Worker proxy. Shipped: `smirror telemetry` runtime CLI (SM-157, 0.9.83-dev), `report-bug --submit` pipeline (SM-158, 0.9.89-dev), install-event submit (FINDING 16 closure, 0.9.10x-dev). **Deferred to v1.0.x:** `reliability_snapshot` writer — server schema + client payload builder + inspect-time defaults are in place, but the bucket dimensions (anomaly_count, sync_attempts, sync_failures, restart_count, max_queue_depth, dead_letter_count) need counter wiring in `internal/sync` + `internal/watcher`. The `queue.go` durable-on-disk queue is also deferred-but-staged (FINDING 17): the install_events.go writer uses simpler retry-counter-with-dead-letter today; queue gets wired when reliability_snapshot lands. See `docs/telemetry-architecture-v2.md`, `docs/PRIVACY.md` "Currently shipped vs. deferred" table, and `docs/cli-telemetry-command.md`. |
 
 ## Dependency Graph
 
@@ -423,9 +423,9 @@ The critical invariant: **mutexes are never deleted from the map.** If a mutex w
 
 | Delete Policy | rclone Verb | Behavior |
 |---------------|-------------|----------|
+| `quarantine` (default) | `moveto` | Remote file is moved to `.quarantine/<path>.<timestamp>` |
+| `delete` | `deletefile` (file) / `purge` (directory) | Remote file or directory is deleted |
 | `ignore` | (none) | No remote action on local delete |
-| `delete` (default) | `deletefile` (file) / `purge` (directory) | Remote file or directory is deleted |
-| `quarantine` | `moveto` | Remote file is moved to `.quarantine/<path>.<timestamp>` |
 
 `delete_policy: mirror` is accepted as a deprecated alias for `delete`. Rename events bypass the delete policy entirely. When a file is renamed, the old path's remote copy is an orphan. The watcher sends a `TaskDelete` with `ForceDelete: true`, which forces delete regardless of the configured policy.
 
@@ -631,32 +631,7 @@ For deployment on shared machines (e.g., terminal servers):
 
 # Bug Tracking
 
-SelectiveMirror uses an interproject bug tracker located at `C:\BugTracker\`.
-
-## Bug Report Format
-
-Each bug report is a Markdown file with YAML frontmatter:
-
-```yaml
----
-id: SM-001
-project: SelectiveMirror
-status: open
-severity: medium
-created: 2026-03-15
----
-```
-
-Followed by Markdown sections:
-
-- **Raw Report** -- the original observation or error log.
-- **Analysis** -- root cause investigation, hypotheses, evidence.
-- **Reproducing Test** -- steps or test case to reproduce the bug.
-- **Validation Tests** -- tests that confirm the fix works.
-
-## GitHub Sync
-
-The script `sync-github.ps1` in the BugTracker directory synchronizes local bug reports with GitHub Issues on the SelectiveMirror repository. It creates or updates issues based on the YAML metadata and Markdown content.
+Public bug reporting goes through [GitHub Issues](https://github.com/qraveh/SelectiveMirror/issues). The maintainer keeps a private working ledger (file-per-bug Markdown with YAML front-matter, outside the repository tree) for triage and root-cause analysis; that ledger is not user-facing and is not redistributed. SM-NNN identifiers in CHANGELOG and commit messages reference entries in that maintainer ledger; the public-facing equivalent is the GitHub issue number when one was filed.
 
 
 # Contributing Guidelines

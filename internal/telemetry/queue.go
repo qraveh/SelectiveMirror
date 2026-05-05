@@ -1,11 +1,10 @@
 // Durable on-disk queue for telemetry events.
 //
-// **STATUS (FINDING 17, round-5 validation memo, 2026-05-03):** this
-// type is **scaffolding** for the install-event submit pipeline
-// deferred to v1.0.x (see PRIVACY.md "Currently shipped vs.
-// deferred"). It is currently **dead code in production** — no
-// `cmd/` or `internal/` caller instantiates a Queue. It is retained
-// in tree because:
+// **STATUS:** this type is **scaffolding** for the install-event
+// submit pipeline (see PRIVACY.md "Currently shipped vs. deferred").
+// It is currently **dead code in production** — no `cmd/` or
+// `internal/` caller instantiates a Queue. It is retained in tree
+// because:
 //
 //   - The first_seen / upgrade / reliability_snapshot submit pipeline
 //     (FINDING 16) is the natural caller; deleting and re-adding the
@@ -196,8 +195,8 @@ func (q *Queue) DeadLetter(claimPath string) error {
 // SweepStaleClaims moves any files in 'sending' older than maxAge back to
 // the pending queue. Recovers from crashes that left files claimed but
 // unfinished. Intended caller: the install-event submit pipeline at
-// startup (deferred to v1.0.x per FINDING 16; today there is no
-// startup caller — see the package docstring's STATUS note).
+// startup; today there is no startup caller — see the package
+// docstring's STATUS note.
 func (q *Queue) SweepStaleClaims(maxAge time.Duration) (int, error) {
 	sendingDir := filepath.Join(q.dir, "sending")
 	entries, err := os.ReadDir(sendingDir)

@@ -1,10 +1,15 @@
 # SelectiveMirror telemetry edge proxy — Cloudflare Worker config
 #
-# Deployed URL (live as of v0.9.6-dev):
-#   https://smirror-telemetry.selectivemirror.workers.dev/v1/bug-reports
-#   https://smirror-telemetry.selectivemirror.workers.dev/v1/installations/report
+# Live endpoint (telemetry v2):
+#   POST https://smirror-telemetry.selectivemirror.workers.dev/v1/contribute
 #
-# Deploy:
+# Retired paths (return HTTP 410 Gone since the v1→v2 schema collapse):
+#   /v1/bug-reports           — pre-v2 schema; replaced by /v1/contribute
+#   /v1/installations/report  — pre-v2 schema; replaced by /v1/contribute
+#   /v1/forget                — v2 stores no rows tied to install_id
+#                               server-side, so there's nothing to forget
+#
+# Deploy (maintainer-only):
 #   cd worker
 #   npm install                  # one-time, installs wrangler
 #   npx wrangler deploy
@@ -17,6 +22,14 @@
 #
 # Note: deleting and redeploying the Worker (e.g., `wrangler delete`) wipes
 # its secrets. Re-set SUPABASE_ANON_KEY after any redeploy that lost state.
+#
+# Public-config note: this file is committed to a public repository on
+# purpose. It contains the production Supabase project ref and KV
+# namespace ID below — defensible because Supabase anon keys are
+# designed to be public + protected by Row-Level Security policies, and
+# the KV namespace ID is not a credential. Rotation of either requires
+# provisioning a fresh Supabase project / KV namespace and updating
+# this file in a coordinated commit.
 
 name = "smirror-telemetry"
 main = "src/index.ts"

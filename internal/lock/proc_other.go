@@ -5,7 +5,7 @@ package lock
 import "syscall"
 
 // isProcessAlive reports whether a process with the given PID is currently
-// running. Used by GAP-9 to detect stale lock files. POSIX path: send
+// running. Used by # to detect stale lock files. POSIX path: send
 // signal 0 (no-op) and inspect errno.
 func isProcessAlive(pid int) bool {
 	if pid <= 0 {

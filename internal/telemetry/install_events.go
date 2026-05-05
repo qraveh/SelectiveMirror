@@ -1,9 +1,9 @@
 // Install-event submit pipeline — first_seen + upgrade.
 //
-// Closes FINDING 16 (round-5 validation memo, 2026-05-03) for two of
-// the three deferred event types. Reliability_snapshot remains
-// deferred to v1.0.x (its bucket dimensions need new counters in
-// internal/sync + internal/watcher; that's separate scope).
+// Two of the three event types ship in v1.0.0; reliability_snapshot
+// is not yet implemented (its bucket dimensions need new counters in
+// internal/sync + internal/watcher; that's separate scope, lands in a
+// later release).
 //
 // Trigger conditions:
 //

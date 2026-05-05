@@ -5,7 +5,7 @@ package lock
 import "golang.org/x/sys/windows"
 
 // isProcessAlive reports whether a process with the given PID is currently
-// running. Used by GAP-9 to detect stale lock files.
+// running. Used by # to detect stale lock files.
 //
 // We use OpenProcess with PROCESS_QUERY_LIMITED_INFORMATION (the lowest
 // access level that still lets us call GetExitCodeProcess) so the check

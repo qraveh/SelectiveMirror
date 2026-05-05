@@ -60,14 +60,28 @@ if ($SkipGoBuild) {
     # Sanity-check: the binary must report a version that matches $Version
     # (with optional -dev suffix or build metadata appended). This catches
     # the "downloaded the wrong artifact" failure mode at MSI build time.
+    #
+    # release-dryrun.yml caveat: GoReleaser's --snapshot mode uses
+    # `<latest-tag>-SNAPSHOT-<short-sha>` as the version, so the binary
+    # passed by -SkipGoBuild reports e.g. "0.9.26-SNAPSHOT-1234567" while
+    # $Version is the intended tag (e.g., "1.0.0"). Accept either match
+    # to support the dryrun path; the strict version is enforced upstream
+    # by PR-R2 (release.yml's tag-source assertion).
     $reported = (& $exe version 2>&1) -join ' '
-    if ($reported -notmatch [regex]::Escape($Version)) {
+    $shortSha = if ($env:GITHUB_SHA) { $env:GITHUB_SHA.Substring(0, 7) } else { '' }
+    $snapshotPattern = if ($shortSha) { "SNAPSHOT-${shortSha}" } else { 'SNAPSHOT-' }
+    if ($reported -notmatch [regex]::Escape($Version) -and
+        $reported -notmatch [regex]::Escape($snapshotPattern)) {
         Write-Host " FAILED" -ForegroundColor Red
-        Write-Host "  Pre-built binary reports '$reported'; expected to contain '$Version'." -ForegroundColor Red
+        Write-Host "  Pre-built binary reports '$reported'; expected to contain '$Version' or '$snapshotPattern'." -ForegroundColor Red
         exit 1
     }
     $size = (Get-Item $exe).Length / 1MB
-    Write-Host (" OK ({0:N1} MB; version contains '{1}')" -f $size, $Version) -ForegroundColor Green
+    if ($reported -match [regex]::Escape($snapshotPattern)) {
+        Write-Host (" OK ({0:N1} MB; goreleaser-snapshot version, contains '{1}')" -f $size, $snapshotPattern) -ForegroundColor Green
+    } else {
+        Write-Host (" OK ({0:N1} MB; version contains '{1}')" -f $size, $Version) -ForegroundColor Green
+    }
 } else {
     Write-Host "[1/3] Building smirror.exe..." -NoNewline
     $ldflags = "-s -w -X main.version=$Version"

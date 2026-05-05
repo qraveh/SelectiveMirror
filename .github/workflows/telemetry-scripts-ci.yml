@@ -2,7 +2,7 @@ name: Telemetry scripts CI
 
 # Cross-platform unit tests for the Python telemetry-reporting scripts.
 #
-# Bonus-1 from the round-9 validation memo (BMAD panel, 2026-05-03):
+# Bonus item from the round-9 multi-role panel review:
 # the operator-debug script's banner_block uses ⚠️ + 🟢/🟡/🔴 emoji.
 # On Windows with default cp1252 stdout the script crashed with
 # UnicodeEncodeError, leaving a 0-byte output file. The bug shipped
@@ -39,6 +39,10 @@ on:
       - 'scripts/test_telemetry_debug.py'
       - '.github/workflows/telemetry-scripts-ci.yml'
   workflow_dispatch:
+
+# Read-only at workflow scope; the test job needs no write access.
+permissions:
+  contents: read
 
 jobs:
   test-cross-platform:

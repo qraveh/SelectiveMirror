@@ -211,7 +211,7 @@ func TestTelemetrySet_SameTierIsNoOp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// inspect — read-only payload preview (Felix's diagnostic)
+// inspect — read-only payload preview (the FAE-role diagnostic)
 // ---------------------------------------------------------------------------
 
 func TestTelemetryInspect_FirstSeen_ProducesValidJSON(t *testing.T) {
@@ -231,7 +231,7 @@ func TestTelemetryInspect_FirstSeen_ProducesValidJSON(t *testing.T) {
 
 	// Every documented PRIVACY.md field must appear. This is the
 	// claims-conformance check from CLAIMS-MAP.md (C-03). FINDING 3
-	// (round-3 panel, 2026-05-02): the payload must contain ONLY the
+	//: the payload must contain ONLY the
 	// installation_daily_rollup bucket-key columns (plus the small
 	// envelope set every signed payload carries). `os_detail` is NOT
 	// in the rollup table and was removed from the payload — sending
@@ -355,7 +355,7 @@ func TestTelemetryInspect_Reliability_AddsReliabilityFields(t *testing.T) {
 	}
 }
 
-// FINDING 5 (round-3 panel, 2026-05-02): telemetry status + inspect
+// FINDING 5: telemetry status + inspect
 // must work on a fresh install with no mirrors yet. Pre-fix, both
 // commands exited with config-validation error "no mirrors defined";
 // a privacy-conscious user couldn't even check that they're at None
@@ -465,7 +465,7 @@ func TestBucketMirrorCount(t *testing.T) {
 func TestBucketStateDbSize_Missing(t *testing.T) {
 	// Note: in 0.9.10x-dev the helper was moved + the missing-file
 	// default changed from "unknown" to "<10MB" (FINDING 2 from the
-	// round-3 panel: every value must be a legitimate ENUM member).
+	// every value must be a legitimate ENUM member).
 	if got := telemetry.BucketStateDBSize("/nonexistent/path/that/should/not/be/here.db"); got != "<10MB" {
 		t.Errorf("telemetry.BucketStateDBSize on missing file = %q, want %q (ENUM-valid default)", got, "<10MB")
 	}

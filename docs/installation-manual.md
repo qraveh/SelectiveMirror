@@ -1,7 +1,7 @@
 ---
 title: "SelectiveMirror Installation Manual"
 author: "Raveh (smirror@qodeh.com)"
-date: "2026-03-27"
+date: "2026-05-05"
 toc: true
 toc-depth: 3
 geometry: margin=1in
@@ -249,12 +249,12 @@ smirror version
 Expected output:
 
 ```
-smirror 0.8.x
+smirror 1.0.0
 ```
 
 ## Option B: Portable Installation (ZIP)
 
-1. Download `SelectiveMirror-windows-amd64.zip` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
+1. Download `SelectiveMirror_<version>_windows_amd64.zip` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
 2. Extract the ZIP to a directory of your choice (e.g., `C:\Tools\SelectiveMirror\`)
 3. Add that directory to your system PATH (same procedure as described in Section 3, Option D)
 4. Create the configuration directory manually:
@@ -292,16 +292,16 @@ smirror --config C:\path\to\custom\config.yaml test-mirrors
 
 Below is the complete list of configuration fields with their defaults.
 
-### Project Settings
+### Mirror Settings
 
-Each entry under `projects` defines a directory to watch and its sync destination.
+Each entry under `mirrors` defines a directory to watch and its sync destination.
 
 ```yaml
 mirrors:
   - name: MyProject              # Required. Unique project name.
     local_path: C:\Projects\MyProject  # Required. Local directory to watch.
     remote: "gdrive:backup/MyProject"  # Required. rclone remote destination.
-    debounce_sec: 5              # Wait N seconds after last change (default: 5)
+    debounce_sec: 5              # Wait N seconds after last change (default: 0 = immediate)
     max_file_size_mb: 100        # Skip files larger than this (default: 100)
     syncignore_path: ""          # Custom .syncignore path (default: <local_path>/.syncignore)
 ```
@@ -328,7 +328,7 @@ heartbeat_interval_sec: 300  # Write heartbeat to log every N seconds (default: 
 reconcile_interval_sec: 300  # Periodic full sync interval in seconds (default: 300)
 sync_workers: 4              # Concurrent sync workers, 1--16 (default: 4)
 
-delete_policy: delete        # delete (default), ignore, or quarantine
+delete_policy: quarantine    # quarantine (default), delete, or ignore
 quarantine_days: 30          # Days to keep quarantined files (default: 30)
 ```
 
@@ -336,9 +336,9 @@ quarantine_days: 30          # Days to keep quarantined files (default: 30)
 
 | Policy | Behavior |
 |--------|----------|
-| `delete` (default) | Local deletions are mirrored to the remote. `mirror` is a deprecated alias. |
-| `ignore` | Local deletions are not propagated — the remote is append-only |
-| `quarantine` | Deleted files are moved to a `.quarantine/` directory on the remote. Files older than `quarantine_days` are cleaned up automatically |
+| `quarantine` (default) | Deleted files are moved to a `.quarantine/` directory on the remote (30-day recovery window). Files older than `quarantine_days` are cleaned up automatically. |
+| `delete` | Local deletions are mirrored to the remote. `mirror` is a deprecated alias. |
+| `ignore` | Local deletions are not propagated — the remote is append-only. |
 
 ### Timestamps
 

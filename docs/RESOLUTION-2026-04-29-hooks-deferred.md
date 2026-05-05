@@ -3,7 +3,7 @@
 **Date**: 2026-04-29
 **Source version at time of decision**: 0.9.46-dev (HEAD `0e5a53a`)
 **To**: SelectiveMirror development session
-**From**: Project owner (Raveh) following BMAD-style adversarial panel
+**From**: Project owner (Raveh) following a multi-role panel review
 **Status**: ACCEPTED. Hooks moved to "watched / possible future" — explicitly **not** part of the v1.0 surface.
 
 ---
@@ -24,16 +24,16 @@ The defender's strongest argument against any change to hooks — that removal o
 
 Pre-1.0 is exactly the window in which "feature with no consumer" should be re-evaluated against its maintenance cost. Carrying it into 1.0 would convert that cost into a permanent compatibility commitment.
 
-## 3. Panel record (one-paragraph recap)
+## 3. Review record (one-paragraph recap)
 
-A six-lens panel (Maintainer, Skeptic, Security Engineer, Ops/SRE adversary, Product strategist, Code Janitor) examined hooks against the two questions: (a) does the implementation deliver the marketed value, and (b) could the value be delivered without hooks. Findings of record:
+A multi-role panel review examined hooks against the two questions: (a) does the implementation deliver the marketed value, and (b) could the value be delivered without hooks. Findings of record:
 
 - **"Validation" use case is structurally false** — hook errors are discarded at [internal/sync/sync.go:291](../internal/sync/sync.go) (`_ = e.Hooks.Run(...)`); a failing `pre_sync_hook` cannot block a sync.
-- **FIND-R4-1 (still open)** — hooks fire only on the live-watcher path; `sync-now`, startup reconciliation, `dry-run`, and delete events all bypass them. See [system-validation/PANEL-REVIEW-ROUND4-2026-04-29.md](../system-validation/PANEL-REVIEW-ROUND4-2026-04-29.md) §2 row 1, §3.
+- **Batch-sync gap (still open at review time)** — hooks fire only on the live-watcher path; `sync-now`, startup reconciliation, `dry-run`, and delete events all bypass them.
 - **Use cases overlap with existing features** — `alert_webhook_url` covers incident notification; `sync_log` covers audit; `.syncignore` covers gating; remote-side event APIs cover downstream triggers; git `pre-commit` covers authoring-time validation.
-- **Cost** — ~700 LOC across `internal/hooks/`, tests, config, sync integration, docs (`user-manual.md` §12, `SECURITY.md` hook section, `config.example.yaml`), plus recurring panel-review attention.
+- **Cost** — ~700 LOC across `internal/hooks/`, tests, config, sync integration, docs (`user-manual.md` §12, `SECURITY.md` hook section, `config.example.yaml`), plus recurring review attention.
 
-Panel majority recommended deprecation (path **C**); minimum acceptable interim was relabeling + truth-in-advertising (path **A**). The "fix to match docs" path (**B**) was rejected as the worst of both worlds — more code chasing a use case no one has demanded.
+The review majority recommended deprecation (path **C**); minimum acceptable interim was relabeling + truth-in-advertising (path **A**). The "fix to match docs" path (**B**) was rejected as the worst of both worlds — more code chasing a use case no one has demanded.
 
 ## 4. Decision (concrete)
 
@@ -43,11 +43,11 @@ The project adopts **path C in slow-motion**: deferral, not immediate removal.
 |---|---|
 | `pre_sync_hook` / `post_sync_hook` config keys | Remain accepted by `config.Validate()` for now. No removal in 0.9.x. |
 | `internal/hooks/` package | Remains in tree. No new feature work, no extension to batch / delete events. |
-| FIND-R4-1 (no batch firing, no delete firing) | **Closed as won't-fix** under the new framing — the gap was reported against the assumption that hooks should be load-bearing. They are not. |
+| Batch-firing / delete-firing gap | **Closed as won't-fix** under the new framing — the gap was reported against the assumption that hooks should be load-bearing. They are not. |
 | FR-ASP-17 in SRS | Reclassified from baselined v1.0 requirement to **"deferred / not part of v1.0"**. Wording change tracked as a follow-up commit, not part of this resolution. |
 | Phase 7 in `CLAUDE.md` | Reclassified from "complete" to a deferred-feature footnote. |
 | `docs/user-manual.md` §12 (Hooks) | To be revised: strike "validation / lint before upload" as a use case; strike "transformation"; mark the chapter as **experimental, not part of the v1.0 stability surface**. Truth-in-advertising change. |
-| `docs/release-maturity.md` "Open Highs" row | FIND-R4-1 removed from the High count once §6 follow-up commit lands. |
+| `docs/release-maturity.md` "Open Highs" row | The batch-sync hooks finding removed from the High count once §6 follow-up commit lands. |
 | `SECURITY.md` hook section | Retained as-is (the hardening is correct for what it does). |
 | `alert_webhook_url`, `sync_log`, `.syncignore` | Reaffirmed as the **supported** paths for notification, audit, and gating respectively. |
 
@@ -58,8 +58,8 @@ To keep this artifact reviewable, the following are **out of scope** and tracked
 1. Edit `docs/SRS.md` to reclassify FR-ASP-17 (must keep traceability ID; add "DEFERRED — see RESOLUTION-2026-04-29-hooks-deferred.md").
 2. Edit `CLAUDE.md` Phases section to demote Phase 7 from `[x]` to a footnote.
 3. Edit `docs/user-manual.md` §12 for truth-in-advertising.
-4. Update `docs/release-maturity.md` Open-Highs row when FIND-R4-1 is closed.
-5. Update `system-validation/panel_findings_round4_test.go` — the `Hooks_*` test cases either become assertions of the documented limited behavior, or are skipped with a reference to this resolution.
+4. Update `docs/release-maturity.md` Open-Highs row when the batch-sync hooks finding is closed.
+5. Update the corresponding system-validation test cases — the `Hooks_*` test cases either become assertions of the documented limited behavior, or are skipped with a reference to this resolution.
 6. CHANGELOG entry under the next `-dev` patch noting the deferral.
 7. File a tracker ticket (SM-NNN, number to be assigned by maintainer) titled "Hooks deferred from v1.0 — possible future feature" linking to this document.
 
@@ -77,9 +77,9 @@ Absent any of those, hooks remain in deferred state for the entirety of the v1.0
 
 ## 7. Signatures of record
 
-- **BMAD panel (six lenses, 2026-04-29)**: majority verdict path C, dissent acknowledged from the Maintainer lens. Full transcript retained in this session's panel discussion (not separately committed; this letter is the durable record).
+- **Multi-role panel review (2026-04-29)**: majority verdict path C, dissent acknowledged from the maintainer perspective. Full transcript retained in this session's review discussion (not separately committed; this letter is the durable record).
 - **Project owner (Raveh)**: accepted. Decision is recorded.
 
 ---
 
-*This letter is the canonical reference for the hooks deferral. Future panel rounds, SRS edits, and CHANGELOG entries should cite it by filename rather than re-litigating the verdict.*
+*This letter is the canonical reference for the hooks deferral. Future review rounds, SRS edits, and CHANGELOG entries should cite it by filename rather than re-litigating the verdict.*

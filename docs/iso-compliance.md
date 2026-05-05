@@ -2,21 +2,20 @@
 
 ## SelectiveMirror — Compliance with 29148:2018, 25010:2023, 25023:2016, 29119:2023
 
-**Document Version**: 0.6 (Multi-role review remediation; 2026-04-29 evening). Bumped from header-stale 0.4 per F-1 of the 2026-04-29 ISO audit re-evaluation; full version history in §10.4.
+**Document Version**: 0.6 (Multi-role review remediation; 2026-04-29 evening). Bumped from header-stale 0.4 per the 2026-04-29 ISO audit re-evaluation; full version history in §10.4.
 **Date**: 2026-04-27 (original); 2026-04-29 (v0.6 remediation pass)
-**Status**: **SELF-ASSESSMENT — retained permanently** per A-GOV-01 (decided 2026-04-29: external review is **not** planned; the project is a deliberate Non-Conformity by Choice on 29148:2018 §5.2.4 / §6.5). v1.0 ships with explicit "Partial ISO Compliance" disclosure in `README.md` and `CHANGELOG.md`.
+**Status**: **SELF-ASSESSMENT — retained permanently** per A-GOV-01 (decided 2026-04-29: external review is **not** planned; the project is a deliberate non-pursuit on 29148:2018 §5.2.4 / §6.5). v1.0 ships with explicit "Partial ISO Compliance" disclosure in `README.md` and `CHANGELOG.md`.
 **Release strategy**: Option β (ship 2026-05-01 with disclosure; close compliance gaps in v1.0.1 / v1.1).
 **v0.4 integration**: incorporates 5 commits (0.9.8..0.9.12-dev) that landed in parallel after v0.3 was baselined. Several actions advanced; new bugs SM-155 and SM-156 filed; new action `A-29119-12` added (per-release VV-Plan §5.2 re-measurement ritual).
-**Accountable owner**: Raveh (project lead). All actions in §9 are owned by Raveh; the *role-context* column names the BMad persona (John/Winston/Paige/Amelia) Raveh adopts when executing the action.
-**Audit method**: BMad multi-role review — PM (John) for 29148, Architect (Winston) for 25010 / 25023, Tech-writer (Paige) for document attributes, Dev (Amelia) for 29119 process implementation. Adversarial Reviewer + Edge-Case Hunter ran independent passes on draft v0.1 (2026-04-27); this v0.2 incorporates their findings.
-**Source documents audited** (refreshed 2026-04-29 evening for v1.0 baseline, R-9):
+**Accountable owner**: maintainer (project lead). All actions in §9 are owned by the maintainer; the *role-context* column names the discipline framing adopted when executing the action.
+**Audit method**: internal multi-role review process — Requirements (29148), Architecture/Quality (25010 / 25023), Documentation (document attributes), Implementation (29119 process implementation). Independent reviewer + edge-case hunter passes were applied to draft v0.1 (2026-04-27); this v0.2 incorporates their findings.
+**Source documents audited** (refreshed 2026-04-29 evening for v1.0 baseline):
 - `C:\SelectiveMirror\docs\SRS.md` (v1.1, refreshed through the v0.6 remediation pass; NFR-AU/RS/PR stubs landed in §4.6.5/.6/.7)
-- `C:\SelectiveMirror\docs\VV-Plan.md` (post-ζ re-measurement; §5.1 carries 66.0% aggregate / 650+ unit tests against 0.9.53-dev baseline; §1.1 V&V table corrected per SM-152)
-- `C:\SelectiveMirror\docs\release-maturity.md` (system-validation row 🟡 per SM-197)
+- `C:\SelectiveMirror\docs\VV-Plan.md` (post-remediation re-measurement; §5.1 carries 66.0% aggregate / 650+ unit tests against 0.9.53-dev baseline; §1.1 V&V table corrected)
+- `C:\SelectiveMirror\docs\release-maturity.md` (system-validation row 🟡)
 - `C:\SelectiveMirror\docs\RESOLUTION-2026-04-29-hooks-deferred.md` (Phase 7 deferral record)
-- `C:\SelectiveMirror\docs\audit-validation-report-2026-04-29.md` (Codex audit; SM-190..198)
-- `C:\SelectiveMirror\docs\iso-audit-required-actions-2026-04-29.md` (this audit's pre-tag action list with standing authorization)
-- Supporting: `CLAUDE.md`, `CHANGELOG.md` `[1.0.0]`, `.github/workflows/ci.yml` (per-package floor 50% + waivers), `~/.claude/skills/qh-sw-developer/SKILL.md`, `docs/security-audit-2026-04-18.md`
+- An external audit report and the audit's pre-tag action list (kept with the maintainer; not part of the public tracked set)
+- Supporting: `CLAUDE.md`, `CHANGELOG.md` `[1.0.0]`, `.github/workflows/ci.yml` (per-package floor 50% + waivers), `docs/security-audit-2026-04-18.md`
 
 ---
 
@@ -28,7 +27,7 @@
 4. [ISO/IEC/IEEE 29148:2018 — Requirements Engineering](#4-isoieceee-291482018--requirements-engineering)
 5. [ISO/IEC 25010:2023 — Product Quality Model](#5-isoiec-250102023--product-quality-model)
 6. [ISO/IEC 25023:2016 — Quality Measurement](#6-isoiec-250232016--quality-measurement)
-7. [ISO/IEC/IEEE 29119:2023 — Software Testing](#7-isoieceee-291192023--software-testing)
+7. [ISO/IEC/IEEE 29119 family — Software Testing](#7-isoieceee-29119-family--software-testing)
 8. [Cross-cutting Gaps](#8-cross-cutting-gaps)
 9. [Action Register](#9-action-register)
 10. [Maintenance & Re-audit Schedule](#10-maintenance--re-audit-schedule)
@@ -57,7 +56,7 @@ This is a **self-assessment** — authored by the same agent that authored the S
 
 ### 1.2 Calibration policy (added in v0.2)
 
-Per Adversarial Reviewer feedback: a passing reference, a parenthetical, or a single-line "approved" marker is **not** partial fulfillment of a 29148 clause. The bar for ⚠️ Partial is *substantive but incomplete coverage*. Items that are absent-with-a-handwave are ❌.
+Per independent-reviewer feedback: a passing reference, a parenthetical, or a single-line "approved" marker is **not** partial fulfillment of a 29148 clause. The bar for ⚠️ Partial is *substantive but incomplete coverage*. Items that are absent-with-a-handwave are ❌.
 
 ---
 
@@ -85,7 +84,7 @@ Per Adversarial Reviewer feedback: a passing reference, a parenthetical, or a si
 
 ### 3.2 Why "Partial" not "Mostly compliant" (revised v0.2)
 
-The v0.1 draft used "Mostly compliant" — the Adversarial Reviewer correctly flagged this as standards-gaming. Once three items in §4.1 are reclassified ❌, the 29148 row is 11/19 not 14/19. Document-attribute compliance is only halfway; **measurement evidence** and **test-process completeness** are the dominant gap classes — and several "Met at [looser target]" status entries in the SRS are **failure renamed**, not compliance.
+The v0.1 draft used "Mostly compliant" — the independent reviewer correctly flagged this as standards-gaming. Once three items in §4.1 are reclassified ❌, the 29148 row is 11/19 not 14/19. Document-attribute compliance is only halfway; **measurement evidence** and **test-process completeness** are the dominant gap classes — and several "Met at [looser target]" status entries in the SRS are **failure renamed**, not compliance.
 
 ### 3.3 Standards-gaming items to remediate
 
@@ -94,14 +93,14 @@ Three patterns identified that must be removed before the project claims ISO com
 | # | Pattern | Where | Remediation |
 |---|---|---|---|
 | 1 | "Met at looser target than spec" framing | NFR-TB-01, NFR-TB-02, NFR-RU-01, NFR-RU-03 (`SRS.md` §4.2) | Either revise SRS target (with rationale + version bump) or mark Status = **Not Met**. Action `A-25023-06`. |
-| 2 | Persona-as-owner | v0.1 of this document | Replaced in v0.2: Raveh is accountable; persona is role-context. |
+| 2 | Reviewer-role-as-owner | v0.1 of this document | Replaced in v0.2: the maintainer is accountable; reviewer roles are role-context. |
 | 3 | "v1.0 SRS revision" deferral with no calendar date | 23 of 39 actions in v0.1 | v0.2 §9 requires a Target Date column for every P0 / P1 — see `A-GOV-02`. |
 
 ---
 
 ## 4. ISO/IEC/IEEE 29148:2018 — Requirements Engineering
 
-**Role-context for this section**: John (PM persona). Tech-writer (Paige) co-owns document attributes.
+**Role-context for this section**: Requirements (PM role). Documentation co-owns document attributes.
 
 ### 4.1 SRS Document Attributes (29148 §9.5.5)
 
@@ -161,7 +160,7 @@ Three patterns identified that must be removed before the project claims ISO com
 
 ### 4.4 Verification vs Validation discipline (29148 §A.2)
 
-The Edge-Case Hunter pass identified that `VV-Plan.md` §1.1 places "integration tests" in the **Validation** column, which is a category error per 29148 §A.2 — integration tests are *verification*. Validation concerns operational/stakeholder fitness, not test scope. **Action `A-29148-14`**.
+The edge-case-hunter pass identified that `VV-Plan.md` §1.1 places "integration tests" in the **Validation** column, which is a category error per 29148 §A.2 — integration tests are *verification*. Validation concerns operational/stakeholder fitness, not test scope. **Action `A-29148-14`**.
 
 ### 4.5 Traceability (29148 §5.2.8)
 
@@ -194,7 +193,7 @@ See §9. Tag prefix: **A-29148-NN**.
 
 ## 5. ISO/IEC 25010:2023 — Product Quality Model
 
-**Role-context for this section**: Winston (architect persona).
+**Role-context for this section**: Architecture (architect role).
 
 ### 5.1 Top-level Characteristic Coverage (25010:2023 §5.3)
 
@@ -277,16 +276,16 @@ All three sub-characteristics covered: Time Behaviour, Resource Utilization, Cap
 
 ### 5.3 Schema-migration impact (A-25010-01 cascade)
 
-The Edge-Case Hunter correctly noted that A-25010-01 v0.1 was under-specified. Migrating `SRS.md` §4 to 25010:2023 forces:
+The edge-case-hunter pass correctly noted that A-25010-01 v0.1 was under-specified. Migrating `SRS.md` §4 to 25010:2023 forces:
 
 1. **NFR ID renames**: `NFR-IS-*` (Installability) and `NFR-AD-*` (Adaptability) currently under Portability move to Flexibility. Every traceability reference to those IDs (in code, tests, CHANGELOG, external docs) must be updated, OR the IDs preserved while only the section heading changes.
 2. **Appendix `SRS.md` §10.2 regeneration** — the "ISO/IEC 25010 Quality Characteristics Key" table is 2011-shaped.
 3. **`VV-Plan.md` §2.2 alignment** — its quality-characteristic-to-verification table currently lists 2011's 8 characteristics. Currently false claim that "VV-Plan applies 25010:2023". `A-29119-10`.
 4. **This compliance document** — internal section anchors that point to SRS sections must remain valid post-restructure.
 
-**Decision required (Raveh)**: Restructure SRS for 2023 schema, OR document the 2011 schema as the authoritative project layout with explicit deviation note.
+**Decision required (maintainer)**: Restructure SRS for 2023 schema, OR document the 2011 schema as the authoritative project layout with explicit deviation note.
 
-**Recommendation (Winston-context)**: Defer to v1.0 SRS revision; document the deviation here. Justification: engineering content is complete; only taxonomy labels differ. Cost ≈ medium; benefit ≈ standards-purity, no functional impact. If deviation is chosen, downgrade A-25010-01 from "restructure" to "deviation note" — but A-25010-02 (Usability → Interaction Capability) is **not** waivable while still claiming 25010:2023.
+**Recommendation (architecture role-context)**: Defer to v1.0 SRS revision; document the deviation here. Justification: engineering content is complete; only taxonomy labels differ. Cost ≈ medium; benefit ≈ standards-purity, no functional impact. If deviation is chosen, downgrade A-25010-01 from "restructure" to "deviation note" — but A-25010-02 (Usability → Interaction Capability) is **not** waivable while still claiming 25010:2023.
 
 ### 5.4 25010 Action Items
 
@@ -296,7 +295,7 @@ Tag prefix: **A-25010-NN**. Aggregated in §9.
 
 ## 6. ISO/IEC 25023:2016 — Quality Measurement
 
-**Role-context**: Winston (architect) defines functions; Amelia (dev) builds instrumentation.
+**Role-context**: Architecture defines functions; Implementation builds instrumentation.
 
 ### 6.1 Measurement Function Coverage
 
@@ -319,7 +318,7 @@ Tag prefix: **A-25010-NN**. Aggregated in §9.
 
 ### 6.2 Measurement Evidence — split into per-NFR P0 actions (revised v0.2)
 
-The v0.1 draft used a single compound action `A-25023-02`. Per Adversarial Reviewer demand and Edge-Case Hunter reinforcement, that compound is split into 11 singular actions, each P0 for v1.0:
+The v0.1 draft used a single compound action `A-25023-02`. Per independent-reviewer demand and edge-case-hunter reinforcement, that compound is split into 11 singular actions, each P0 for v1.0:
 
 | Action ID | NFR | Target | v0.1 Status | Singular owner-action |
 |---|---|---|---|---|
@@ -356,7 +355,7 @@ A 25023 successor edition may be published; verification deferred. **Action `M-2
 
 ## 7. ISO/IEC/IEEE 29119 family — Software Testing
 
-**Role-context**: Amelia (dev) for test-process implementation, Edge-Case Hunter for test-design. John (PM) signs off on Strategy.
+**Role-context**: Implementation for test-process, edge-case-hunter for test-design. Requirements (PM) signs off on Strategy.
 
 ### 7.1 Document Compliance (29119-3 — Test Documentation)
 
@@ -377,7 +376,7 @@ A 25023 successor edition may be published; verification deferred. **Action `M-2
 | **Test Log** | Required | CI logs in GitHub Actions | ✅ |
 | **Test Status Report** (per cycle) | Required | Not produced | ❌ — `A-29119-03` |
 | **Test Completion Report** (per release) | Required | `docs/validation-report-2026-04-16.md` exists; one-off, not per release | ❌ — `A-29119-03` |
-| **Anomaly Report** | Required | BugTracker (`C:\BugTracker\projects\Smirror\SM-NNN.md`) — unusually mature for solo project | ✅ |
+| **Anomaly Report** | Required | BugTracker (file-per-bug Markdown, maintainer-side ledger) — unusually mature for solo project | ✅ |
 
 ### 7.2 Test Process Compliance (29119-2)
 
@@ -427,25 +426,25 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 
 | ID | Gap | Affects | Role-context |
 |---|---|---|---|
-| **X-01** | No formal Test Strategy document; `qh-sw-developer` skill is **not** a substitute (clarified v0.2) | 29119-3, 29148 §6 | John + Amelia |
-| **X-02** | Measurement results not maintained over time (each measurement should record value + date) | 25023, 29119 | Winston + Amelia |
-| **X-03** | Document change history embedded only in git, not in-doc | 29148 §9.5.5 | Paige |
-| **X-04** | watcher package at 16.6% statement coverage; major requirement-coverage gap (FR-WATCH-*) | 25010 Maintainability:Testability, 29119 | Amelia |
-| **X-05** | No Authenticity / Resistance / Privacy NFRs explicitly declared | 25010 Security (2023) | Winston |
-| **X-06** | 25010:2023 schema mismatch in SRS §4 (uses 2011 Usability/Portability layout) | 25010 | Winston + Paige |
-| **X-07** | No Test Item Transmittal / Test Status / Test Completion ritual per release | 29119-3 | Amelia |
-| **X-08** | Verification vs Validation conflated in `VV-Plan.md` §1.1 (integration tests mis-placed under Validation) | 29148 §A.2 | John |
+| **X-01** | No formal Test Strategy document; `qh-sw-developer` skill is **not** a substitute (clarified v0.2) | 29119-3, 29148 §6 | Requirements + Implementation |
+| **X-02** | Measurement results not maintained over time (each measurement should record value + date) | 25023, 29119 | Architecture + Implementation |
+| **X-03** | Document change history embedded only in git, not in-doc | 29148 §9.5.5 | Documentation |
+| **X-04** | watcher package at 16.6% statement coverage; major requirement-coverage gap (FR-WATCH-*) | 25010 Maintainability:Testability, 29119 | Implementation |
+| **X-05** | No Authenticity / Resistance / Privacy NFRs explicitly declared | 25010 Security (2023) | Architecture |
+| **X-06** | 25010:2023 schema mismatch in SRS §4 (uses 2011 Usability/Portability layout) | 25010 | Architecture + Documentation |
+| **X-07** | No Test Item Transmittal / Test Status / Test Completion ritual per release | 29119-3 | Implementation |
+| **X-08** | Verification vs Validation conflated in `VV-Plan.md` §1.1 (integration tests mis-placed under Validation) | 29148 §A.2 | Requirements |
 | ~~X-09~~ | ~~SRS §11.9 / VV-Plan §11 risk registers may diverge~~ — **withdrawn v0.3**: VV-Plan has no §11; only SRS §11.9 exists. Phantom finding from v0.1 audit. | — | — |
-| **X-10** | Self-audit conflict of interest: same agent authored SRS, V&V Plan, and this audit | Governance / 29148 §6 | Raveh |
-| **X-11** | `docs/security-audit-2026-04-18.md` findings closure not tracked | 25010 Security | Winston |
+| **X-10** | Self-audit conflict of interest: same agent authored SRS, V&V Plan, and this audit | Governance / 29148 §6 | maintainer |
+| **X-11** | `docs/security-audit-2026-04-18.md` findings closure not tracked | 25010 Security | Architecture |
 
 ---
 
 ## 9. Action Register
 
-**Format**: `ID | Description | Standard | Role-context (BMad persona) | Priority | Target date | Status`
+**Format**: `ID | Description | Standard | Role-context | Priority | Target date | Status`
 
-**Accountability**: every action is owned by **Raveh**. The "Role-context" column names the BMad persona Raveh adopts when executing the action — it is *discipline framing*, not delegation.
+**Accountability**: every action is owned by the **maintainer**. The "Role-context" column names the discipline framing adopted when executing the action — it is *discipline framing*, not delegation.
 
 **Priority key**:
 - **P0** — blocks v1.0 release / required to claim ISO compliance externally
@@ -453,97 +452,97 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 - **P2** — quality / hygiene
 - **P3** — advisory / future
 
-**Target date**: Calendar dates are required for all P0 / P1 items per Adversarial Reviewer demand. Items still showing "TBD" must be assigned dates by 2026-05-15 (action `A-GOV-02`).
+**Target date**: P0 / P1 items carry a target version (e.g. `v1.0.1`, `v1.1.0`) rather than a calendar date — calendar dates rot faster than version-pegged commitments under the project's irregular release cadence. Items still showing "TBD" carry no scheduled commitment until promoted to a version target.
 
 ### 9.1 ISO/IEC/IEEE 29148 actions
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-29148-01 | Add explicit Verification Method column to FR-* tables in `SRS.md` §3 | John | P0 | 2026-Q3 (TBD) | Open |
-| A-29148-02 | Add in-document change-history table to `SRS.md` §1.6 | Paige | P2 | TBD | Open |
-| A-29148-03 | Add named approval / sign-off block (signatory + date) to `SRS.md` cover | Paige | P2 | TBD | Open |
-| A-29148-04 | Add "Source / Origin" column to NFR tables (or note origin in §10.4) | John | P3 | Post-v1.0 | Open |
-| A-29148-05 | Define verification method for every FR (currently NFRs only) | John + Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-29148-06 | Re-label "Target / SLA" as "Acceptance Criteria" or add explicit acceptance criteria | John | P2 | TBD | Open |
-| A-29148-07 | Add `docs/conops.md` (Concept of Operations) — 1–2 pages | Paige | P2 | TBD | Open |
-| A-29148-08 | Adopt `TestFR_XXX_YY_Scenario` naming convention (joint with `A-29119-04`) | Amelia | P1 | 2026-Q2 (TBD) | Open |
-| A-29148-09 | Generate automated requirement→test traceability matrix (joint with `A-29119-05`) | Amelia | P1 | 2026-Q2 (TBD) | Open |
-| A-29148-10 | Audit FR-* statements for implementation leakage. **Acceptance**: produce a list of 3–10 specific FR rewordings; merge or document Windows-first deviation | John | P3 | Post-v1.0 | Open |
-| A-29148-11 | Split compound requirements. **Acceptance**: list specific FR-IDs to split (FR-WATCH-10 confirmed), ship the split in next SRS revision | John | P3 | Post-v1.0 | Open |
-| A-29148-12 | Convert subjective FRs to measurable form. **Acceptance**: list FR-IDs ("graceful shutdown" = `FR-SVC-05`; "actionable errors" = `NFR-OP-01`); define metric per-ID | John | P1 | 2026-Q3 (TBD) | Open |
-| A-29148-13 | Tag every verification method as Inspection / Analysis / Demonstration / Test per 29148 §6.4 | John + Amelia | P2 | TBD | Open |
-| A-29148-14 | Fix `VV-Plan.md` §1.1 V&V table: integration tests are *verification*, not validation | John | P1 | 2026-Q2 (TBD) | Open |
-| A-29148-15 | Add Stakeholder list, Glossary (split from Definitions), Distribution list, Document conventions to SRS per 29148 §9.5.5 | Paige | P2 | TBD | Open |
-| A-29148-16 | Provide formal Safety justification (data-loss scenarios reviewed and concluded out-of-scope) | Winston | P3 | Post-v1.0 | Open |
-| A-29148-17 | Author User Documentation Requirements section in `SRS.md` (audiences, formats, delivery, completeness criteria) | Paige | P1 | 2026-Q3 (TBD) | Open |
+| A-29148-01 | Add explicit Verification Method column to FR-* tables in `SRS.md` §3 | Requirements | P0 | 2026-Q3 (TBD) | Open |
+| A-29148-02 | Add in-document change-history table to `SRS.md` §1.6 | Documentation | P2 | TBD | Open |
+| A-29148-03 | Add named approval / sign-off block (signatory + date) to `SRS.md` cover | Documentation | P2 | TBD | Open |
+| A-29148-04 | Add "Source / Origin" column to NFR tables (or note origin in §10.4) | Requirements | P3 | Post-v1.0 | Open |
+| A-29148-05 | Define verification method for every FR (currently NFRs only) | Requirements + Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-29148-06 | Re-label "Target / SLA" as "Acceptance Criteria" or add explicit acceptance criteria | Requirements | P2 | TBD | Open |
+| A-29148-07 | Add `docs/conops.md` (Concept of Operations) — 1–2 pages | Documentation | P2 | TBD | Open |
+| A-29148-08 | Adopt `TestFR_XXX_YY_Scenario` naming convention (joint with `A-29119-04`) | Implementation | P1 | 2026-Q2 (TBD) | Open |
+| A-29148-09 | Generate automated requirement→test traceability matrix (joint with `A-29119-05`) | Implementation | P1 | 2026-Q2 (TBD) | Open |
+| A-29148-10 | Audit FR-* statements for implementation leakage. **Acceptance**: produce a list of 3–10 specific FR rewordings; merge or document Windows-first deviation | Requirements | P3 | Post-v1.0 | Open |
+| A-29148-11 | Split compound requirements. **Acceptance**: list specific FR-IDs to split (FR-WATCH-10 confirmed), ship the split in next SRS revision | Requirements | P3 | Post-v1.0 | Open |
+| A-29148-12 | Convert subjective FRs to measurable form. **Acceptance**: list FR-IDs ("graceful shutdown" = `FR-SVC-05`; "actionable errors" = `NFR-OP-01`); define metric per-ID | Requirements | P1 | 2026-Q3 (TBD) | Open |
+| A-29148-13 | Tag every verification method as Inspection / Analysis / Demonstration / Test per 29148 §6.4 | Requirements + Implementation | P2 | TBD | Open |
+| A-29148-14 | Fix `VV-Plan.md` §1.1 V&V table: integration tests are *verification*, not validation | Requirements | P1 | 2026-Q2 (TBD) | Open |
+| A-29148-15 | Add Stakeholder list, Glossary (split from Definitions), Distribution list, Document conventions to SRS per 29148 §9.5.5 | Documentation | P2 | TBD | Open |
+| A-29148-16 | Provide formal Safety justification (data-loss scenarios reviewed and concluded out-of-scope) | Architecture | P3 | Post-v1.0 | Open |
+| A-29148-17 | Author User Documentation Requirements section in `SRS.md` (audiences, formats, delivery, completeness criteria) | Documentation | P1 | 2026-Q3 (TBD) | Open |
 
 ### 9.2 ISO/IEC 25010 actions
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-25010-01 | ~~Decide: restructure or deviate~~ — **DECIDED 2026-04-27: Version B (deviation note) for v1.0; restructure to v1.1.** SRS §4.0 deviation note added; iso-compliance §5 anchors updated. Restructure (Version A) is now `A-25010-01b` for v1.1. | Winston | P1 | v1.0 (deviation): 2026-04-27 ✅ ; v1.1 (restructure): post-2026-08 | **Closed (v1.0 path)** |
-| A-25010-01b | Restructure `SRS.md` §4 to full 25010:2023 layout (Flexibility as top-level; Adaptability/Installability/Replaceability/Scalability move there; Usability replaced by Interaction Capability or removed; Authenticity/Resistance added; Safety formal-justified). Includes cascade: NFR ID changes, Appendix §10.2 regen, VV-Plan §2.2 alignment | Winston | P2 | v1.1 | Open |
-| A-25010-02 | Replace top-level "Usability" with "Interaction Capability" or document explicit deviation. **NOT waivable while claiming 25010:2023.** | Winston | P0 | 2026-Q3 (TBD) | Open |
-| A-25010-03 | Annotate `FR-DEL-01` three-policy design as Functional Appropriateness evidence | Winston | P2 | TBD | Open |
-| A-25010-04 | Add explicit Faultlessness metric (panics-per-runtime-hour); gates Reliability claim. **v0.4 update**: substantive evidence already shipped in 0.9.12-dev — `internal/sync/liveness.go` implements multi-signal stall detection (output / cpu_time / io_bytes), with measurable thresholds (10s tick × K=6 = 60s flat-grace transfer; 30s × K=8 = 240s metadata). Faultlessness model is now real engineering, not just policy. Need to formalize as NFR-FL-01 with these thresholds as targets. | Winston + Amelia | P1 | 2026-Q3 (TBD) | **Evidence shipped; NFR formalization pending** |
-| A-25010-05 | Add Authenticity NFR (rclone-mediated; sub-process identity verification) | Winston | P1 | 2026-Q3 (TBD) | Open |
-| A-25010-06 | Promote `docs/security-audit-2026-04-18.md` findings into formal Resistance NFR(s); required for Security claim | Winston | P1 | 2026-Q3 (TBD) | Open |
-| A-25010-07 | Close Reusability evaluation: declare hook surface (`FR-ASP-17`) as Reusability evidence; finalize 2-sentence justification | Winston | P3 | 2026-05-15 | Open |
-| A-25010-08 | Add Analysability NFR (link FR-DIAG, FR-ANOM observability features). **v0.4 update**: strengthened by 0.9.12-dev anomaly kinds (`Sync:Stalled` warning, `Sync:LsJsonSlow` info). Causal-hypothesis model from FR-ANOM-05 now extends to stall-class incidents. | Winston | P2 | TBD | Open (evidence accumulating) |
+| A-25010-01 | ~~Decide: restructure or deviate~~ — **DECIDED 2026-04-27: Version B (deviation note) for v1.0; restructure to v1.1.** SRS §4.0 deviation note added; iso-compliance §5 anchors updated. Restructure (Version A) is now `A-25010-01b` for v1.1. | Architecture | P1 | v1.0 (deviation): 2026-04-27 ✅ ; v1.1 (restructure): post-2026-08 | **Closed (v1.0 path)** |
+| A-25010-01b | Restructure `SRS.md` §4 to full 25010:2023 layout (Flexibility as top-level; Adaptability/Installability/Replaceability/Scalability move there; Usability replaced by Interaction Capability or removed; Authenticity/Resistance added; Safety formal-justified). Includes cascade: NFR ID changes, Appendix §10.2 regen, VV-Plan §2.2 alignment | Architecture | P2 | v1.1 | Open |
+| A-25010-02 | Replace top-level "Usability" with "Interaction Capability" or document explicit deviation. **NOT waivable while claiming 25010:2023.** | Architecture | P0 | 2026-Q3 (TBD) | Open |
+| A-25010-03 | Annotate `FR-DEL-01` three-policy design as Functional Appropriateness evidence | Architecture | P2 | TBD | Open |
+| A-25010-04 | Add explicit Faultlessness metric (panics-per-runtime-hour); gates Reliability claim. **v0.4 update**: substantive evidence already shipped in 0.9.12-dev — `internal/sync/liveness.go` implements multi-signal stall detection (output / cpu_time / io_bytes), with measurable thresholds (10s tick × K=6 = 60s flat-grace transfer; 30s × K=8 = 240s metadata). Faultlessness model is now real engineering, not just policy. Need to formalize as NFR-FL-01 with these thresholds as targets. | Architecture + Implementation | P1 | 2026-Q3 (TBD) | **Evidence shipped; NFR formalization pending** |
+| A-25010-05 | Add Authenticity NFR (rclone-mediated; sub-process identity verification) | Architecture | P1 | 2026-Q3 (TBD) | Open |
+| A-25010-06 | Promote `docs/security-audit-2026-04-18.md` findings into formal Resistance NFR(s); required for Security claim | Architecture | P1 | 2026-Q3 (TBD) | Open |
+| A-25010-07 | Close Reusability evaluation: declare hook surface (`FR-ASP-17`) as Reusability evidence; finalize 2-sentence justification | Architecture | P3 | v1.1 | Open |
+| A-25010-08 | Add Analysability NFR (link FR-DIAG, FR-ANOM observability features). **v0.4 update**: strengthened by 0.9.12-dev anomaly kinds (`Sync:Stalled` warning, `Sync:LsJsonSlow` info). Causal-hypothesis model from FR-ANOM-05 now extends to stall-class incidents. | Architecture | P2 | TBD | Open (evidence accumulating) |
 | A-25010-09 | (Deprecated; superseded by A-25010-12) | — | — | — | Closed |
-| A-25010-10 | Add Privacy / Data Protection NFR family covering `FR-ANOM-11` outbound + `FR-TEL-*` (lawful basis, retention, redaction guarantee, opt-in/out symmetry, GDPR/CCPA references) | Winston | P1 | 2026-Q3 (TBD) | Open |
-| A-25010-11 | Re-audit Interaction Capability when `FR-ASP-05` (GUI) reaches "in development". Re-audit trigger added to §10.1 | Winston | P3 (deferred) | When GUI work begins | Triggered |
-| A-25010-12 | Reclassify Replaceability from advisory to architectural NFR; declare rclone-as-transport doctrine with explicit substitution test | Winston | P1 | 2026-Q3 (TBD) | Open |
+| A-25010-10 | Add Privacy / Data Protection NFR family covering `FR-ANOM-11` outbound + `FR-TEL-*` (lawful basis, retention, redaction guarantee, opt-in/out symmetry, GDPR/CCPA references) | Architecture | P1 | 2026-Q3 (TBD) | Open |
+| A-25010-11 | Re-audit Interaction Capability when `FR-ASP-05` (GUI) reaches "in development". Re-audit trigger added to §10.1 | Architecture | P3 (deferred) | When GUI work begins | Triggered |
+| A-25010-12 | Reclassify Replaceability from advisory to architectural NFR; declare rclone-as-transport doctrine with explicit substitution test | Architecture | P1 | 2026-Q3 (TBD) | Open |
 
 ### 9.3 ISO/IEC 25023 actions
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-25023-01 | Author measurement-function table covering every quantitative NFR (extend `VV-Plan.md` §2.3) | Winston + Amelia | P1 | 2026-Q3 (TBD) | Open |
-| A-25023-02a | Measure or revise NFR-TB-01 (50 ms p99 detection) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02b | Measure or revise NFR-TB-02 (3 s p95 sync) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02c | Measure NFR-TB-03 (60 s p95 large files) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02d | Confirm NFR-TB-04 measurement methodology (already "Met") | Amelia | P1 | 2026-Q3 (TBD) | Open |
-| A-25023-02e | Measure NFR-TB-06 (queue throughput > 100 events/s) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02f | Measure NFR-TB-07 (service restart < 40 s) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02g | Measure or revise NFR-RU-01 (25 MB RSS idle) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02h | Measure NFR-RU-02 (80 MB RSS loaded) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02i | Measure NFR-RU-04 (10 IOPS / sync) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02j | Load test NFR-CA-01 (32 mirrors) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-02k | Stress test NFR-CA-02 (100 k files / mirror) | Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-25023-03 | Define availability-measurement methodology (NFR-AV-01) — service-event-log-based | Amelia | P2 | TBD | Open |
-| A-25023-04 | Extend `VV-Plan.md` §2.3 with 25023 §5.2 attributes (purpose, method, type, scale, audience) per measurement | Winston | P1 | 2026-Q3 (TBD) | Open |
-| A-25023-05 | Classify each existing measurement as Base / Derived / Indicator and Scale type; correct mis-typed (NFR-TE-01, NFR-FT-01) | Winston | P2 | TBD | Open |
-| A-25023-06 | Eliminate "Met at looser value" framing in `SRS.md` §4. For each, revise target with rationale + version bump OR mark Status = **Not Met** | Winston | P1 | 2026-Q2 (TBD) | Open |
-| M-25023-01 | Verify whether 25023 successor edition exists; review and decide adoption | Winston | P3 | Post-v1.0 | Open |
+| A-25023-01 | Author measurement-function table covering every quantitative NFR (extend `VV-Plan.md` §2.3) | Architecture + Implementation | P1 | 2026-Q3 (TBD) | Open |
+| A-25023-02a | Measure or revise NFR-TB-01 (50 ms p99 detection) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02b | Measure or revise NFR-TB-02 (3 s p95 sync) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02c | Measure NFR-TB-03 (60 s p95 large files) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02d | Confirm NFR-TB-04 measurement methodology (already "Met") | Implementation | P1 | 2026-Q3 (TBD) | Open |
+| A-25023-02e | Measure NFR-TB-06 (queue throughput > 100 events/s) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02f | Measure NFR-TB-07 (service restart < 40 s) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02g | Measure or revise NFR-RU-01 (25 MB RSS idle) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02h | Measure NFR-RU-02 (80 MB RSS loaded) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02i | Measure NFR-RU-04 (10 IOPS / sync) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02j | Load test NFR-CA-01 (32 mirrors) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-02k | Stress test NFR-CA-02 (100 k files / mirror) | Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-25023-03 | Define availability-measurement methodology (NFR-AV-01) — service-event-log-based | Implementation | P2 | TBD | Open |
+| A-25023-04 | Extend `VV-Plan.md` §2.3 with 25023 §5.2 attributes (purpose, method, type, scale, audience) per measurement | Architecture | P1 | 2026-Q3 (TBD) | Open |
+| A-25023-05 | Classify each existing measurement as Base / Derived / Indicator and Scale type; correct mis-typed (NFR-TE-01, NFR-FT-01) | Architecture | P2 | TBD | Open |
+| A-25023-06 | Eliminate "Met at looser value" framing in `SRS.md` §4. For each, revise target with rationale + version bump OR mark Status = **Not Met** | Architecture | P1 | 2026-Q2 (TBD) | Open |
+| M-25023-01 | Verify whether 25023 successor edition exists; review and decide adoption | Architecture | P3 | Post-v1.0 | Open |
 
 ### 9.4 ISO/IEC/IEEE 29119 actions
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-29119-01 | Author `docs/test-strategy.md` (project-level Organizational Test Strategy). **NOT waivable while claiming 29119 compliance.** | John + Amelia | P0 | 2026-Q3 (TBD) | Open |
-| A-29119-02 | Decide whether per-test Test Case Specification is needed beyond Go test files. **Acceptance**: documented decision + rationale | Amelia | P3 | 2026-05-15 | Open |
-| A-29119-03 | Adopt per-release ritual: Test Status Report + Test Item Transmittal + Test Completion Report — minimal templates in `docs/test-reports/`. **Split-able into 3 sub-actions if convenient** | Amelia | P1 | 2026-Q3 (TBD) | Open |
-| A-29119-04 | Migrate Go test names to `TestFR_XXX_YY_Scenario` (joint A-29148-08) | Amelia | P1 | 2026-Q2 (TBD) | Open |
-| A-29119-05 | Implement `tools/coverage-matrix.go` to generate `coverage-matrix.json` (joint A-29148-09) | Amelia | P1 | 2026-Q2 (TBD) | Open |
-| A-29119-06 | Document test environments per 29119-2 §7.7. **Scope**: CI runner spec; `test/sla_smoke.ps1` env requirements; local-dev requirements; backend-test rclone configuration. Template: `docs/test-environments.md` | Amelia | P2 | TBD | Open |
-| A-29119-07 | Adopt Risk-Based Testing — link test IDs to reconciled risk register entries (depends on `A-GOV-03`) | John + Amelia | P3 | Post-v1.0 | Open |
-| A-29119-08 | Add Master Test Plan vs Level Test Plan structure; add Test Readiness Review checklist, Regression Approach, Test Data Requirements docs | Amelia | P2 | TBD | Open |
-| A-29119-09 | Adopt Combinatorial / pairwise testing for delete-policy × ghost-mode × quarantine-retention matrix | Amelia | P3 | Post-v1.0 | Open |
-| A-29119-10 | Update `VV-Plan.md` §2.2 quality-characteristic table to 25010:2023 layout (joint with A-25010-01) | Amelia | P1 | 2026-Q3 (TBD) | Open |
-| A-29119-11 | Align `VV-Plan.md` vocabulary with 29119-1 (test level / test type / test phase usage) | Amelia | P3 | Post-v1.0 | Open |
-| A-29119-12 | **NEW v0.4**: Add per-release VV-Plan §5.2 re-measurement to release ritual. SM-155 documents the gap: 0.9.11-dev claimed to refresh VV-Plan but only updated test count + version label; per-package coverage table was 9 days stale and propagated wrong baseline (16.6% watcher) into iso-compliance.md X-04 priority. Fix: add `go test ./internal/... -cover` step to release pipeline, update VV-Plan §5.2 atomically with version bump. | Amelia | P1 | v1.0 / 2026-04-30 | Open |
+| A-29119-01 | Author `docs/test-strategy.md` (project-level Organizational Test Strategy). **NOT waivable while claiming 29119 compliance.** | Requirements + Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-29119-02 | Decide whether per-test Test Case Specification is needed beyond Go test files. **Acceptance**: documented decision + rationale | Implementation | P3 | v1.1 | Open |
+| A-29119-03 | Adopt per-release ritual: Test Status Report + Test Item Transmittal + Test Completion Report — minimal templates in `docs/test-reports/`. **Split-able into 3 sub-actions if convenient** | Implementation | P1 | 2026-Q3 (TBD) | Open |
+| A-29119-04 | Migrate Go test names to `TestFR_XXX_YY_Scenario` (joint A-29148-08) | Implementation | P1 | 2026-Q2 (TBD) | Open |
+| A-29119-05 | Implement `tools/coverage-matrix.go` to generate `coverage-matrix.json` (joint A-29148-09) | Implementation | P1 | 2026-Q2 (TBD) | Open |
+| A-29119-06 | Document test environments per 29119-2 §7.7. **Scope**: CI runner spec; `test/sla_smoke.ps1` env requirements; local-dev requirements; backend-test rclone configuration. Template: `docs/test-environments.md` | Implementation | P2 | TBD | Open |
+| A-29119-07 | Adopt Risk-Based Testing — link test IDs to reconciled risk register entries (depends on `A-GOV-03`) | Requirements + Implementation | P3 | Post-v1.0 | Open |
+| A-29119-08 | Add Master Test Plan vs Level Test Plan structure; add Test Readiness Review checklist, Regression Approach, Test Data Requirements docs | Implementation | P2 | TBD | Open |
+| A-29119-09 | Adopt Combinatorial / pairwise testing for delete-policy × ghost-mode × quarantine-retention matrix | Implementation | P3 | Post-v1.0 | Open |
+| A-29119-10 | Update `VV-Plan.md` §2.2 quality-characteristic table to 25010:2023 layout (joint with A-25010-01) | Implementation | P1 | 2026-Q3 (TBD) | Open |
+| A-29119-11 | Align `VV-Plan.md` vocabulary with 29119-1 (test level / test type / test phase usage) | Implementation | P3 | Post-v1.0 | Open |
+| A-29119-12 | **NEW v0.4**: Add per-release VV-Plan §5.2 re-measurement to release ritual. SM-155 documents the gap: 0.9.11-dev claimed to refresh VV-Plan but only updated test count + version label; per-package coverage table was 9 days stale and propagated wrong baseline (16.6% watcher) into iso-compliance.md X-04 priority. Fix: add `go test ./internal/... -cover` step to release pipeline, update VV-Plan §5.2 atomically with version bump. | Implementation | P1 | v1.0 / 2026-04-30 | Open |
 
 ### 9.5 Governance / cross-cutting actions
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-GOV-01 | **DECIDED 2026-04-29**: SELF-ASSESSMENT label retained permanently. Third-party / independent compliance review is not planned and not claimed. **v0.6 reframe (2026-04-29)**: the iso-compliance-review report (`docs/iso-compliance-review-2026-04-29.md`) flagged that "Closed by decision" understates the structural consequence — 29148:2018 §6.5 (stakeholder validation) and §5.2.4 (peer review of requirements) become unfulfillable, not deferred. The honest classification is **Non-Conformity by Choice**: the project deliberately does not pursue this clause. No pretense of compliance is made on those clauses. | Raveh | — | — | **Non-Conformity by Choice (decision logged 2026-04-29; document records the deliberate non-pursuit)** |
-| A-GOV-02 | Assign calendar dates to all P0 / P1 actions in this register | Raveh | P1 | 2026-05-15 | Open |
+| A-GOV-01 | **DECIDED 2026-04-29**: SELF-ASSESSMENT label retained permanently. Third-party / independent compliance review is not planned and not claimed. **v0.6 reframe (2026-04-29)**: the multi-role compliance delta review flagged that "Closed by decision" understates the structural consequence — 29148:2018 §6.5 (stakeholder validation) and §5.2.4 (peer review of requirements) become unfulfillable, not deferred. The honest classification is **deliberate non-pursuit**: the project deliberately does not pursue this clause. No pretense of compliance is made on those clauses. | maintainer | — | — | **deliberate non-pursuit (decision logged 2026-04-29; document records the deliberate non-pursuit)** |
+| A-GOV-02 | Assign target versions (or close as won't-do) to all P0 / P1 actions still showing TBD | maintainer | P1 | v1.0.1 | Open |
 | ~~A-GOV-03~~ | ~~Reconcile SRS §11.9 and VV-Plan §11 risk registers~~ — **withdrawn 2026-04-27 v0.3**: VV-Plan has no §11 risk register; only SRS §11.9 exists. The audit doc invented a phantom reference. No action needed. | — | — | — | **Closed (invalid)** |
-| A-GOV-04 | Track closure status of every `docs/security-audit-2026-04-18.md` finding with linked issue ID and date. **v0.4 update**: 0.9.9-dev (commit a0c5b3e "P1 security/correctness fixes from adversarial review") closed multiple findings: SEC-H6 (file-mode 0600→0644 invariant + ACL DACL walk), config.SetField column-0 match, path-traversal hardening on `deleteRemote*`, allowLoopbackWebhooks unexported, report-bug CWD, state.Open meta-write idempotency, emergency crash logs to safe paths. **v0.6 update**: panel-found bugs filed as GitHub issues SM-152..159 on 2026-04-29 (see §10.6 SM-NNN traceability table). Numbering note: pre-v0.5 CHANGELOG entries informally used "SM-155" / "SM-156" as internal tracking IDs for ISO-compliance work; those references are NOT the same as the GitHub issues filed under those numbers (SM-155 = alert_min_severity typo, SM-156 = BUG-R3-1 gitignore divergence). Going forward: SM-NNN unambiguously refers to a GitHub issue. Historical CHANGELOG references for ISO-tracking work that were never filed as bugs are not renumbered — they appear in their original entries with that limitation called out. | Winston | P1 | 2026-Q2 (in progress; SM-152..159 filed 2026-04-29) | **Partially closed; enumeration of SEC-* audit findings pending** |
-| X-04 (raised) | Watcher coverage refactor for testability. **v0.4 update**: re-measured 2026-04-27 — actual coverage is **59.3%** (not 16.6% — VV-Plan §5.2 baseline was 9 days stale, see SM-155). Total internal/ coverage measured 66.6% (above v1.0 target 60%). The X-04 priority "P0" was anchored on the stale 16.6% figure. **Re-decision**: reduced from P0 to P2; v1.0 ships at 59.3% (within 0.7 points of the 60% target). Full refactor to ~75-80% (proper `fsnotifier` interface extraction, ~1 person-day) deferred to v1.0.1. Top-up tests (`isLinkToDir` + `WatchCount`, ~2 hours) to cross 60% optional for v1.0 — recommend scheduling if any spare cycles before 2026-05-01. | Amelia | **P2** (was P0) | v1.0.1 (full) / v1.0 optional top-up | **Mostly closed** |
-| A-DOC-01 | Fix self-quality issues in this document | Paige | P2 | 2026-Q2 | **Resolved in v0.2 + v0.3** (phantom VV-Plan §11 removed; A-25010-01 closure recorded; release strategy documented) |
+| A-GOV-04 | Track closure status of every `docs/security-audit-2026-04-18.md` finding with linked issue ID and date. **v0.4 update**: 0.9.9-dev (commit a0c5b3e "P1 security/correctness fixes from adversarial review") closed multiple findings: SEC-H6 (file-mode 0600→0644 invariant + ACL DACL walk), config.SetField column-0 match, path-traversal hardening on `deleteRemote*`, allowLoopbackWebhooks unexported, report-bug CWD, state.Open meta-write idempotency, emergency crash logs to safe paths. **v0.6 update**: panel-found bugs filed as GitHub issues SM-152..159 on 2026-04-29 (see §10.6 SM-NNN traceability table). Numbering note: pre-v0.5 CHANGELOG entries informally used "SM-155" / "SM-156" as internal tracking IDs for ISO-compliance work; those references are NOT the same as the GitHub issues filed under those numbers (SM-155 = alert_min_severity typo, SM-156 = BUG-R3-1 gitignore divergence). Going forward: SM-NNN unambiguously refers to a GitHub issue. Historical CHANGELOG references for ISO-tracking work that were never filed as bugs are not renumbered — they appear in their original entries with that limitation called out. | Architecture | P1 | 2026-Q2 (in progress; SM-152..159 filed 2026-04-29) | **Partially closed; enumeration of SEC-* audit findings pending** |
+| X-04 (raised) | Watcher coverage refactor for testability. **v0.4 update**: re-measured 2026-04-27 — actual coverage is **59.3%** (not 16.6% — VV-Plan §5.2 baseline was 9 days stale, see SM-155). Total internal/ coverage measured 66.6% (above v1.0 target 60%). The X-04 priority "P0" was anchored on the stale 16.6% figure. **Re-decision**: reduced from P0 to P2; v1.0 ships at 59.3% (within 0.7 points of the 60% target). Full refactor to ~75-80% (proper `fsnotifier` interface extraction, ~1 person-day) deferred to v1.0.1. Top-up tests (`isLinkToDir` + `WatchCount`, ~2 hours) to cross 60% optional for v1.0 — recommend scheduling if any spare cycles before 2026-05-01. | Implementation | **P2** (was P0) | v1.0.1 (full) / v1.0 optional top-up | **Mostly closed** |
+| A-DOC-01 | Fix self-quality issues in this document | Documentation | P2 | 2026-Q2 | **Resolved in v0.2 + v0.3** (phantom VV-Plan §11 removed; A-25010-01 closure recorded; release strategy documented) |
 
 ### 9.6 Action priority distribution (revised v0.2)
 
@@ -558,11 +557,11 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 
 ### 9.7 Recommended sequencing (revised)
 
-**Decision-only, by 2026-05-15**:
+**Decision-only, target v1.0.1**:
 - A-25010-01 (restructure or deviate)
 - A-25010-07 (Reusability close-out)
 - A-29119-02 (Test Case Spec decision)
-- A-GOV-02 (assign all calendar dates)
+- A-GOV-02 (assign target versions to remaining TBD rows)
 
 **v0.9 (foundation for v1.0 compliance)**:
 - A-29148-08 / A-29119-04 (test naming)
@@ -599,13 +598,13 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 
 | Role-context | Persona | Responsibility | Accountable human |
 |---|---|---|---|
-| Lead | — | Approve actions, prioritize, sign baseline | **Raveh** |
-| Requirements | John (PM) | 29148 sections, FR/NFR attribute audits | Raveh (as John) |
-| Architecture & Quality | Winston (architect) | 25010 / 25023 sections, NFR alignment | Raveh (as Winston) |
-| Documentation | Paige (tech-writer) | Document structure, glossary, change history | Raveh (as Paige) |
-| Implementation | Amelia (dev) | 29119 test-process, measurement instrumentation | Raveh (as Amelia) |
-| Verification reviewer | Edge-Case Hunter | Independent orthogonal-coverage challenge (verification) | Raveh (or external) |
-| Adversarial reviewer | Adversarial Reviewer | Cynical compliance-claim challenge | Raveh (or external) |
+| Lead | — | Approve actions, prioritize, sign baseline | **maintainer** |
+| Requirements | PM | 29148 sections, FR/NFR attribute audits | maintainer |
+| Architecture & Quality | architect | 25010 / 25023 sections, NFR alignment | maintainer |
+| Documentation | tech-writer | Document structure, glossary, change history | maintainer |
+| Implementation | dev | 29119 test-process, measurement instrumentation | maintainer |
+| Verification reviewer | edge-case hunter | Independent orthogonal-coverage challenge (verification) | maintainer (or external) |
+| Adversarial reviewer | independent reviewer | Cynical compliance-claim challenge | maintainer (or external) |
 | External auditor | — | Independent third-party review (P1 — A-GOV-01) | TBD |
 
 (v0.1 incorrectly assigned reviewers to "Validation"; corrected v0.2.)
@@ -623,18 +622,18 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 
 | Version | Date | Author | Change |
 |---|---|---|---|
-| 0.1 | 2026-04-27 | Raveh / Claude | Initial baseline. Self-assessment audit. |
-| 0.2 | 2026-04-27 | Raveh / Claude (Adversarial Reviewer + Edge-Case Hunter incorporated) | Revisions: reclassified 4 items v0.1-Partial → v0.2-Non-compliant (User docs §4.1, Approval §4.1, Change history §4.1, Usability §5.1, Org Test Strategy §7.1); split compound `A-25023-02` into 11 singular P0 actions; added 17 new actions; replaced "Owner = persona" with "Accountable = Raveh; Role-context = persona"; corrected §4.3 ConOps reference; removed §10.3 cross-link TODO; removed unverified "25023:2024 reissue" claim. |
-| 0.3 | 2026-04-27 | Raveh / Claude | Decisions baselined: (β) ship v1.0 on 2026-05-01 with partial-compliance disclosure; (A-GOV-01) SELF-ASSESSMENT label retained for v1.0, external review committed for v1.0.1; (A-25010-01) Version B (deviation note) chosen — SRS §4.0 added; full restructure deferred to v1.1 as new action `A-25010-01b`; (X-04) deferred to v1.0.1 with NFR-TE-01 status disclosure; SM-153 fixed via per-NFR decisions for NFR-TB-01 / TB-02 / RU-01 / RU-03; SM-152 + SM-154 filed in BugTracker. Withdrew phantom A-GOV-03 / X-09 (VV-Plan has no §11). Added §10.5 external-reviewer reading list. |
-| 0.4 | 2026-04-27 | Raveh / Claude | Parallel-session integration. Five commits (0.9.8..0.9.12-dev) landed after v0.3 baseline. Re-measured coverage: total internal/ is **66.6%** (was 35.8% baseline; ~65% claimed in VV-Plan); watcher is **59.3%** (NOT 16.6% as VV-Plan §5.2 still says). X-04 reclassified from P0 to P2; ~~deferred to v1.0.1~~ → mostly closed. Test Monitoring & Control (29119-2) improved from ⚠️ → ✅ via release.yml hardening. A-25010-04 Faultlessness has substantive evidence shipped (`internal/sync/liveness.go` multi-signal stall detection with measurable thresholds). A-25010-08 Analysability strengthened by new anomaly kinds (Sync:Stalled, Sync:LsJsonSlow). A-GOV-04 now records partial closure of security-audit findings. New action `A-29119-12` added (per-release VV-Plan §5.2 re-measurement ritual). New bugs SM-155 (VV-Plan stale per-package coverage) and SM-156 (CHANGELOG SEC-C2 / SM-152 misattribution) filed. Methodology validation: parallel session used multi-role BMad design review (architect / senior dev / adversarial / edge-case hunter) on production design `docs/rclone-stall-design-for-review.md` — same pattern as this audit. |
-| 0.5 | 2026-04-29 | Raveh / Claude | **A-GOV-01 closed by decision**: external/independent ISO compliance review is not planned. The SELF-ASSESSMENT label is retained permanently as the project's compliance posture. §10.5 (external-reviewer reading list) removed; A-GOV-01 status changed from "in progress (deferred path)" to "closed (decision: self-assessment is final)". §1 wording updated to remove "external review required" framing. Panel-review work (commits 0.9.19..0.9.22-dev) closed BUG-1 case-only mirror name dedup; GAP-1..5 config-validation hardening (rclone_extra_flags denylist, rclone_config validation, overlap rejection, drive-root rejection, traversal-remote rejection); PF-A3 (SEC-H5) service-mode default-rejects symlink-to-file; GAP-7 state DB refuses forward-version; GAP-6 --config last-wins; PF-A8 async OnRecord callback. |
-| 0.6 | 2026-04-29 | Raveh / Claude | **Multi-role compliance delta review** (`docs/iso-compliance-review-2026-04-29.md`) integrated. Recommendations α + β + θ accepted: (α) **A-GOV-01 reframed** from "Closed (decision)" to **"Non-Conformity by Choice"** — the honest classification given 29148:2018 §6.5 / §5.2.4 are structurally unfulfillable; (β) **§10.5 restored as reference** (with a clear "not a commitment" header) — the reading list documents what compliance evidence looks like, useful even when external review isn't planned; (θ) this v0.6 entry. Recommendation ζ executed: VV-Plan §5.2 re-measured against HEAD `1e8eae9` (project version 0.9.39-dev) — total internal/ is **66.4%** (was stale-baselined as 35.8%); per-package table revised. Recommendation ε executed: A-29119-12 promoted from "ritual" to CI gate — `.github/workflows/ci.yml` coverage gate raised 35% → 60% (v1.0 target floor) and a per-package coverage report step added. Recommendation γ partially executed: SEC-H6 regression (panel R4 finding "fresh config.yaml created with mode 0644") closed at commit `93273d1` (cmdaddmirror.go + heartbeat.txt mode 0644 → 0600). Recommendation η executed: 11 panel-review docs (Rounds 2-11) and 10 panel_findings_round*_test.go files committed at `1e8eae9` — previously untracked compliance evidence now under document control. Recommendation δ (NFR-AU-* / NFR-RS-* / NFR-PR-* authoring in SRS §4.6) **deferred to v1.0.1** as too-large for a single turn — engineering evidence acknowledged in CHANGELOG and audit row remains ⚠️ in §3.1 until SRS catches up. |
-| 1.0 readiness baseline | 2026-04-29 | Raveh / Claude | Audit baselined for v1.0.0 release. All F-1..F-6 from `docs/iso-audit-required-actions-2026-04-29.md` closed (F-2 partial — collision-acknowledgment block in §10.6 instead of renumbering, since the recommended SM-190+ range was occupied by Codex audit filings same-day). NFR stub triplet landed in SRS §4.6.5 (Authenticity NFR-AU-01..03), §4.6.6 (Resistance NFR-RS-01..03), §4.6.7 (Privacy NFR-PR-01..03); each cites implementation file/function. CI per-package floor 50% with explicit waivers for `internal/fsutil` / `internal/service` / `internal/rclone` shipped in `b0d7505`. A-GOV-01 confirmed permanent Non-Conformity by Choice. Codex audit's 9 bugs (SM-190..198): 8 closed, SM-198 burst-budget tuning deferred. Full ISO/IEC 25023 §5.2 measurement-function elaboration deferred to v1.0.1 (R-12) and v1.1 (R-18); A-25023-02 measurement campaign deferred to v1.1 (R-19); SM-NNN single-source-of-truth migration deferred to v1.1 (R-21); 29148:2018 §9.5.5 doc-attribute gaps (A-29148-02/-03/-07/-15/-17) deferred to v1.1 (R-22). Originally targeted 2026-05-01 tag day; pause extended to ship + validate the Telemetry feature end-to-end (see v1.0.0 row below). |
-| v1.0.0 tag | 2026-05-03 | Raveh / Claude | v1.0.0 tag cut against the 22-commit telemetry-validation window (0.9.75-dev → 0.9.96-dev). Telemetry v2 ships live: three-tier consent registry (None / Standard / Reliability with default = None), Cloudflare Worker proxy with cf-ray + SM Worker fingerprint probe, end-to-end report-bug `--submit` pipeline, mass-emulation harness, CLAIMS-MAP validation gate at **25/28 GREEN** (89.3% total / 96.2% non-deferred — comfortably above the ≥ 90% Quincy gate). Two RED in active deferral: A-01 HMAC timing benchmark (perf-harness session, v1.0.x), A-03 pg_stat_statements smoke (live-Supabase fixture, v1.0.x). NFR-PR-01 measurement upgraded from "deferred (R-12)" to **live**: Cloudflare Worker access-log analysis is real, daily-CI-probed, schema-validated. ISO posture delta vs 1.0 readiness baseline: NFR-PR-01 Privacy moved from "Met (declared, deferred measurement)" to "Met (declared, live measurement)"; CLAIMS-MAP gate is the strongest 29119-3 Test Completion Report evidence the project has produced. Validation evidence committed at `system-validation/MEMO-TO-IMPL-2026-05-02-telemetry-e2e-validation-round{1,2,3,4}.md` + `MEMO-TO-IMPL-2026-04-30-test-plans-and-acks.md` + `NEW-FINDINGS-2026-04-30-morning.md` + `REMAINING-WORK-2026-04-30.md`. Slip from the 2026-05-01 target was substantively justified — a v1.0 ship with un-validated telemetry would have been worse than a v1.0 slip with validated telemetry. R-23 audit-chain re-evaluation forwarded against tag commit. |
+| 0.1 | 2026-04-27 | maintainer | Initial baseline. Self-assessment audit. |
+| 0.2 | 2026-04-27 | maintainer (independent-reviewer + edge-case-hunter passes incorporated) | Revisions: reclassified 4 items v0.1-Partial → v0.2-Non-compliant (User docs §4.1, Approval §4.1, Change history §4.1, Usability §5.1, Org Test Strategy §7.1); split compound `A-25023-02` into 11 singular P0 actions; added 17 new actions; replaced "Owner = reviewer-role" with "Accountable = maintainer; Role-context = reviewer-role"; corrected §4.3 ConOps reference; removed §10.3 cross-link TODO; removed unverified "25023:2024 reissue" claim. |
+| 0.3 | 2026-04-27 | maintainer | Decisions baselined: (β) ship v1.0 on 2026-05-01 with partial-compliance disclosure; (A-GOV-01) SELF-ASSESSMENT label retained for v1.0, external review committed for v1.0.1; (A-25010-01) Version B (deviation note) chosen — SRS §4.0 added; full restructure deferred to v1.1 as new action `A-25010-01b`; (X-04) deferred to v1.0.1 with NFR-TE-01 status disclosure; SM-153 fixed via per-NFR decisions for NFR-TB-01 / TB-02 / RU-01 / RU-03; SM-152 + SM-154 filed in BugTracker. Withdrew phantom A-GOV-03 / X-09 (VV-Plan has no §11). Added §10.5 external-reviewer reading list. |
+| 0.4 | 2026-04-27 | maintainer | Parallel-session integration. Five commits (0.9.8..0.9.12-dev) landed after v0.3 baseline. Re-measured coverage: total internal/ is **66.6%** (was 35.8% baseline; ~65% claimed in VV-Plan); watcher is **59.3%** (NOT 16.6% as VV-Plan §5.2 still says). X-04 reclassified from P0 to P2; ~~deferred to v1.0.1~~ → mostly closed. Test Monitoring & Control (29119-2) improved from ⚠️ → ✅ via release.yml hardening. A-25010-04 Faultlessness has substantive evidence shipped (`internal/sync/liveness.go` multi-signal stall detection with measurable thresholds). A-25010-08 Analysability strengthened by new anomaly kinds (Sync:Stalled, Sync:LsJsonSlow). A-GOV-04 now records partial closure of security-audit findings. New action `A-29119-12` added (per-release VV-Plan §5.2 re-measurement ritual). New bugs SM-155 (VV-Plan stale per-package coverage) and SM-156 (CHANGELOG SEC-C2 / SM-152 misattribution) filed. Methodology validation: a parallel session ran a multi-role design review (architect / senior dev / independent reviewer / edge-case hunter) on production design `docs/rclone-stall-design-for-review.md` — same pattern as this audit. |
+| 0.5 | 2026-04-29 | maintainer | **A-GOV-01 closed by decision**: external/independent ISO compliance review is not planned. The SELF-ASSESSMENT label is retained permanently as the project's compliance posture. §10.5 (external-reviewer reading list) removed; A-GOV-01 status changed from "in progress (deferred path)" to "closed (decision: self-assessment is final)". §1 wording updated to remove "external review required" framing. Panel-review work (commits 0.9.19..0.9.22-dev) closed BUG-1 case-only mirror name dedup; GAP-1..5 config-validation hardening (rclone_extra_flags denylist, rclone_config validation, overlap rejection, drive-root rejection, traversal-remote rejection); PF-A3 (SEC-H5) service-mode default-rejects symlink-to-file; GAP-7 state DB refuses forward-version; GAP-6 --config last-wins; PF-A8 async OnRecord callback. |
+| 0.6 | 2026-04-29 | maintainer | **Multi-role compliance delta review** integrated. Three accepted recommendations: (α) **A-GOV-01 reframed** from "Closed (decision)" to **"deliberate non-pursuit"** — the honest classification given 29148:2018 §6.5 / §5.2.4 are structurally unfulfillable; (β) **§10.5 restored as reference** (with a clear "not a commitment" header) — the reading list documents what compliance evidence looks like, useful even when external review isn't planned; (θ) this v0.6 entry. Coverage re-measurement: VV-Plan §5.2 re-measured against current HEAD — total internal/ is **66.4%** (was stale-baselined as 35.8%); per-package table revised. CI gate change: A-29119-12 promoted from "ritual" to CI gate — `.github/workflows/ci.yml` coverage gate raised 35% → 60% (v1.0 target floor) and a per-package coverage report step added. SEC-H6 regression closed at the corresponding commit (cmdaddmirror.go + heartbeat.txt mode 0644 → 0600). Eleven internal review records and ten review-driven test files brought under document control. Authoring of NFR-AU-* / NFR-RS-* / NFR-PR-* in SRS §4.6 **deferred to v1.0.1** as too-large for a single turn — engineering evidence acknowledged in CHANGELOG and audit row remains ⚠️ in §3.1 until SRS catches up. |
+| 1.0 readiness baseline | 2026-04-29 | maintainer | Audit baselined for v1.0.0 release. All pre-tag follow-ups from the audit's required-actions list closed (collision-acknowledgment block in §10.6 instead of renumbering, since the recommended SM-190+ range was occupied by an external audit's same-day filings). NFR stub triplet landed in SRS §4.6.5 (Authenticity NFR-AU-01..03), §4.6.6 (Resistance NFR-RS-01..03), §4.6.7 (Privacy NFR-PR-01..03); each cites implementation file/function. CI per-package floor 50% with explicit waivers for `internal/fsutil` / `internal/service` / `internal/rclone` shipped. A-GOV-01 confirmed permanent deliberate non-pursuit. External audit's 9 bugs (SM-190..198): 8 closed, SM-198 burst-budget tuning deferred. Full ISO/IEC 25023 §5.2 measurement-function elaboration deferred to v1.0.1 and v1.1; A-25023-02 measurement campaign deferred to v1.1; SM-NNN single-source-of-truth migration deferred to v1.1; 29148:2018 §9.5.5 doc-attribute gaps (A-29148-02/-03/-07/-15/-17) deferred to v1.1. Originally targeted 2026-05-01 tag day; pause extended to ship + validate the Telemetry feature end-to-end (see v1.0.0 row below). |
+| v1.0.0 tag | 2026-05-03 | maintainer | v1.0.0 tag cut against the 22-commit telemetry-validation window. Telemetry v2 ships live: three-tier consent registry (None / Standard / Reliability with default = None), Cloudflare Worker proxy with cf-ray + SM Worker fingerprint probe, end-to-end report-bug `--submit` pipeline, mass-emulation harness, CLAIMS-MAP validation gate at **25/28 GREEN** (89.3% total / 96.2% non-deferred — comfortably above the ≥ 90% gate). Two RED in active deferral: HMAC timing benchmark (perf-harness session, v1.0.x), pg_stat_statements smoke (live-Supabase fixture, v1.0.x). NFR-PR-01 measurement upgraded from "deferred" to **live**: Cloudflare Worker access-log analysis is real, daily-CI-probed, schema-validated. ISO posture delta vs 1.0 readiness baseline: NFR-PR-01 Privacy moved from "Met (declared, deferred measurement)" to "Met (declared, live measurement)"; CLAIMS-MAP gate is the strongest 29119-3 Test Completion Report evidence the project has produced. Validation evidence retained internally; CHANGELOG `[1.0.0]` summarizes the gate outcome. Slip from the 2026-05-01 target was substantively justified — a v1.0 ship with un-validated telemetry would have been worse than a v1.0 slip with validated telemetry. Audit-chain re-evaluation forwarded against tag commit. |
 
 ### 10.5 ISO compliance evidence reading list (reference — not a commitment)
 
-External / independent ISO compliance review is **NOT planned** for SelectiveMirror (A-GOV-01 closed as Non-Conformity by Choice). This list is preserved as a reference for what compliance evidence *looks like* — useful when explaining the project's compliance posture to a customer doing vendor due-diligence, or when authoring contributions that could later be cited as evidence.
+External / independent ISO compliance review is **NOT planned** for SelectiveMirror (A-GOV-01 closed as deliberate non-pursuit). This list is preserved as a reference for what compliance evidence *looks like* — useful when explaining the project's compliance posture to a customer doing vendor due-diligence, or when authoring contributions that could later be cited as evidence.
 
 **Primary documents** (~3 hours to read in full):
 1. `docs/iso-compliance.md` — this document
@@ -645,7 +644,7 @@ External / independent ISO compliance review is **NOT planned** for SelectiveMir
 4. `CHANGELOG.md` — per-version traceability, finding closure references
 5. `CLAUDE.md` — codebase orientation
 6. `docs/security-audit-2026-04-18.md` — security findings register
-7. `docs/iso-compliance-review-2026-04-29.md` — most-recent multi-role compliance delta
+7. The most-recent multi-role compliance delta review (retained with the maintainer)
 8. `docs/validation-report-2026-04-16.md` — historical validation artifact
 9. `docs/user-manual.md`, `docs/installation-manual.md`, `docs/developer-manual.md`
 10. `.github/workflows/ci.yml` and `release.yml` — Test Monitoring & Control evidence
@@ -653,7 +652,7 @@ External / independent ISO compliance review is **NOT planned** for SelectiveMir
 **Sample artifacts** (~1 hour to spot-check):
 11. ~5 source files from `internal/` (e.g., `watcher/watcher.go`, `sync/sync.go`, `state/state.go`)
 12. ~5 test files (`*_test.go`) — verify SM-NNN markers link to BugTracker entries
-13. `system-validation/PANEL-REVIEW-ROUND{2..11}-2026-04-{28,29}.md` — multi-role review evidence
+13. The series of internal multi-role review records (retained with the maintainer; not part of the public tracked set)
 14. `test/sla_smoke.ps1` — performance smoke harness
 15. SRS §11.9 risk register
 
@@ -665,26 +664,26 @@ External / independent ISO compliance review is **NOT planned** for SelectiveMir
 
 **Note on auditability**: per A-GOV-01, this project is a **first-party self-assessment**. None of the above is a substitute for an actual third-party audit. The list is published only so that someone reading the compliance documentation has clear pointers to the underlying evidence.
 
-### 10.6 SM-NNN traceability — panel-review bugs to GitHub issues
+### 10.6 SM-NNN traceability — review-found bugs to GitHub issues
 
-Recorded 2026-04-29 as part of A-GOV-04 progress. Maps each panel-review finding (Rounds 2–11, plus the SEC-H6 regression) to its GitHub issue number, severity, and current status.
+Recorded 2026-04-29 as part of A-GOV-04 progress. Maps each review-round finding (plus the SEC-H6 regression) to its GitHub issue number, severity, and current status.
 
-> **Numbering-system collision (recorded 2026-04-29 evening, F-2 of the ISO audit re-evaluation)**: the SM-NNN labels in this section refer to **GitHub issues** in the qraveh/SelectiveMirror repository, per A-GOV-04's GitHub-canonical decision. The local `C:\BugTracker\projects\SelectiveMirror\` filesystem-tracker uses the same SM-NNN numbering scheme but contains DIFFERENT content under SM-152..SM-156 (filed 2026-04-27 as ISO-audit findings, never migrated to GitHub) and SM-190..SM-198 (filed 2026-04-29 by the Codex audit). Treat the two systems as separate namespaces:
+> **Numbering-system collision (recorded 2026-04-29 evening)**: the SM-NNN labels in this section refer to **GitHub issues** in the qraveh/SelectiveMirror repository, per A-GOV-04's GitHub-canonical decision. The local BugTracker filesystem-tracker uses the same SM-NNN numbering scheme but contains DIFFERENT content under SM-152..SM-156 (filed 2026-04-27 as ISO-audit findings, never migrated to GitHub) and SM-190..SM-198 (filed 2026-04-29 by an external audit). Treat the two systems as separate namespaces:
 > - When a CHANGELOG entry, commit message, or this `iso-compliance.md` row references an SM-NNN, it is the **GitHub issue** number unless explicitly noted otherwise.
 > - The BugTracker entries are not retroactively renumbered (they ship with closed CHANGELOG/commit references that would become misleading if relabeled). Going forward, when filing a new bug, check both systems and pick a number that's free in both — the next safely-free range as of 2026-04-29 evening is **SM-199 onwards**.
 > - The cleaner long-term resolution (single source of truth) is deferred; would require either migrating the BugTracker findings to GitHub or moving the GitHub issues to a non-colliding label. Both are v1.1+ scope.
-> - The audit recommendation (renumber the panel-found GitHub issues to SM-190+) was not executed because (a) the SM-190..198 range is now also taken (by Codex audit filings), and (b) renumbering closed issues retroactively would invalidate shipped CHANGELOG/commit references. Documenting the collision honestly is the v1.0 compromise.
+> - The audit recommendation (renumber the review-found GitHub issues to SM-190+) was not executed because (a) the SM-190..198 range is now also taken (by external audit filings), and (b) renumbering closed issues retroactively would invalidate shipped CHANGELOG/commit references. Documenting the collision honestly is the v1.0 compromise.
 
 | SM-NNN | GH # | Severity | Title | Source | Status | Closing commit |
 |---|---|---|---|---|---|---|
-| SM-152 | #155 | minor | SEC-H6 regression: fresh config.yaml + heartbeat.txt mode 0644 | Round 4 + ISO compliance review §4 #1 | **CLOSED** | `93273d1` (0.9.38-dev) |
-| SM-153 | #156 | critical | BUG-R4-1: concurrent addmirror destroys pre-existing seed mirror | Round 4 §3 | **CLOSED** | `dee8ba8` (0.9.44-dev) |
-| SM-154 | #157 | major | FIND-R4-1: per-file hooks do not fire on batch sync | Round 4 §4 | **CLOSED by deferral** | `e4e4eb1` (0.9.50-dev) |
-| SM-155 | #158 | minor | alert_min_severity typo accepted by Validate() | Round 4 §6 | **CLOSED** | `9c13d11` (0.9.42-dev) |
-| SM-156 | #159 | minor | BUG-R3-1: gitignore parent-exclusion + child negation divergence | Round 3 + Round 11 reconfirm | **CLOSED by decision** | `424d672` (0.9.49-dev) |
-| SM-157 | #160 | minor | BUG-R5-1: anomaly.Rotate is never invoked | Round 5 + Round 9/10 endurance | **CLOSED** | `e1a459f` (0.9.45-dev) |
-| SM-158 | #161 | minor | NEW-R10-1: failed sync-now cycles produce zero anomaly files | Round 10 + Round 11 reconfirm | **CLOSED** | `a198724` (0.9.48-dev) |
-| SM-159 | #162 | cosmetic | R12-OBS: rclone 2.x classified as Full Compatibility | Round 7 rclone-reviewer #8; Round 12 confirm | OPEN | — |
+| SM-152 | #155 | minor | SEC-H6 regression: fresh config.yaml + heartbeat.txt mode 0644 | review round 4 + ISO compliance review §4 #1 | **CLOSED** | `93273d1` (0.9.38-dev) |
+| SM-153 | #156 | critical | concurrent addmirror destroys pre-existing seed mirror | review round 4 §3 | **CLOSED** | `dee8ba8` (0.9.44-dev) |
+| SM-154 | #157 | major | per-file hooks do not fire on batch sync | review round 4 §4 | **CLOSED by deferral** | `e4e4eb1` (0.9.50-dev) |
+| SM-155 | #158 | minor | alert_min_severity typo accepted by Validate() | review round 4 §6 | **CLOSED** | `9c13d11` (0.9.42-dev) |
+| SM-156 | #159 | minor | gitignore parent-exclusion + child negation divergence | review rounds 3 + 11 reconfirm | **CLOSED by decision** | `424d672` (0.9.49-dev) |
+| SM-157 | #160 | minor | anomaly.Rotate is never invoked | review round 5 + endurance rounds | **CLOSED** | `e1a459f` (0.9.45-dev) |
+| SM-158 | #161 | minor | failed sync-now cycles produce zero anomaly files | review round 10 + 11 reconfirm | **CLOSED** | `a198724` (0.9.48-dev) |
+| SM-159 | #162 | cosmetic | rclone 2.x classified as Full Compatibility | review round 7 rclone-reviewer #8; round 12 confirm | OPEN | — |
 | SM-160 | #163 | minor | Hooks deferred from v1.0 — possible future feature | RESOLUTION-2026-04-29-hooks-deferred.md | OPEN (tracker) | — |
 
-**Going forward**: any new panel-found bug gets a fresh SM-NNN (continuing from SM-199 onwards as of 2026-04-29 evening — see numbering-system-collision note above) and is filed as a GitHub issue at the same time as the panel-review document is committed. The CHANGELOG closure entry references the SM-NNN, the GitHub issue references the closing commit, and the panel review references the SM-NNN. Three-way cross-link.
+**Going forward**: any new review-found bug gets a fresh SM-NNN (continuing from SM-199 onwards as of 2026-04-29 evening — see numbering-system-collision note above) and is filed as a GitHub issue at the same time as the review record is committed. The CHANGELOG closure entry references the SM-NNN, the GitHub issue references the closing commit, and the review references the SM-NNN. Three-way cross-link.

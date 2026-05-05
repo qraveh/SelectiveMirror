@@ -123,9 +123,9 @@ def test_md_cell_escape_brackets(m):
 
 def test_project_id_pooler_url_FINDING_31(m):
     """FINDING 31: extract project ID without leaking AWS hostname."""
-    url = "postgresql://postgres.qkspigvkniiiwxggdvbr:secret@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
+    url = "postgresql://postgres.exampleprojectref:secret@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
     pid = m.project_id_from_url(url)
-    assert pid == "qkspigvkniiiwxggdvbr"
+    assert pid == "exampleprojectref"
     # The hostname / region should NEVER appear in the extraction.
     assert "aws" not in pid
     assert "eu-west" not in pid
@@ -148,7 +148,7 @@ def test_banner_block_says_not_for_publication_FINDING_30(m):
     INTERNAL / DO NOT PUBLISH at the top so a casual copy-paste-
     publish doesn't leak un-floor-filtered data.
 
-    Panel item 5 (BMAD round 9): banner phrasing is "DO NOT
+    Panel item 5: banner phrasing is "DO NOT
     PUBLISH" rather than "NOT FOR PUBLICATION" — shorter, more
     imperative. Both signal the same thing; the test accepts
     either."""

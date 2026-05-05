@@ -10,7 +10,7 @@ The problem this helper solves:
 
   - PowerShell has no `source` / `.` for bash files.
   - WSL2 maps `~` to the Linux home, not the Windows home, so a file
-    living at `C:\\Users\\raveh\\.smirror-deploy.env` is invisible to
+    living at `C:\\Users\\<you>\\.smirror-deploy.env` is invisible to
     `source ~/.smirror-deploy.env` from inside the WSL shell.
   - A maintainer who's already-sourced the file in their current
     shell (bash on Windows / Git Bash / native Linux) doesn't need

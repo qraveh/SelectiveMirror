@@ -145,9 +145,17 @@ func (w *WebhookSender) Record(kind, severity, project, path, message, detail st
 	}
 
 	// SM-090: Sanitize paths before including in webhook payloads.
+	// Public-flip review (panel B5, 2026-05-04): SECURITY.md states
+	// "Webhook payloads sanitize absolute paths before transmission",
+	// but pre-fix only `path` and `detail` ran through SanitizePath.
+	// Anomaly `message` strings routinely interpolate absolute paths
+	// from rclone errors (e.g., "rclone exit 2 for C:\\Users\\..."),
+	// so they leak through any webhook unless the message field is
+	// also sanitized. Apply uniformly to all three string fields.
 	if w.SanitizePath != nil {
 		path = w.SanitizePath(path)
 		detail = w.SanitizePath(detail)
+		message = w.SanitizePath(message)
 	}
 
 	// Panics always alert immediately — they're rare and critical.

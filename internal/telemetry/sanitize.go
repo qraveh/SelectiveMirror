@@ -127,7 +127,7 @@ var (
 	reRemoteURI = regexp.MustCompile(
 		`\b([A-Za-z][A-Za-z0-9_-]{0,30}):([A-Za-z0-9_./\\\-]+)`)
 
-	// FINDING 19 (round-5 validation memo, 2026-05-03): `https://`
+	// FINDING 19 (validation review, 2026-05-03): `https://`
 	// is on urlSchemeAllow for safety (so URLs in error messages and
 	// bug-reference links survive intact), but webhook URLs encode
 	// secrets in the path component. Slack
@@ -177,7 +177,7 @@ var urlSchemeAllow = map[string]bool{
 // rerunning the system-validation suite. Sanitization is idempotent
 // (running it twice produces the same output as running it once).
 func SanitizeReport(report string, opts SanitizeOptions) string {
-	// 0. Webhook URLs FIRST. FINDING 19 (round-5 validation memo,
+	// 0. Webhook URLs FIRST. FINDING 19 (validation review,
 	//    2026-05-03): `https://` is in urlSchemeAllow so generic URLs
 	//    pass through (preserving error-message links etc.), but
 	//    webhook URLs encode secrets in the path component. Run these

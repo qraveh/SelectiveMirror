@@ -20,7 +20,7 @@
 # at manifests/r/RavehNeeman/SelectiveMirror/<version>/.
 
 PackageIdentifier: RavehNeeman.SelectiveMirror
-PackageVersion: 0.9.26
+PackageVersion: 1.0.0
 PackageName: SelectiveMirror
 Publisher: RavehNeeman
 PublisherUrl: https://github.com/qraveh
@@ -45,7 +45,7 @@ MinimumOSVersion: 10.0.0.0
 InstallerType: msi
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/qraveh/SelectiveMirror/releases/download/v0.9.26/SelectiveMirror.msi
+    InstallerUrl: https://github.com/qraveh/SelectiveMirror/releases/download/v1.0.0/SelectiveMirror.msi
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ManifestType: singleton
 ManifestVersion: 1.6.0

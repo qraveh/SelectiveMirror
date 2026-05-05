@@ -562,7 +562,7 @@ COMMENT ON VIEW telemetry.version_dist IS
 -- Public read view: bug_unknown_share (drift detection)
 -- ============================================================================
 --
--- Mary's drift fix (round-3 panel, 2026-04-30): if a particular release
+-- Drift fix (multi-role review, 2026-04-30): if a particular release
 -- is misclassifying bug reports — picking 'unknown' from the closed
 -- taxonomy when a real category exists, or hitting genuinely novel
 -- failure modes that the taxonomy doesn't cover — the unknown share
@@ -600,7 +600,7 @@ WHERE unknown_reports > 0
 ORDER BY unknown_pct DESC, client_version DESC;
 
 COMMENT ON VIEW telemetry.bug_unknown_share IS
-'Bug-kind drift detection (Mary, round-3 panel). Per-version unknown_pct over the last 30 days, restricted to versions with ≥ 5 reports (k-anon floor). Flag any row with unknown_pct ≥ 5% for taxonomy review.';
+'Bug-kind drift detection (multi-role review). Per-version unknown_pct over the last 30 days, restricted to versions with ≥ 5 reports (k-anon floor). Flag any row with unknown_pct ≥ 5% for taxonomy review.';
 
 
 -- ============================================================================

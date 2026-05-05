@@ -230,12 +230,12 @@ func TestDeletePolicy(t *testing.T) {
 		input    string
 		expected DeletePolicy
 	}{
-		{"", DeleteDelete},         // empty = default = delete
+		{"", DeleteQuarantine},     // empty = default = quarantine (review)
 		{"ignore", DeleteIgnore},
 		{"delete", DeleteDelete},
-		{"mirror", DeleteDelete},   // deprecated alias
+		{"mirror", DeleteDelete},   // deprecated alias for delete
 		{"quarantine", DeleteQuarantine},
-		{"invalid", DeleteDelete},  // unrecognized = default = delete
+		{"invalid", DeleteQuarantine}, // unrecognized → quarantine (safe default; explicit-typo is rejected at config.Validate)
 	}
 
 	for _, tt := range tests {
@@ -285,11 +285,12 @@ func TestProjectDeletePolicy_MirrorDeprecation(t *testing.T) {
 }
 
 func TestProjectDeletePolicy_InvalidFallsBack(t *testing.T) {
-	g := &Global{DeletePolicyStr: "quarantine"}
+	g := &Global{DeletePolicyStr: "delete"}
 	p := Project{DeletePolicyStr: "bogus"}
-	// Invalid per-mirror value falls to parseDeletePolicy default (delete), not global
-	if got := p.DeletePolicy(g); got != DeleteDelete {
-		t.Errorf("expected invalid → 'delete', got %q", got)
+	// Invalid per-mirror value falls to parseDeletePolicy default (quarantine), not global.
+	// Default flipped from delete → quarantine in the review.
+	if got := p.DeletePolicy(g); got != DeleteQuarantine {
+		t.Errorf("expected invalid → 'quarantine', got %q", got)
 	}
 }
 
@@ -470,10 +471,15 @@ func TestExpandHome_Empty(t *testing.T) {
 }
 
 // DeletePolicy parsing
+// Default flipped from `delete` → `quarantine` in the pre-public-flip
+// review so a first-time user pointing smirror at
+// a familiar directory and running `start` doesn't permanently mirror
+// local deletes to the remote with no recovery window. Conscious
+// deleters set delete_policy: delete explicitly.
 func TestDeletePolicy_InvalidString(t *testing.T) {
 	g := Global{DeletePolicyStr: "garbage"}
-	if g.DeletePolicy() != DeleteDelete {
-		t.Errorf("invalid delete policy should default to 'delete', got %q", g.DeletePolicy())
+	if g.DeletePolicy() != DeleteQuarantine {
+		t.Errorf("invalid delete policy should default to 'quarantine', got %q", g.DeletePolicy())
 	}
 }
 

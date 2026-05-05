@@ -18,7 +18,7 @@ This command is the runtime counterpart to the MSI installer's tier selection. I
 
 ## Design context
 
-The user-facing contract for each tier is in `docs/PRIVACY.md`. This document specifies the CLI shape and persistence. Round-3/4 panel decisions led to the three-tier model; round-5 (BMad panel, 2026-04-29) led to the v2 architecture above.
+The user-facing contract for each tier is in `docs/PRIVACY.md`. This document specifies the CLI shape and persistence. Earlier multi-role review rounds led to the three-tier model; a subsequent review round (2026-04-29) led to the v2 architecture above.
 
 **Default tier**: **None**. If the user never runs this command, smirror sends nothing.
 
@@ -234,13 +234,13 @@ Plus the existing keys:
 ## `smirror telemetry forget` — removed in v2
 
 This subcommand was specified in earlier drafts and is **removed in v2**.
-Rationale, per the round-5 BMad panel:
+Rationale, per the multi-role review:
 
 - Under v2 (stream-aggregate-and-discard), no server-side record of an
   individual install ever exists. There is nothing to delete.
 - A `forget` command that printed "Forget request sent" while routing
   to a no-op handler would be a public commitment the project couldn't
-  honor — exactly the failure mode the round-1 panel flagged as
+  honor — exactly the failure mode an earlier review round flagged as
   "product malpractice."
 - Bug-report narratives filed via `--browser` to GitHub Issues are
   outside SelectiveMirror's controllership; deletion is handled by the
