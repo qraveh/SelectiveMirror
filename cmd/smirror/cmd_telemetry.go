@@ -330,6 +330,22 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 		os.Exit(ExitError)
 	}
 
+	// DEFECT-1 fix: install_id must exist whenever target tier is
+	// non-None, regardless of what prev is. The previous logic gated
+	// install_id generation on `prev == TierNone`, which silently
+	// failed when the registry tier was set non-None by another path
+	// (e.g., MSI INSTALL_TELEMETRY_TIER property writes the registry
+	// directly). In that case prev reads as Standard/Reliability,
+	// install_id stays empty, and all subsequent telemetry submissions
+	// silently no-op.
+	//
+	// Idempotent: only generates if state DB has no install_id yet.
+	if target != telemetry.TierNone {
+		if existing, _ := st.GetMeta(metaInstallID); existing == "" {
+			_ = st.SetMeta(metaInstallID, telemetry.GenerateInstallID())
+		}
+	}
+
 	switch target {
 	case telemetry.TierNone:
 		fmt.Println("Tier set to None. Queued telemetry events dropped.")
@@ -339,12 +355,6 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 	case telemetry.TierStandard:
 		fmt.Println("Tier set to Standard.")
 		if prev == telemetry.TierNone {
-			// Ensure install_id exists for HMAC verification on
-			// future contributions. The id is verified-and-discarded
-			// server-side; no record links it to anything.
-			if existing, _ := st.GetMeta(metaInstallID); existing == "" {
-				_ = st.SetMeta(metaInstallID, telemetry.GenerateInstallID())
-			}
 			// The install-event submit pipeline ships in this build:
 			// first_seen fires on the next `smirror start` (or service
 			// start). reliability_snapshot is not yet implemented — see
@@ -356,9 +366,6 @@ func cmdTelemetrySet(configPath string, target telemetry.Tier) {
 	case telemetry.TierReliability:
 		fmt.Println("Tier set to Reliability. Thank you for opting in.")
 		if prev == telemetry.TierNone {
-			if existing, _ := st.GetMeta(metaInstallID); existing == "" {
-				_ = st.SetMeta(metaInstallID, telemetry.GenerateInstallID())
-			}
 			fmt.Println("Bug-report submission (`smirror report-bug --submit`) is now enabled.")
 			fmt.Println("first_seen telemetry event will fire on the next `smirror start` or service start.")
 			fmt.Println("Note: Reliability tier is identical to Standard on the wire today;")

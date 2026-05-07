@@ -140,11 +140,34 @@ func SendInstallEventsIfDue(
 	}
 
 	// Gate 3: install_id must exist. cmdTelemetrySet writes it on
-	// transition out of None, so this should always be set when we
-	// get here. Defensive: skip if missing.
+	// transition out of None — but the MSI installer's
+	// INSTALL_TELEMETRY_TIER property bypasses that flow (writes the
+	// registry tier directly without ever invoking the CLI command),
+	// so a fresh MSI install with tier = Standard or Reliability lands
+	// here with install_id == "" (DEFECT-1 in
+	// docs/operations/release-state-v1.0.0.md).
+	//
+	// Idempotent recovery: if we got past Gate 1 (tier ≠ None) and
+	// Gate 2 (build-key present), the user has consented and the
+	// binary is signing-capable; the only thing missing is the
+	// per-install identifier. Generate it now, persist it, log at
+	// INFO, and proceed. The same install_id is reused on subsequent
+	// startups (idempotent).
 	if view.InstallID == "" {
-		slog.Warn("install-event submit skipped: install_id is empty (state DB inconsistent?)")
-		return nil
+		newID := GenerateInstallID()
+		if err := st.SetMeta("install_id", newID); err != nil {
+			slog.Warn(
+				"install-event submit skipped: install_id missing and could not be persisted",
+				"error", err,
+			)
+			return nil
+		}
+		slog.Info(
+			"telemetry: generated install_id on first daemon start (likely after MSI consent-dialog opt-in)",
+			"install_id", newID,
+			"tier", string(tier),
+		)
+		view.InstallID = newID
 	}
 
 	// Sequence: first_seen, then upgrade. upgrade depends on

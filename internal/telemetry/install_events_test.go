@@ -175,21 +175,39 @@ func TestSendInstallEventsIfDue_NoBuildKey_NoEvents(t *testing.T) {
 	}
 }
 
-func TestSendInstallEventsIfDue_NoInstallID_NoEvents(t *testing.T) {
+// DEFECT-1 fix: install_id missing at gate 3 is no longer a hard
+// fail. The MSI consent dialog writes the registry tier directly,
+// bypassing the CLI flow that generates install_id. To recover,
+// SendInstallEventsIfDue idempotently generates + persists the
+// install_id and proceeds. The first_seen event MUST fire on this
+// path; otherwise MSI-consent-dialog users get silent telemetry
+// failure.
+func TestSendInstallEventsIfDue_MissingInstallID_GeneratesAndProceeds(t *testing.T) {
 	srv, received := startMockWorker([]mockResponse{{status: 200, body: `{"ok":true}`}})
 	defer srv.Close()
 	withTestBuildKey(t, "0.0.0-test")
 
 	st := newFakeMetaStore()
 	view := makeView("0.0.0-test")
-	view.InstallID = ""
+	view.InstallID = "" // simulate MSI-consent-dialog path: tier set, install_id never written
+
 	err := SendInstallEventsIfDue(context.Background(), view, st, TierStandard,
 		t.TempDir(), SendOptions{Endpoint: srv.URL})
 	if err != nil {
 		t.Errorf("got %v; want nil", err)
 	}
-	if len(*received) != 0 {
-		t.Errorf("empty install_id should not POST; got %d requests", len(*received))
+	// Must have submitted first_seen.
+	if len(*received) != 1 {
+		t.Errorf("missing install_id should be auto-generated and first_seen submitted; got %d requests", len(*received))
+	}
+	// Must have persisted a new install_id to the state DB so
+	// subsequent runs reuse it (idempotency).
+	persisted, _ := st.GetMeta("install_id")
+	if persisted == "" {
+		t.Errorf("install_id was not persisted to MetaStore")
+	}
+	if persisted == view.InstallID && view.InstallID == "" {
+		t.Errorf("view.InstallID still empty after generation")
 	}
 }
 
