@@ -363,8 +363,14 @@ jobs:
       # GoReleaser's auto-changelog uses commit messages with limited
       # filters; this surfaces the hand-written narrative instead.
       - name: Extract release notes from CHANGELOG
+        # `pwsh` (PS 7+) writes UTF-8 NoBOM under -Encoding UTF8; the
+        # prior `powershell.exe` (PS 5.1) wrote UTF-8 WITH BOM, which
+        # GitHub's release-body API stores as-is and renders as
+        # mojibake (em-dash → â€"). v1.0.0 hit this; the body was
+        # corrected manually after tag. v1.0.1+ uses pwsh so the
+        # extracted file is BOM-free.
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File scripts/extract-changelog.ps1 -Version ${{ steps.version.outputs.VERSION }} -Output release-notes.md
+        run: pwsh -ExecutionPolicy Bypass -File scripts/extract-changelog.ps1 -Version ${{ steps.version.outputs.VERSION }} -Output release-notes.md
 
       - name: Set GitHub Release body to CHANGELOG section
         env:
