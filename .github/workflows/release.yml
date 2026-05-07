@@ -462,6 +462,34 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload ${{ github.ref_name }} installer\bin\Release\SelectiveMirror.msi --clobber
 
+      # DEFECT-3 fix: GoReleaser only generates checksums for archive
+      # outputs (the ZIP). The MSI is built later by this job, so its
+      # hash never lands in checksums.txt. The README directs users to
+      # verify the MSI against checksums.txt — this step appends the
+      # MSI hash so the documented integrity path actually works.
+      # Build-provenance attestation remains the stronger guarantee.
+      - name: Append MSI hash to checksums.txt
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $msi = 'installer\bin\Release\SelectiveMirror.msi'
+          $hash = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
+          # Download the existing checksums.txt produced by GoReleaser
+          # in the release job, append the MSI line, re-upload --clobber.
+          $tmp = Join-Path $env:RUNNER_TEMP 'checksums.txt'
+          gh release download ${{ github.ref_name }} -p checksums.txt -O $tmp --clobber
+          # Avoid a duplicate entry on re-runs of the workflow against
+          # the same tag (idempotency for the path-A re-tag flow).
+          $existing = Get-Content $tmp -Raw
+          if ($existing -notmatch [regex]::Escape('  SelectiveMirror.msi')) {
+              Add-Content -Path $tmp -Value "$hash  SelectiveMirror.msi"
+              gh release upload ${{ github.ref_name }} $tmp --clobber
+              Write-Host "MSI hash appended to checksums.txt: $hash"
+          } else {
+              Write-Host "MSI hash already present in checksums.txt; skipping"
+          }
+
       # PR-S4: build-provenance attestation for the MSI as well.
       - name: Generate build-provenance attestation for MSI
         uses: actions/attest-build-provenance@v2
