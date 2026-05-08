@@ -280,6 +280,98 @@ func TestContribute_MalformedResponseBody(t *testing.T) {
 	}
 }
 
+// Boundary test #6 from the harvest brainstorm
+// (docs/PROPOSAL-2026-05-08-boundary-test-harvest.md): Worker /
+// upstream returns 5xx with a Content-Type of text/html. This is
+// the Cloudflare-edge throttling scenario — when CF terminates a
+// request before the Worker code runs (CPU ceiling exceeded mid-
+// burst), the platform serves its own HTML error page. The Go
+// client must wrap this as ErrNetwork and surface a snippet of
+// the body in the error message without choking on the HTML.
+//
+// This is a SUPERSET of TestContribute_HTTP500ReturnsNetworkErr,
+// which uses Content-Type: text/plain "boom". The HTML/CSS-laden
+// 5xx body has different parsing characteristics — long, contains
+// quotes and backslashes, etc. — and we want to confirm the
+// summarize() truncation handles it cleanly.
+func TestContribute_HTTP5xxWithHTMLBodyReturnsNetworkErr(t *testing.T) {
+	saved := buildKey
+	buildKey = testKey32
+	t.Cleanup(func() { buildKey = saved })
+
+	const htmlBody = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Error 500: Internal Server Error</title>
+<style>body { font-family: sans-serif; }</style>
+</head>
+<body>
+<h1>Internal Server Error</h1>
+<p>Cloudflare encountered an error processing your request. <br>
+Ray ID: 9f57e8f90896c233-TLV. The request was abandoned before
+reaching the origin.</p>
+</body>
+</html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set the headers a real Cloudflare-edge 5xx would set.
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.Header().Set("CF-RAY", "9f57e8f90896c233-TLV")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(htmlBody))
+	}))
+	defer srv.Close()
+
+	err := Contribute(context.Background(), "0.0.0-test",
+		map[string]any{"event_kind": "first_seen"},
+		ContributeOptions{Endpoint: srv.URL})
+
+	if err == nil {
+		t.Fatalf("expected error on 5xx; got nil")
+	}
+	if !errors.Is(err, ErrNetwork) {
+		t.Errorf("got %v; want ErrNetwork (5xx with HTML body must wrap as ErrNetwork; the worker layer turns this into a generic 502, but raw 5xx-from-CF-edge can also reach the client when CF terminates before invoking the Worker)", err)
+	}
+	// The error message should include the status code (so logs
+	// say "HTTP 500" not "unknown") AND should not include the
+	// full HTML body verbatim (summarize truncates at 200 chars).
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error doesn't mention HTTP 500: %v", err)
+	}
+	// Bound on snippet size — summarize() caps at 200 chars + "...".
+	// Full htmlBody is ~340 chars; the error message should truncate.
+	if strings.Contains(err.Error(), "</html>") {
+		t.Errorf("error message contains the full HTML body (no truncation). summarize() should cap at 200 chars; got %q", err.Error())
+	}
+}
+
+// Boundary test #6 corollary: 4xx with HTML body. Same shape,
+// different status class. Some Cloudflare configurations serve
+// 4xx HTML for "Bot Fight Mode" / WAF rejections.
+func TestContribute_HTTP4xxWithHTMLBodyReturnsNetworkErr(t *testing.T) {
+	saved := buildKey
+	buildKey = testKey32
+	t.Cleanup(func() { buildKey = saved })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`<!DOCTYPE html><html><body><h1>403 Forbidden</h1></body></html>`))
+	}))
+	defer srv.Close()
+
+	err := Contribute(context.Background(), "0.0.0-test",
+		map[string]any{"event_kind": "first_seen"},
+		ContributeOptions{Endpoint: srv.URL})
+
+	if !errors.Is(err, ErrNetwork) {
+		t.Errorf("got %v; want ErrNetwork (4xx with HTML body must wrap as ErrNetwork)", err)
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Errorf("error doesn't mention HTTP 403: %v", err)
+	}
+}
+
 func TestContribute_RespectsContextDeadline(t *testing.T) {
 	saved := buildKey
 	buildKey = testKey32

@@ -84,6 +84,30 @@ Expected: empty. Any untracked or modified file is a release-bar violation:
 
 ---
 
+## 4½. Walk the inter-component-contracts handoff list
+
+**Adopted post-SM-216 / SM-217 (2026-05-08).** Walk
+[`docs/inter-component-contracts.md`](../inter-component-contracts.md).
+For each of the 15 handoffs, look at the "Known boundary cases"
+table and ask: **"For each row, does the test ratchet exist? If
+not, am I shipping the bug?"**
+
+This is a 15-minute conversation with yourself. The doc enumerates
+the seams; you confirm each one is locked. The discipline that
+catches the SM-216-class of bug — where two components agree on a
+contract that's never checked — is exactly this walk.
+
+**Outcome**: every "Candidate boundary test" entry that's relevant
+to the changes since the last tag is either (a) implemented and
+passing, (b) explicitly deferred with a CHANGELOG `### Known
+issues` entry, or (c) NOT applicable for this release scope.
+
+If an entry hits a real gap, add the test before §5 (release dry-
+run); a dry-run pass without the boundary test isn't really proof
+of release readiness.
+
+---
+
 ## 5. Run the release dry-run
 
 ```bash
