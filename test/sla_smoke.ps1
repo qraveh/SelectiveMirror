@@ -355,6 +355,31 @@ try {
         Write-Host "$failures/$total SLA checks FAILED." -ForegroundColor Red
         $exitCode = 1
     }
+
+    # ── Persist results — durable artifact for longitudinal tracking ──
+    # Two formats: human-readable .txt for quick visual diff,
+    # machine-readable .json for any future "is SLA-2 drifting up over
+    # time?" trend analysis. Files land under test/ where
+    # .github/workflows/sla-smoke.yml's Upload SLA results step picks
+    # them up. UTC timestamp in the filename so two runs on the same
+    # day don't collide and so chronological sort in the artifacts
+    # list matches reality.
+    $resultsDir = Join-Path $RepoRoot "test"
+    $stamp = (Get-Date -AsUTC).ToString("yyyyMMddTHHmmssZ")
+    $txtPath  = Join-Path $resultsDir "sla-results-$stamp.txt"
+    $jsonPath = Join-Path $resultsDir "sla-results-$stamp.json"
+    ($Results | Format-Table -AutoSize | Out-String).Trim() |
+        Set-Content -Path $txtPath -Encoding UTF8
+    @{
+        timestamp_utc = $stamp
+        repo_root     = $RepoRoot
+        total         = $total
+        failures      = $failures
+        results       = $Results
+    } | ConvertTo-Json -Depth 4 |
+        Set-Content -Path $jsonPath -Encoding UTF8
+    Write-Host "Results written: $txtPath" -ForegroundColor DarkGray
+    Write-Host "Results written: $jsonPath" -ForegroundColor DarkGray
 } catch {
     Write-Host "FATAL: $_" -ForegroundColor Red
     Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
