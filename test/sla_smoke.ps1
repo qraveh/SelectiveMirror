@@ -35,7 +35,14 @@ $env:Path = "$GoPath;$env:Path"
 
 # ── Globals ──────────────────────────────────────────────────────────
 
-$TestRoot    = Join-Path "C:\SelectiveMirror" "_sla_$(Get-Random)"
+# RepoRoot resolves to the parent of test/ (where this script lives),
+# so the script works regardless of where the repo is checked out
+# (C:\SelectiveMirror locally, D:\a\SelectiveMirror\SelectiveMirror
+# on GitHub-hosted windows runners, etc.).
+$RepoRoot    = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+# Test workspace under $env:TEMP so we don't pollute the repo with
+# random _sla_* dirs and so the runner's tempdir cleanup catches it.
+$TestRoot    = Join-Path $env:TEMP "smirror-sla-$(Get-Random)"
 $SrcDir      = Join-Path $TestRoot "source"
 $DstDir      = Join-Path $TestRoot "destination"
 $DataDir     = Join-Path $TestRoot "data"
@@ -93,7 +100,7 @@ function Invoke-Smirror {
     $oldPref = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $oldDir = Get-Location
-    Set-Location C:\SelectiveMirror
+    Set-Location $RepoRoot
     try {
         $output = & $GoBin run $SmirrorPkg @args 2>&1 | Out-String
     } catch {
@@ -107,7 +114,7 @@ function Invoke-Smirror {
 function Start-Smirror {
     Write-Host "  Starting smirror..." -ForegroundColor Yellow
     $script:SmirrorProc = Start-Process -FilePath $GoBin -ArgumentList "run",$SmirrorPkg,"start","--config",$ConfigPath `
-        -WindowStyle Hidden -PassThru -WorkingDirectory "C:\SelectiveMirror"
+        -WindowStyle Hidden -PassThru -WorkingDirectory $RepoRoot
     Start-Sleep 8
     if ($SmirrorProc.HasExited) {
         throw "smirror exited immediately (exit code $($SmirrorProc.ExitCode))"
