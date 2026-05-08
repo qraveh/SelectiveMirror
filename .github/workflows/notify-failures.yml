@@ -43,6 +43,7 @@ jobs:
       - name: File or update issue
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           WF_NAME: ${{ github.event.workflow_run.name }}
           WF_URL: ${{ github.event.workflow_run.html_url }}
           WF_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -50,19 +51,25 @@ jobs:
         run: |
           set -euo pipefail
           title="[CI] ${WF_NAME} red on master"
+          # All `gh` calls use --repo so they don't need a checked-out
+          # git working tree. The default-repo lookup that gh does in
+          # the absence of --repo falls back to git-config, which in
+          # this workflow context fails with "fatal: not a git
+          # repository" — this job does no actions/checkout.
+          #
           # List up to 100 open issues and find an exact-title match
           # in jq. We don't use --search because GitHub's search
           # treats brackets as separators and gives unreliable hits
           # on titles like "[CI] ...".
-          existing=$(gh issue list --state open --limit 100 \
+          existing=$(gh issue list --repo "${REPO}" --state open --limit 100 \
                        --json number,title \
                        --jq "[.[] | select(.title == \"${title}\")][0].number // empty")
           today=$(date -u +%Y-%m-%d)
           if [ -n "${existing}" ]; then
-            gh issue comment "${existing}" --body \
+            gh issue comment --repo "${REPO}" "${existing}" --body \
               "Failed again on ${today}: run [\`${WF_RUN_ID}\`](${WF_URL}) at \`${WF_HEAD_SHA:0:7}\`."
           else
-            gh issue create --title "${title}" --body "$(cat <<EOF
+            gh issue create --repo "${REPO}" --title "${title}" --body "$(cat <<EOF
           Workflow **${WF_NAME}** failed its scheduled run on master.
 
           - Run: ${WF_URL}
