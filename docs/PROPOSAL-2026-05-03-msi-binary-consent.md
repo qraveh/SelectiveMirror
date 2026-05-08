@@ -1,6 +1,8 @@
 # PROPOSAL — Binary MSI consent dialog (v1.0.1+)
 
-**Status**: PROPOSAL pending maintainer decision.
+**Status**: APPROVED + IMPLEMENTED. Shipped in commit `979697b`
+(2026-05-08); canonical BugTracker record is **SM-217**
+(`C:\BugTracker\projects\SelectiveMirror\SM-217.md`).
 **Author**: Raveh + Claude, 2026-05-03 (after v1.0.0 ship).
 **Affects**: `installer/TelemetryConsent.wxi`, `installer/build-msi.ps1`,
 `docs/PRIVACY.md` "Three tiers" section, `docs/cli-telemetry-command.md`.
