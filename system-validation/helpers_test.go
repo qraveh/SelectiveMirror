@@ -846,6 +846,17 @@ var coverage = &coverageTracker{
 		// from 3 to 2 radios + preserve-existing-tier on upgrade.
 		"installer_consent_dialog_binary":           {Description: "MSI installer: TelemetryConsent dialog presents 2 radios (None / Standard); Reliability is CLI-only", Required: 1},
 		"installer_consent_preserves_existing_tier": {Description: "MSI installer: upgrade install preserves the user's prior tier choice; consent dialog is skipped when EXISTING_TELEMETRY_TIER is set", Required: 1},
+
+		// SM-216 / DEFECT-1 post-mortem (v1.0.0 ship-bug post-mortem):
+		// the installer→daemon handoff seam between MSI registry write
+		// and daemon's state-DB read. The MSI does NOT write
+		// install_id; install_events.go recovers idempotently when
+		// install_id is missing at Gate 3. These three goals lock
+		// in: (a) MSI doesn't write install_id, (b) the recovery
+		// branch exists, (c) the regression test exists.
+		"installer_handoff_seam_msi_no_install_id":       {Description: "MSI handoff seam: MSI does NOT write install_id (anti-pattern lock; SM-216)", Required: 1},
+		"installer_handoff_seam_recovery_exists":         {Description: "MSI handoff seam: install_events.go contains the SM-216/DEFECT-1 install_id-recovery branch", Required: 1},
+		"installer_handoff_seam_regression_test_present": {Description: "MSI handoff seam: install_events_test.go contains the SM-216 regression test", Required: 1},
 	},
 }
 

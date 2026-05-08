@@ -381,6 +381,37 @@ jobs:
       - name: MSI smoke test (install / task round-trip / uninstall)
         run: powershell -ExecutionPolicy Bypass -File installer\smoke-test.ps1 -SkipBuild -Version ${{ needs.dryrun-release.outputs.version }}
 
+      # ---------------------------------------------------------------------
+      # KNOWN GAP — post-MSI-install telemetry-handoff verification (SM-216).
+      #
+      # The install / task / uninstall smoke test above does NOT verify
+      # that an MSI-installed user actually contributes telemetry events
+      # on first daemon start. SM-216 / DEFECT-1 was caused by this exact
+      # gap: the v1.0.0 MSI wrote `HKLM\Software\SelectiveMirror\TelemetryTier`
+      # but not `install_id`; the daemon's SendInstallEventsIfDue then
+      # silently returned at Gate 3 ("install_id must be set"). Every
+      # MSI-installed Standard- or Reliability-tier user had silent
+      # telemetry failure.
+      #
+      # The structural ratchet for SM-216 lives in:
+      #   - system-validation/installer_handoff_seam_test.go (this is the
+      #     source-property gate that fails CI if either the recovery
+      #     code or the regression test is removed)
+      #   - internal/telemetry/install_events_test.go's
+      #     TestSendInstallEventsIfDue_MissingInstallID_GeneratesAndProceeds
+      #
+      # The behavioral end-to-end test — install the just-built MSI on a
+      # Windows runner, run smirror briefly with INSTALL_TELEMETRY_TIER=
+      # standard, verify a first_seen row lands in installation_daily_rollup
+      # — is NOT yet wired here. It would need either Worker-mock fixtures
+      # or live-Supabase access from the runner. Tracked as a follow-up;
+      # scope is non-trivial because of the buildKey-injection requirement
+      # for HMAC-signed live POSTs.
+      #
+      # Until the e2e job lands, the structural ratchet is the gate. Do
+      # not relax it.
+      # ---------------------------------------------------------------------
+
       - name: Upload MSI as dryrun artifact
         uses: actions/upload-artifact@v4
         with:
