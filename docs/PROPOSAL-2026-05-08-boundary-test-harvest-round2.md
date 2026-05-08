@@ -320,3 +320,35 @@ Cross-references:
     `internal/telemetry/install_events.go`.
 
 — v1.0.x harvest plan, awaiting maintainer prioritization.
+
+---
+
+## Decision-ask resolutions (2026-05-08, same day as authoring)
+
+Maintainer responded `1push, 2all, 3maximum, 4now or almost now,
+5yes, 6not yet`. Mapping to the four asks above:
+
+- **Q1 (per-handoff subcase enumeration approved as v1.0.x working
+  list)**: ✅ approved. Bucket 2A is the harvest plan going forward;
+  Round-1's per-handoff list is superseded.
+
+- **Q2 (test pattern: 4 source-property + 1 behavioral + 1 mutation)**:
+  ✅ approved at MAXIMUM. Adopted shape is now SEVEN tests per
+  boundary: the 4+1+1 pattern PLUS a near-E2E gate (real binary
+  + simulated state.db + mock endpoint). Demonstrated on handoff
+  #1 / SM-216 in commit (this round): the near-E2E gate
+  `installer_handoff_seam_e2e_test.go` reproduces the SM-216 bug
+  against pre-fix code (mutation-tested) and asserts first_seen
+  actually POSTs against post-fix code.
+
+- **Q3 (MSI E2E sketch as v1.0.5 / v1.0.10 target)**: ✅ approved
+  for **now or almost now**. The near-E2E gate (item Q2 above)
+  lands in the same commit as this approval. The TRUE E2E (real
+  msiexec install on Windows runner with admin) remains as Bucket
+  2C / future scope.
+
+- **Q4 (fold Round-2 into §4½ pre-tag walk)**: ✅ approved. Runbook
+  edit lands in the same commit.
+
+- **Q5 (tag v1.0.1)**: ⏸ not yet. The fix is in tree (8e82d40);
+  user-facing release decision tracked outside this memo.

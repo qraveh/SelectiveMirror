@@ -106,6 +106,35 @@ If an entry hits a real gap, add the test before §5 (release dry-
 run); a dry-run pass without the boundary test isn't really proof
 of release readiness.
 
+**Two harvest memos drive this walk** (read both, not just one):
+
+- [`docs/PROPOSAL-2026-05-08-boundary-test-harvest.md`](../PROPOSAL-2026-05-08-boundary-test-harvest.md)
+  — Round 1, one candidate per handoff (15 total).
+- [`docs/PROPOSAL-2026-05-08-boundary-test-harvest-round2.md`](../PROPOSAL-2026-05-08-boundary-test-harvest-round2.md)
+  — Round 2, expanded subcases per handoff (~50 total) plus
+  three orthogonal-contract buckets (time, telemetry endpoint,
+  heisenbugs) and the MSI E2E sketch. The Round-2 doc supersedes
+  the Round-1 candidate list as the working harvest plan; Round 1
+  remains as the post-mortem record.
+
+**The reference test pattern per boundary** (handoff #1 / SM-216
+demonstrates it; replicate for new boundaries):
+
+  1. Anti-pattern source-property lock (e.g. "MSI must NOT write X").
+  2. Recovery-code source-property lock (e.g. "install_events.go
+     must contain the recovery branch").
+  3. Regression-test-name source-property lock.
+  4. Workflow-comment source-property advisory (KNOWN-GAP marker).
+  5. Behavioral subprocess gate (`go test -run X` from SV).
+  6. Mutation gate (`go test -overlay <json>` proves the regression
+     test catches the pre-fix shape).
+  7. Near-E2E gate (real binary + state.db in pre-fix shape + mock
+     telemetry endpoint + first_seen-lands assertion).
+
+For SM-216 specifically the seven tests live in
+`system-validation/installer_handoff_seam_test.go` (1–6) and
+`system-validation/installer_handoff_seam_e2e_test.go` (7).
+
 ---
 
 ## 5. Run the release dry-run

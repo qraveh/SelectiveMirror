@@ -876,6 +876,18 @@ var coverage = &coverageTracker{
 		//     before tag, given the chance.
 		"installer_handoff_seam_behavioral_regression_passes": {Description: "MSI handoff seam: SV subprocesses the unit regression test (PASS confirms recovery branch is live; FAIL confirms it has regressed)", Required: 1},
 		"installer_handoff_seam_mutation_confirms_test_catches": {Description: "MSI handoff seam: -overlay mutation test confirms the unit regression test would have caught the v1.0.0 pre-fix code", Required: 1},
+
+		// SM-216 NEAR-E2E gate — added 2026-05-08 in response to Q4 of
+		// the round-2 harvest memo ("MSI E2E test, now or almost now").
+		// This is the highest-fidelity test in the matrix short of an
+		// actual msiexec install on a Windows runner: it builds smirror
+		// with a real buildkey, simulates the v1.0.0 MSI-consent-dialog
+		// state.db shape (tier=standard, install_id absent), starts the
+		// daemon against a localhost mock telemetry endpoint, and
+		// observes first_seen actually land. Catches the SM-216-class
+		// regression at the daemon-binary boundary, not just at the
+		// unit-test boundary.
+		"installer_handoff_seam_e2e_first_seen_lands": {Description: "MSI handoff seam (near-E2E): real smirror.exe + state.db in SM-216 shape + mock endpoint; first_seen actually POSTs and install_id is persisted", Required: 1},
 	},
 }
 

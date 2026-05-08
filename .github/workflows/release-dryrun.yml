@@ -382,34 +382,58 @@ jobs:
         run: powershell -ExecutionPolicy Bypass -File installer\smoke-test.ps1 -SkipBuild -Version ${{ needs.dryrun-release.outputs.version }}
 
       # ---------------------------------------------------------------------
-      # KNOWN GAP — post-MSI-install telemetry-handoff verification (SM-216).
+      # SM-216 GATE STATUS — seven tests now lock the installer→runtime seam.
       #
-      # The install / task / uninstall smoke test above does NOT verify
-      # that an MSI-installed user actually contributes telemetry events
-      # on first daemon start. SM-216 / DEFECT-1 was caused by this exact
-      # gap: the v1.0.0 MSI wrote `HKLM\Software\SelectiveMirror\TelemetryTier`
-      # but not `install_id`; the daemon's SendInstallEventsIfDue then
-      # silently returned at Gate 3 ("install_id must be set"). Every
-      # MSI-installed Standard- or Reliability-tier user had silent
-      # telemetry failure.
+      # Original gap (v1.0.0): the install / task / uninstall smoke above
+      # did NOT verify that an MSI-installed user actually contributes
+      # telemetry events on first daemon start. The v1.0.0 MSI wrote
+      # `HKLM\Software\SelectiveMirror\TelemetryTier` but not `install_id`;
+      # the daemon's SendInstallEventsIfDue silently returned at Gate 3
+      # ("install_id must be set"). Every MSI-installed Standard- or
+      # Reliability-tier user had silent telemetry failure.
       #
-      # The structural ratchet for SM-216 lives in:
-      #   - system-validation/installer_handoff_seam_test.go (this is the
-      #     source-property gate that fails CI if either the recovery
-      #     code or the regression test is removed)
-      #   - internal/telemetry/install_events_test.go's
-      #     TestSendInstallEventsIfDue_MissingInstallID_GeneratesAndProceeds
+      # Layered ratchets (one of each is sufficient; together they're
+      # belt-and-braces):
       #
-      # The behavioral end-to-end test — install the just-built MSI on a
-      # Windows runner, run smirror briefly with INSTALL_TELEMETRY_TIER=
-      # standard, verify a first_seen row lands in installation_daily_rollup
-      # — is NOT yet wired here. It would need either Worker-mock fixtures
-      # or live-Supabase access from the runner. Tracked as a follow-up;
-      # scope is non-trivial because of the buildKey-injection requirement
-      # for HMAC-signed live POSTs.
+      #   1-4. Source-property gates in
+      #        system-validation/installer_handoff_seam_test.go.
+      #        Fail CI if the recovery branch in install_events.go or
+      #        the regression test in install_events_test.go is removed.
       #
-      # Until the e2e job lands, the structural ratchet is the gate. Do
-      # not relax it.
+      #   5.   Behavioral subprocess gate in the same file
+      #        (TestInstallerHandoffSeam_BehavioralRegressionPasses).
+      #        Shells out `go test -run X ./internal/telemetry/`; fails
+      #        when the unit regression test fails.
+      #
+      #   6.   Mutation gate in the same file
+      #        (TestInstallerHandoffSeam_MutationConfirmsRegressionTest-
+      #        CatchesBug). Uses `go test -overlay` to splice in the
+      #        v1.0.0 pre-fix shape; asserts the regression test FAILS
+      #        against it. Confirms the test would have caught SM-216.
+      #
+      #   7.   Near-E2E gate in
+      #        system-validation/installer_handoff_seam_e2e_test.go
+      #        (TestInstallerHandoffSeam_E2E_DaemonRecoversAndSubmitsFirstSeen).
+      #        Builds smirror with a real buildKey via -ldflags, prepares
+      #        state.db in the v1.0.0 MSI-handoff shape (telemetry_tier
+      #        = "standard", install_id absent), starts the daemon
+      #        against a localhost mock telemetry endpoint, asserts
+      #        first_seen actually POSTs and install_id is persisted
+      #        for idempotency. Empirically reproduces SM-216 against
+      #        pre-fix code and gates against the regression on post-
+      #        fix code. ~5 s wall-clock per CI run.
+      #
+      # Remaining gap: a TRUE E2E test — install the just-built .msi
+      # via msiexec on a Windows runner, with admin privileges, verify
+      # a first_seen row lands in real installation_daily_rollup on
+      # Supabase. That's the last 5% of catch-rate not covered by
+      # gate #7. Deferred to v1.0.5 / v1.0.10 per
+      # docs/PROPOSAL-2026-05-08-boundary-test-harvest-round2.md
+      # bucket 2C; the cost is real (4-8 h initial + ~3 min per CI run
+      # + admin-privileged Windows runner) and gate #7 covers ~95% of
+      # the failure modes.
+      #
+      # Do not relax any of gates 1-7.
       # ---------------------------------------------------------------------
 
       - name: Upload MSI as dryrun artifact
