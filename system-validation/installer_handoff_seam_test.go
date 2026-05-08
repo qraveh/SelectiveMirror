@@ -57,8 +57,14 @@
 package systemval
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func readInstallEventsGo(t *testing.T) string {
@@ -221,5 +227,257 @@ func TestInstallerHandoffSeam_ReleaseDryrunReferencesPostInstallCheck(t *testing
 	if !any {
 		t.Logf("release-dryrun.yml does not reference the post-MSI-install / first_seen-lands boundary check. SM-216 was caused by a gap at this seam; documenting it in the workflow file (even as a `# TODO` / `# known gap`) helps future maintainers add the missing test. Suggested hint terms: %v. (Logged, not failed — adding a comment is opportunistic, not a hard gate.)",
 			hints)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BEHAVIORAL gate #1 — actually run the canonical SM-216 regression test.
+//
+// The four tests above are SOURCE-PROPERTY: they grep for shapes in
+// install_events.go, install_events_test.go, TelemetryConsent.wxi,
+// release-dryrun.yml. None of them EXECUTE code. So a future change
+// that (a) keeps the surface shape but (b) breaks the recovery's
+// observable behavior would slip past all four.
+//
+// This test answers "Can you reproduce SM-216 in system verification?"
+// by shelling out to:
+//
+//     go test -run TestSendInstallEventsIfDue_MissingInstallID_GeneratesAndProceeds
+//             -count=1 -v ./internal/telemetry/
+//
+// from the system-validation module's working directory. The system-
+// validation module is intentionally a separate Go module (no
+// internal/* imports) — but it CAN invoke `go test` against the
+// parent module the same way it invokes the freshly-built smirror.exe.
+// That gives us behavioral coverage without dissolving the module
+// boundary.
+//
+// Failure semantics:
+//   - Subprocess exits non-zero → SV gate fails.
+//   - Subprocess exits 0 but the PASS line is not in the output → SV
+//     gate fails (defensive: catches a name change or `-run` mismatch
+//     that would otherwise silently pass).
+//   - Subprocess exits 0 and PASS is observed but the recovery's
+//     INFO log line ("generated install_id on first daemon start")
+//     is missing → SV gate fails (defensive: catches a stub-recovery
+//     that returns nil without doing the work).
+// ---------------------------------------------------------------------------
+
+func TestInstallerHandoffSeam_BehavioralRegressionPasses(t *testing.T) {
+	coverage.Record("installer_handoff_seam_behavioral_regression_passes")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx,
+		"go", "test",
+		"-run", "TestSendInstallEventsIfDue_MissingInstallID_GeneratesAndProceeds",
+		"-count=1",
+		"-v",
+		"./internal/telemetry/",
+	)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	s := string(out)
+
+	if err != nil {
+		t.Errorf(
+			"SM-216 regression test FAILED on current source tree:\n%s\nerror: %v\n\n"+
+				"This means install_events.go's install_id-recovery branch has regressed (deleted, modified, or moved). "+
+				"An MSI-installed Standard/Reliability-tier user will silently never contribute first_seen telemetry — exactly the v1.0.0 ship-bug. "+
+				"FIX BEFORE TAGGING: restore the recovery branch in internal/telemetry/install_events.go (see commit 8e82d40).",
+			s, err)
+		return
+	}
+	if !strings.Contains(s, "--- PASS: TestSendInstallEventsIfDue_MissingInstallID_GeneratesAndProceeds") {
+		t.Errorf(
+			"regression-test subprocess exited 0 but PASS line not found.\n"+
+				"Output:\n%s\n\n"+
+				"Possible causes: test name changed; -run filter mismatched; output truncated.",
+			s)
+		return
+	}
+	// The recovery branch's INFO log fires only when the recovery
+	// CODE PATH actually executed. If a future refactor stub-recovers
+	// (returns nil without doing the work), the assertion line in the
+	// unit test could still pass while the user-visible behavior is
+	// gone. This catches that.
+	if !strings.Contains(s, "generated install_id on first daemon start") {
+		t.Errorf(
+			"regression test PASSED but the install_id-recovery INFO log was not observed.\n"+
+				"Output:\n%s\n\n"+
+				"The recovery branch's `slog.Info(\"telemetry: generated install_id on first daemon start ...\")` did not fire. "+
+				"This means the test passed for the wrong reason — possibly a stub recovery that returns nil without actually generating an install_id.",
+			s)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BEHAVIORAL gate #2 — mutation test: the regression test must DETECT
+// the pre-fix code shape that shipped in v1.0.0.
+//
+// `go test -overlay <json>` lets us swap a source file's content for
+// the duration of a single `go test` invocation, without touching
+// disk. We use it to:
+//
+//   1. Read the current install_events.go.
+//   2. Locate the recovery block by structural markers.
+//   3. Splice in the pre-fix silent-skip block (the exact shape that
+//      shipped in v1.0.0).
+//   4. Write the mutated source + an overlay JSON to a temp dir.
+//   5. Run the regression test against the mutated source.
+//   6. Assert FAIL — the test must catch the mutation.
+//
+// What this proves:
+//   - The recovery branch is the load-bearing piece of the fix
+//     (mutation kills the test → recovery branch is doing the work).
+//   - The regression test in install_events_test.go would have shipped
+//     a CI failure pre-fix — i.e. it would have caught SM-216 before
+//     v1.0.0 tag, given the chance to run.
+//
+// What this does NOT prove:
+//   - That the test catches OTHER pre-fix mutations. (A mutation
+//     framework like go-mutesting could enumerate, but pre-tag we just
+//     need the canonical "v1.0.0 shape" mutation pinned.)
+//
+// If this test fails (mutation survives), the regression test is
+// weak — a future SM-216-class regression could ship to users.
+// ---------------------------------------------------------------------------
+
+func TestInstallerHandoffSeam_MutationConfirmsRegressionTestCatchesBug(t *testing.T) {
+	coverage.Record("installer_handoff_seam_mutation_confirms_test_catches")
+
+	origPath := filepath.Join(repoRoot, "internal", "telemetry", "install_events.go")
+	origBytes, err := os.ReadFile(origPath)
+	if err != nil {
+		t.Fatalf("read install_events.go: %v", err)
+	}
+	orig := string(origBytes)
+
+	// Locate the recovery block. Markers are chosen to be specific
+	// (won't match elsewhere in the file) and stable across cosmetic
+	// edits to logs / comments / variable names. Drift in either
+	// marker is a signal that the source has moved enough that the
+	// mutation harness needs an update.
+	startMarker := `if view.InstallID == "" {`
+	endMarker := `view.InstallID = newID`
+	startIdx := strings.Index(orig, startMarker)
+	if startIdx < 0 {
+		t.Fatalf(
+			"could not find recovery-block start marker %q in install_events.go.\n"+
+				"The recovery branch may have been moved or rewritten. "+
+				"Update this test's markers to match the new shape, OR if the recovery has been fundamentally restructured, file an SM-NNN to rewrite the mutation harness.",
+			startMarker)
+	}
+	endIdx := strings.Index(orig[startIdx:], endMarker)
+	if endIdx < 0 {
+		t.Fatalf(
+			"could not find recovery-block end marker %q after start marker.\n"+
+				"The recovery branch's tail has been rewritten. Update this test's markers.",
+			endMarker)
+	}
+	afterEnd := startIdx + endIdx + len(endMarker)
+	closeIdx := strings.Index(orig[afterEnd:], "}")
+	if closeIdx < 0 {
+		t.Fatalf("could not find closing brace after %q in install_events.go", endMarker)
+	}
+	blockEnd := afterEnd + closeIdx + 1
+
+	// The pre-fix v1.0.0 shape: silent-skip with a WARN, no
+	// install_id generation, no recovery. This is the EXACT shape
+	// that shipped and caused SM-216.
+	preFixBlock := `if view.InstallID == "" {
+		slog.Warn("install-event submit skipped: install_id is empty (state DB inconsistent?)")
+		return nil
+	}`
+	mutated := orig[:startIdx] + preFixBlock + orig[blockEnd:]
+
+	// Sanity: confirm the splice removed GenerateInstallID() from
+	// install_events.go. (It's only called inside the recovery block.
+	// If it remains, the splice missed and the mutation isn't real.)
+	if strings.Contains(mutated, "GenerateInstallID()") {
+		t.Fatalf(
+			"mutated source still contains GenerateInstallID() — splice missed.\n"+
+				"The recovery branch may have multiple call sites or has been refactored to a helper. Update the splice.")
+	}
+	// Sanity: confirm the splice introduced the pre-fix WARN line.
+	if !strings.Contains(mutated, `install-event submit skipped: install_id is empty`) {
+		t.Fatalf("mutated source does not contain the pre-fix WARN string — splice produced a non-pre-fix variant")
+	}
+
+	// Write the mutated source + the -overlay JSON to a temp dir.
+	overlayDir := t.TempDir()
+	mutatedPath := filepath.Join(overlayDir, "install_events_mutated.go")
+	if err := os.WriteFile(mutatedPath, []byte(mutated), 0644); err != nil {
+		t.Fatalf("write mutated source: %v", err)
+	}
+	overlay := struct {
+		Replace map[string]string
+	}{
+		Replace: map[string]string{origPath: mutatedPath},
+	}
+	overlayJSON, err := json.Marshal(overlay)
+	if err != nil {
+		t.Fatalf("marshal overlay: %v", err)
+	}
+	overlayPath := filepath.Join(overlayDir, "overlay.json")
+	if err := os.WriteFile(overlayPath, overlayJSON, 0644); err != nil {
+		t.Fatalf("write overlay JSON: %v", err)
+	}
+
+	// Run the regression test against the mutated source. EXPECT FAIL.
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx,
+		"go", "test",
+		"-overlay", overlayPath,
+		"-run", "TestSendInstallEventsIfDue_MissingInstallID_GeneratesAndProceeds",
+		"-count=1",
+		"-v",
+		"./internal/telemetry/",
+	)
+	cmd.Dir = repoRoot
+	out, err := cmd.CombinedOutput()
+	s := string(out)
+
+	if err == nil {
+		t.Errorf(
+			"MUTATION SURVIVED: regression test PASSED against pre-fix code.\n"+
+				"Output:\n%s\n\n"+
+				"This means TestSendInstallEventsIfDue_MissingInstallID_GeneratesAndProceeds is NOT actually exercising the install_id-recovery branch. "+
+				"Either the recovery is masked by other code, or the test's assertions are too lax to discriminate. "+
+				"Strengthen the test (assert install_id was persisted to MetaStore AND that the mock telemetry endpoint received exactly one POST AND that view.InstallID is non-empty after the call).",
+			s)
+		return
+	}
+	if !strings.Contains(s, "FAIL") {
+		t.Errorf(
+			"mutation subprocess exited non-zero but no FAIL line was emitted — possible compile error against the mutated source.\n"+
+				"Output:\n%s",
+			s)
+		return
+	}
+	// Confirm the failure is for the RIGHT REASON — one of the
+	// discriminating assertion messages from the unit test, not a
+	// random side-effect of the splice.
+	expectedHints := []string{
+		"missing install_id should be auto-generated",
+		"install_id was not persisted",
+		"view.InstallID still empty",
+	}
+	foundHint := false
+	for _, h := range expectedHints {
+		if strings.Contains(s, h) {
+			foundHint = true
+			break
+		}
+	}
+	if !foundHint {
+		t.Errorf(
+			"mutation FAIL did not include any of the expected discriminating-failure hints %v.\n"+
+				"The test failed for a different reason than the recovery-branch absence — possibly a panic, a compile error in mutated test code, or a flake.\n"+
+				"Output:\n%s",
+			expectedHints, s)
 	}
 }

@@ -857,6 +857,25 @@ var coverage = &coverageTracker{
 		"installer_handoff_seam_msi_no_install_id":       {Description: "MSI handoff seam: MSI does NOT write install_id (anti-pattern lock; SM-216)", Required: 1},
 		"installer_handoff_seam_recovery_exists":         {Description: "MSI handoff seam: install_events.go contains the SM-216/DEFECT-1 install_id-recovery branch", Required: 1},
 		"installer_handoff_seam_regression_test_present": {Description: "MSI handoff seam: install_events_test.go contains the SM-216 regression test", Required: 1},
+
+		// SM-216 BEHAVIORAL gates — added 2026-05-08 in response to the
+		// "Can you reproduce it in system verification?" question. The
+		// three gates above are SOURCE-PROPERTY (text-greps); these two
+		// EXECUTE the canonical regression test from the SV layer:
+		//
+		//   _behavioral_regression_passes — runs the unit test against
+		//     the current source tree. SV gate fails when the unit test
+		//     fails. This is the "did SM-216 actually get fixed in CI?"
+		//     proof the post-mortem identified as missing.
+		//
+		//   _mutation_confirms_test_catches — uses `go test -overlay` to
+		//     swap install_events.go for the v1.0.0 pre-fix shape, runs
+		//     the regression test against the mutated source, asserts
+		//     FAIL. This proves the regression test would have shipped
+		//     a CI failure pre-fix — i.e. it would have caught SM-216
+		//     before tag, given the chance.
+		"installer_handoff_seam_behavioral_regression_passes": {Description: "MSI handoff seam: SV subprocesses the unit regression test (PASS confirms recovery branch is live; FAIL confirms it has regressed)", Required: 1},
+		"installer_handoff_seam_mutation_confirms_test_catches": {Description: "MSI handoff seam: -overlay mutation test confirms the unit regression test would have caught the v1.0.0 pre-fix code", Required: 1},
 	},
 }
 
