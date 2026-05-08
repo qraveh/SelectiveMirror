@@ -53,7 +53,12 @@ function Setup-TestEnv {
     Write-Host "`n=== SLA Smoke Test - Setting up ===" -ForegroundColor Cyan
     New-Item -ItemType Directory -Path $SrcDir, $DstDir, $DataDir -Force | Out-Null
 
-    rclone config create testlocal local *>$null | Out-Null
+    # Invoke via cmd /c so rclone's stderr NOTICE ("Config file ...
+    # not found - using defaults") is consumed by cmd before PowerShell
+    # sees it. Direct PS-side `*>$null` redirect doesn't suppress the
+    # NativeCommandError that PS raises on any native-command stderr
+    # output when $ErrorActionPreference = 'Stop'.
+    cmd /c "rclone config create testlocal local 2>nul" | Out-Null
 
     $srcFwd = $SrcDir.Replace('\','/')
     $dstFwd = $DstDir.Replace('\','/')
@@ -122,7 +127,9 @@ function Stop-Smirror {
 
 function Cleanup {
     Stop-Smirror
-    rclone config delete testlocal *>$null | Out-Null
+    # Same cmd /c trick as Setup-TestEnv — keep rclone's stderr out
+    # of PowerShell so NativeCommandError doesn't fire on cleanup.
+    cmd /c "rclone config delete testlocal 2>nul" | Out-Null
     if (Test-Path $TestRoot) {
         Remove-Item -Path $TestRoot -Recurse -Force -ErrorAction SilentlyContinue
     }

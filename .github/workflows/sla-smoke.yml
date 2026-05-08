@@ -71,8 +71,11 @@ jobs:
         run: go build -o bin/smirror.exe ./cmd/smirror/
 
       - name: SLA smoke (latency / integrity / throughput / memory)
+        # `pwsh` (PowerShell 7+) — `powershell.exe` (PS 5.1) can't see
+        # $PSNativeCommandUseErrorActionPreference (PS 7.3+ only) and
+        # raises NativeCommandError on rclone's benign stderr NOTICE.
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File test/sla_smoke.ps1
+        run: pwsh -ExecutionPolicy Bypass -File test/sla_smoke.ps1
 
       - name: Upload SLA results
         if: always()
