@@ -56,20 +56,32 @@ This is the strongest privacy posture an open-source tool can offer. It's also t
 
 ## Three tiers
 
-| Tier | What you contribute (architecture spec) | What ACTUALLY sends in v1.0.0 | Default? |
+| Tier | What you contribute (architecture spec) | What ACTUALLY sends today | Default? |
 |------|------------------------------------------|------------------------------|----------|
 | **None** | Nothing. No events, no version checks, no pings. | Same as spec. | **✅ default** |
 | **Standard** | Anonymous categorical counts: install / upgrade / bug-report bucket increments. | **install_census + bug-report.** first_seen + upgrade + bug_report counts all wire as documented. | |
 | **Reliability** | Standard plus operational-health bucket increments at upgrade events. | **Same as Standard today.** reliability_snapshot is not yet implemented — the bucket dimensions need counter wiring in the sync engine. Tier choice is recorded so deltas flow when the writer ships, without re-consent. | |
 
-You can change tiers at any time:
+### How the tier choice is offered
+
+The architecture supports all three tiers; what differs is *where* each tier is offered to you.
+
+**At install time (MSI dialog), v1.0.1+**: the installer presents a binary choice — *Don't share anything* (default) or *Share anonymous bug + version counts*. This is a deliberate UX choice (see [`docs/PROPOSAL-2026-05-03-msi-binary-consent.md`](./PROPOSAL-2026-05-03-msi-binary-consent.md)): a three-radio dialog produced middle-option-defaulting and "more is better" anchoring effects that distorted what users actually meant when they consented. The architecture's binary truth — *send something or send nothing* — is what the dialog now surfaces. **Reliability tier is not in the install dialog**; it is a power-user opt-up via the CLI (see below). On v1.0.0 installs the dialog showed all three; v1.0.1 narrows the install-time dialog only — your prior choice (including Reliability if you picked it) is preserved across the upgrade.
+
+**At runtime (CLI), all versions**: all three tiers are reachable via:
 
 ```
 smirror telemetry none          # opt out completely
 smirror telemetry standard      # opt in to install + bug counts
-smirror telemetry reliability   # opt in to all of the above + reliability counts
+smirror telemetry reliability   # opt up to reliability deltas (advanced)
 smirror telemetry status        # show current tier
 smirror telemetry policy        # open this file
+```
+
+**For silent / scripted MSI installs (all versions)**: the property accepts all three values:
+
+```
+msiexec /i SelectiveMirror.msi /quiet INSTALL_TELEMETRY_TIER=reliability
 ```
 
 There is also a **one-shot escape**: if you're at None and want to contribute a single bug-report count without changing tier, run `smirror report-bug --submit --one-shot`. The contribution is sent with explicit per-event consent; your tier remains None; nothing else is sent now or later.

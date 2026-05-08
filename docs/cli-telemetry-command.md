@@ -14,7 +14,7 @@
 
 Lets the user view and change their telemetry tier at runtime, independently of the choice made during MSI installation. The tier governs what (if anything) smirror sends to the telemetry endpoint.
 
-This command is the runtime counterpart to the MSI installer's tier selection. It is the user's primary consent surface after install.
+This command is the runtime counterpart to the MSI installer's tier selection. It is the user's primary consent surface after install — **and the only surface that exposes all three tiers**: as of v1.0.1 the MSI consent dialog is binary (None / Standard) per [`docs/PROPOSAL-2026-05-03-msi-binary-consent.md`](./PROPOSAL-2026-05-03-msi-binary-consent.md), with Reliability reachable only via `smirror telemetry reliability` (or via silent install with `INSTALL_TELEMETRY_TIER=reliability`). Existing v1.0.0 users who chose Reliability keep that choice across the v1.0.1 upgrade — the dialog isn't re-shown.
 
 ## Design context
 

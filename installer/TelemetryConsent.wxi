@@ -1,29 +1,57 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  TelemetryConsent.wxi — three-tier opt-in installation telemetry consent
-  for SelectiveMirror.
+  TelemetryConsent.wxi — telemetry-tier consent dialog for the
+  SelectiveMirror MSI installer.
 
-  Wired into Package.wxs as of v0.9.4-dev. Updated to the three-tier
-  model in v0.9.16-dev.
+  v1.0.1+ (PROPOSAL-2026-05-03-msi-binary-consent.md): the dialog
+  presents TWO choices, not three. Background: the v1.0.0 dialog
+  exposed all three CLI tiers (None / Standard / Reliability) as
+  radio options. Six independent UX-psychology failure modes
+  combined to make this a bad surface (middle-option default
+  effect, "more is better" anchoring, decision paralysis, scale-
+  label confusion, asymmetric privacy cost, plus the v1.0.0-
+  specific empty distinction since reliability_snapshot is not
+  yet implemented). v1.0.1+ presents the binary the architecture
+  actually expresses: share anonymous bug + version counts, or
+  don't. Reliability remains a power-user opt-up via the CLI
+  (`smirror telemetry reliability`); the registry surface
+  continues to accept all three values for silent installs and
+  for upgrade-preserving reads.
 
-  The MSI captures the user's chosen tier in a public Property and
-  writes it to a registry value the smirror binary reads on first run:
+  Property + registry contract (UNCHANGED across the dialog change):
 
     Property:  INSTALL_TELEMETRY_TIER  (string: "none" | "standard" | "reliability")
     Default:   "none"
     Registry:  HKLM\Software\SelectiveMirror\TelemetryTier (REG_SZ)
 
-  Command-line install with explicit tier:
-    msiexec /i SelectiveMirror.msi INSTALL_TELEMETRY_TIER=standard
+  The registry value is what `smirror` reads at first run; the CLI's
+  three-tier surface is unchanged. v1.0.1's only delta is what the
+  interactive dialog OFFERS as a fresh choice — "reliability" stays
+  available via:
     msiexec /i SelectiveMirror.msi INSTALL_TELEMETRY_TIER=reliability
+    smirror telemetry reliability
 
   Default install (no command-line override) leaves TelemetryTier="none"
   in the registry, which is the consent-honest default. The user can
   change tier at any time post-install via:
     smirror telemetry [none|standard|reliability]
 
-  See docs/PRIVACY.md (user-facing contract) and
-  docs/cli-telemetry-command.md (runtime CLI).
+  See docs/PRIVACY.md (user-facing contract),
+  docs/cli-telemetry-command.md (runtime CLI), and
+  docs/PROPOSAL-2026-05-03-msi-binary-consent.md (the design memo
+  that scoped this v1.0.1 change).
+
+  Migration story for upgrade installs:
+
+    The dialog is shown only when no prior tier is recorded. On an
+    upgrade install where HKLM\Software\SelectiveMirror\TelemetryTier
+    is already set (any value: none / standard / reliability), the
+    EXISTING_TELEMETRY_TIER property is populated by RegistrySearch,
+    INSTALL_TELEMETRY_TIER is set to that prior value via SetProperty,
+    and the conditional Publish below routes the user from
+    LicenseAgreementDlg directly to InstallDirDlg — bypassing the
+    consent dialog. The user's prior choice (including Reliability)
+    is preserved.
 
   Backward compatibility note:
     The previous design used Property INSTALL_TELEMETRY_OPT_IN (integer
@@ -34,16 +62,6 @@
     TelemetryOptIn=0 becomes "none". The old registry value is left
     in place (not deleted) until smirror starts and migrates it to
     state DB metadata.
-
-  UI integration (PR-S2, panel review pre-release 2026-04-28):
-    Implemented as Option A — a custom <Dialog Id="TelemetryTierDlg">
-    with three RadioButtonGroup options bound to INSTALL_TELEMETRY_TIER.
-    The dialog is defined below and inserted between LicenseAgreementDlg
-    and InstallDirDlg by Publish overrides on the WixUI_InstallDir
-    chain. Default radio selection is "none" (consent-honest); the
-    user must actively pick Standard or Reliability to enroll.
-    Silent installs (msiexec /quiet) honor the command-line property
-    or fall back to "none" — silent default does NOT enroll users.
 -->
 <Include xmlns="http://wixtoolset.org/schemas/v4/wxs">
 
@@ -64,6 +82,37 @@
          (when integrated) or `msiexec INSTALL_TELEMETRY_TIER=...`. -->
     <Property Id="INSTALL_TELEMETRY_TIER" Value="none" Secure="yes" />
 
+    <!-- v1.0.1+ migration property. RegistrySearch reads any existing
+         tier value the user already chose in a prior install. Empty
+         when there's no prior install or the registry was tampered
+         clean. Used below to:
+           (a) skip the consent dialog on upgrade flows (don't re-prompt)
+           (b) seed INSTALL_TELEMETRY_TIER with the existing value so
+               the registry write doesn't clobber the user's choice. -->
+    <Property Id="EXISTING_TELEMETRY_TIER" Secure="yes">
+      <RegistrySearch
+          Id="ExistingTelemetryTier"
+          Root="HKLM"
+          Key="Software\$(var.ProductName)"
+          Name="TelemetryTier"
+          Type="raw" />
+    </Property>
+
+    <!-- Preserve the existing tier into INSTALL_TELEMETRY_TIER. Runs
+         after AppSearch (which is what populates RegistrySearch
+         results) so EXISTING_TELEMETRY_TIER is bound by the time this
+         fires. Conditional: only overrides the default when there's
+         actually a prior tier to preserve. The Condition syntax in
+         WiX 4+/6 uses the Property comparison form. -->
+    <SetProperty
+        Id="InstallTelemetryTierFromExisting"
+        Action="InstallTelemetryTierFromExisting"
+        Property="INSTALL_TELEMETRY_TIER"
+        Value="[EXISTING_TELEMETRY_TIER]"
+        After="AppSearch"
+        Sequence="both"
+        Condition="EXISTING_TELEMETRY_TIER AND EXISTING_TELEMETRY_TIER &lt;&gt; &quot;&quot;" />
+
     <!-- Component group containing the registry write component.
          Referenced from Package.wxs via <ComponentGroupRef />. -->
     <ComponentGroup Id="TelemetryConsentComponents" Directory="INSTALLFOLDER">
@@ -73,6 +122,11 @@
            HKLM\Software\SelectiveMirror\TelemetryTier as a string. The
            registry key always exists; its value tells smirror the
            user's chosen tier (or "none" by default).
+
+           On an upgrade install, INSTALL_TELEMETRY_TIER has been seeded
+           from EXISTING_TELEMETRY_TIER (via SetProperty above), so this
+           write re-writes the same value the user already chose. Their
+           tier is preserved across the upgrade.
 
            RegistryValue is the KeyPath because there is no associated file. -->
       <Component Id="TelemetryConsentRegistry" Bitness="always64" Guid="*">
@@ -90,17 +144,24 @@
   </Fragment>
 
   <!-- =====================================================================
-       PR-S2 (panel review pre-release 2026-04-28): custom telemetry-tier
-       selection dialog. Lives in a separate Fragment so the Property +
+       v1.0.1+ binary-consent dialog (PROPOSAL-2026-05-03-msi-binary-consent.md).
+       Two radios. Lives in a separate Fragment so the Property +
        ComponentGroup above stay reusable independently of the UI.
 
-       The dialog binds three radio options to INSTALL_TELEMETRY_TIER:
-       none / standard / reliability. Default selection is "none"
-       because the Property's default (in the previous Fragment) is
-       "none". Silent / unattended installs (msiexec /quiet) bypass the
-       UI entirely; they read the Property directly from the
-       command-line value or fall back to the default — neither path
-       enrolls users in any tier without an explicit choice.
+       The dialog binds two radio options to INSTALL_TELEMETRY_TIER:
+       none / standard. Default selection is "none" because the
+       Property's default (in the previous Fragment) is "none".
+       Reliability is intentionally absent from the radio surface;
+       silent installs and CLI opt-ups continue to support it.
+
+       Silent / unattended installs (msiexec /quiet) bypass the UI
+       entirely; they read the Property directly from the command-line
+       value or fall back to the default — neither path enrolls users
+       in any tier without an explicit choice.
+
+       Upgrade installs with a prior tier set: the dialog is SKIPPED
+       (see conditional Publish at the bottom of this Fragment). The
+       user is not re-prompted; their prior choice is preserved.
        ===================================================================== -->
   <Fragment>
 
@@ -120,38 +181,44 @@
              like a native part of the installer chain. -->
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44"
                  TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15"
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="320" Height="15"
                  Transparent="yes"
-                 Text="{\WixUI_Font_Title}Telemetry preference" />
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15"
+                 Text="{\WixUI_Font_Title}Help improve [ProductName]?" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="320" Height="15"
                  Transparent="yes"
-                 Text="Choose how much diagnostic data SelectiveMirror submits." />
+                 Text="Choose whether SelectiveMirror sends anonymous diagnostic data." />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="370" Height="0" />
 
-        <!-- Intro text -->
-        <Control Id="Intro" Type="Text" X="20" Y="60" Width="330" Height="35"
+        <!-- Intro framing. Plain language, says what's collected and
+             what's NOT (the latter list is the privacy-relevant content
+             — the architecture's structural promise). -->
+        <Control Id="Intro" Type="Text" X="20" Y="60" Width="330" Height="40"
                  Transparent="yes"
-                 Text="SelectiveMirror can submit anonymous diagnostic data to help improve the project. Telemetry is fully opt-in. You can change this setting later by running &quot;smirror telemetry&quot; with one of: none, standard, or reliability." />
+                 Text="SelectiveMirror is free and open-source. The maintainer uses anonymous counts to prioritize fixes. Telemetry is fully opt-in; you can change this setting later by running &quot;smirror telemetry&quot;." />
 
         <!-- Radio group bound to the public property INSTALL_TELEMETRY_TIER.
-             Default is "none" (set in the Property declaration in the
-             sibling Fragment). RadioButtonGroup is declared inside this
-             same UI element (below) and referenced here by Property name. -->
-        <Control Id="TierRadio" Type="RadioButtonGroup" X="20" Y="100" Width="330"
-                 Height="105" Property="INSTALL_TELEMETRY_TIER" />
+             Two values: none (default), standard. Reliability is reachable
+             only via CLI opt-up (`smirror telemetry reliability`) post-
+             install; or via silent install with INSTALL_TELEMETRY_TIER=reliability.
+             The RadioButtonGroup is declared inside this same UI element
+             (below) and referenced here by Property name. -->
+        <Control Id="TierRadio" Type="RadioButtonGroup" X="20" Y="105" Width="330"
+                 Height="100" Property="INSTALL_TELEMETRY_TIER" />
 
         <!-- Privacy link. WiX 4+ requires the inner <Text> element to
              carry its content via the Value= attribute instead of inner
              text, and obviously inner XML must be escaped. -->
         <Control Id="PrivacyLink" Type="Hyperlink" X="20" Y="210" Width="330" Height="15"
                  Transparent="yes">
-          <Text Value="&lt;a href=&quot;https://github.com/qraveh/SelectiveMirror/blob/master/docs/PRIVACY.md&quot;&gt;See PRIVACY.md for the full data contract&lt;/a&gt;" />
+          <Text Value="&lt;a href=&quot;https://github.com/qraveh/SelectiveMirror/blob/master/docs/PRIVACY.md&quot;&gt;Read the full privacy policy&lt;/a&gt;" />
         </Control>
 
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="370" Height="0" />
 
         <!-- Standard nav buttons. The Publish elements outside this
-             Dialog (below) wire LicenseAgreementDlg → here → InstallDirDlg. -->
+             Dialog (below) wire LicenseAgreementDlg → here → InstallDirDlg
+             on fresh install, and LicenseAgreementDlg → InstallDirDlg
+             directly on upgrade-with-tier-set. -->
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17"
                  Text="!(loc.WixUIBack)">
           <Publish Event="NewDialog" Value="LicenseAgreementDlg" />
@@ -167,33 +234,70 @@
 
       </Dialog>
 
-      <!-- Radio button group: defines the three values bound to
-           INSTALL_TELEMETRY_TIER. Order is none / standard / reliability;
-           visual y-positions space them out within the Control's 105-tall
-           box (defined above). -->
+      <!-- Radio button group: defines the two values bound to
+           INSTALL_TELEMETRY_TIER. Order is none / standard; visual
+           y-positions space them out within the Control's 100-tall
+           box (defined above). Each option's Text= follows the
+           proposal's labels: short title, em-dash, concrete
+           enumeration of what's NOT collected (the privacy-load-
+           bearing content).
+
+           The accelerator (&-prefix) is on the first letter of the
+           visible label.
+        -->
       <RadioButtonGroup Property="INSTALL_TELEMETRY_TIER">
-        <RadioButton Value="none" X="0" Y="0" Width="330" Height="30"
-                     Text="&amp;None — no telemetry submitted (default; recommended unless you actively want to help shape the project)." />
-        <RadioButton Value="standard" X="0" Y="35" Width="330" Height="30"
-                     Text="&amp;Standard — install/uninstall events, version, OS version. No filenames, no path content, no hashes." />
-        <RadioButton Value="reliability" X="0" Y="70" Width="330" Height="30"
-                     Text="&amp;Reliability — Standard plus sanitized bug reports when smirror crashes or hits a recurring anomaly." />
+
+        <!-- DEFAULT (visually first, selected on dialog open). -->
+        <RadioButton Value="none" X="0" Y="0" Width="330" Height="40"
+                     Text="&amp;Don't share anything (default) — Nothing leaves your machine. No version checks, no usage data, no bug counts. You can change this later via &quot;smirror telemetry&quot;." />
+
+        <!-- AFFIRMATIVE (opt in to install census + bug-report counts). -->
+        <RadioButton Value="standard" X="0" Y="50" Width="330" Height="40"
+                     Text="&amp;Share anonymous bug + version counts — Helps the maintainer prioritize fixes. We never collect: file names, paths, contents, your name / email / IP, narratives, or hardware fingerprints." />
+
       </RadioButtonGroup>
 
-      <!-- Sequencing: insert TelemetryTierDlg between LicenseAgreementDlg
-           and InstallDirDlg in the WixUI_InstallDir chain. WixUI's stock
-           Publishes have lower Order values, so these higher Orders win.
+      <!-- Sequencing on fresh install (no prior tier in registry):
+             LicenseAgreementDlg.Next → TelemetryTierDlg → InstallDirDlg
 
-           The condition on LicenseAgreementDlg.Next mirrors the stock
-           WixUI condition (LicenseAccepted = "1") so a user who hasn't
-           ticked "I accept" is not advanced. WiX 4+/6 requires the
-           condition as the Condition= attribute, not inner text. -->
+           Sequencing on upgrade install (prior tier in registry):
+             LicenseAgreementDlg.Next → InstallDirDlg (skip dialog)
+
+           WixUI's stock Publishes have lower Order values, so these
+           higher Orders win at the link-time merge. The condition on
+           LicenseAgreementDlg.Next mirrors the stock WixUI condition
+           (LicenseAccepted = "1") so a user who hasn't ticked "I
+           accept" is not advanced. The EXISTING_TELEMETRY_TIER
+           condition is what implements the migration story
+           (PROPOSAL-2026-05-03-msi-binary-consent.md "Migration
+           story"): if a prior tier is recorded in the registry, the
+           user is not re-prompted.
+
+           WiX 4+/6 requires the condition as the Condition= attribute,
+           not inner text. -->
+
+      <!-- Fresh install path: license accepted AND no prior tier set. -->
       <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog"
                Value="TelemetryTierDlg" Order="3"
-               Condition="LicenseAccepted = &quot;1&quot;" />
+               Condition="LicenseAccepted = &quot;1&quot; AND (NOT EXISTING_TELEMETRY_TIER OR EXISTING_TELEMETRY_TIER = &quot;&quot;)" />
+
+      <!-- Upgrade install path: license accepted AND prior tier exists.
+           Skip the consent dialog; jump straight to InstallDirDlg.
+           Order=4 so this overrides Order=3 above when the condition
+           is true; both have higher orders than WixUI's stock chain. -->
+      <Publish Dialog="LicenseAgreementDlg" Control="Next" Event="NewDialog"
+               Value="InstallDirDlg" Order="4"
+               Condition="LicenseAccepted = &quot;1&quot; AND EXISTING_TELEMETRY_TIER AND EXISTING_TELEMETRY_TIER &lt;&gt; &quot;&quot;" />
+
+      <!-- InstallDirDlg.Back: similarly conditional. On fresh install
+           Back goes to TelemetryTierDlg; on upgrade-with-tier Back
+           goes straight back to LicenseAgreementDlg. -->
       <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog"
                Value="TelemetryTierDlg" Order="3"
-               Condition="1" />
+               Condition="(NOT EXISTING_TELEMETRY_TIER OR EXISTING_TELEMETRY_TIER = &quot;&quot;)" />
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog"
+               Value="LicenseAgreementDlg" Order="4"
+               Condition="EXISTING_TELEMETRY_TIER AND EXISTING_TELEMETRY_TIER &lt;&gt; &quot;&quot;" />
 
     </UI>
 

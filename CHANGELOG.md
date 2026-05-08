@@ -5,6 +5,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Changed
+
+- **MSI installer telemetry consent dialog reduced from three choices to two**
+  ("Don't share anything" — default — and "Share anonymous bug + version
+  counts"). The v1.0.0 dialog exposed all three CLI tiers (None / Standard /
+  Reliability) as fresh radio options; that surface produced six independent
+  UX-psychology failure modes (middle-option-default effect, "more is better"
+  anchoring, decision paralysis, scale-label confusion, asymmetric privacy
+  cost, and a v1.0.0-specific empty distinction since reliability_snapshot is
+  not yet implemented). The v1.0.1+ dialog presents the binary the
+  architecture actually expresses. The CLI three-tier surface is unchanged
+  (`smirror telemetry reliability` still works); silent installs continue to
+  accept `INSTALL_TELEMETRY_TIER=reliability`. See
+  [docs/PROPOSAL-2026-05-03-msi-binary-consent.md](docs/PROPOSAL-2026-05-03-msi-binary-consent.md)
+  for the full design memo.
+
+- **Upgrade installs preserve the user's prior tier choice.** The new
+  installer reads `HKLM\Software\SelectiveMirror\TelemetryTier` at install
+  time; if a prior tier is set (any value, including Reliability), the
+  consent dialog is skipped entirely and the tier is preserved across the
+  upgrade. v1.0.0 users who chose Reliability keep Reliability without
+  re-prompt.
+
 ## [1.0.0] — 2026-05-05
 
 **First stable release.** What's new for users vs the v0.9.x line:

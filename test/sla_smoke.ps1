@@ -19,6 +19,17 @@
 #>
 
 $ErrorActionPreference = "Stop"
+
+# PowerShell 7.3+ defaults $PSNativeCommandUseErrorActionPreference
+# to $true, which makes native commands writing to stderr trigger
+# script-level errors regardless of stream redirection. rclone writes
+# benign NOTICE messages to stderr ("Config file ... not found - using
+# defaults") on first invocation; we redirect those with `*>$null`,
+# but PS still raises NativeCommandError under the strict default.
+# Disable that strict check for this script — we check $LASTEXITCODE
+# explicitly where a non-zero rclone exit actually matters.
+$PSNativeCommandUseErrorActionPreference = $false
+
 $GoPath = "C:\Program Files\Go\bin"
 $env:Path = "$GoPath;$env:Path"
 
