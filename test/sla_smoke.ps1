@@ -24,14 +24,22 @@ $ErrorActionPreference = "Stop"
 # to $true, which makes native commands writing to stderr trigger
 # script-level errors regardless of stream redirection. rclone writes
 # benign NOTICE messages to stderr ("Config file ... not found - using
-# defaults") on first invocation; we redirect those with `*>$null`,
-# but PS still raises NativeCommandError under the strict default.
-# Disable that strict check for this script — we check $LASTEXITCODE
-# explicitly where a non-zero rclone exit actually matters.
+# defaults") on first invocation; the cmd /c wrapper used in
+# Setup-TestEnv / Cleanup also addresses this. The variable is the
+# belt-and-suspenders default for any future native-command call.
 $PSNativeCommandUseErrorActionPreference = $false
 
-$GoPath = "C:\Program Files\Go\bin"
-$env:Path = "$GoPath;$env:Path"
+# Resolve go.exe via PATH rather than hardcoding "C:\Program Files\Go\bin".
+# setup-go@v5 on GitHub-hosted runners installs Go under
+# C:\hostedtoolcache\windows\go\<version>\x64\bin\, NOT C:\Program Files.
+# A hardcoded $GoPath silently bypasses what setup-go provisioned and
+# either fails outright (file not found) or runs a stale/different Go.
+$goCmd = Get-Command go -ErrorAction SilentlyContinue
+if ($null -eq $goCmd) {
+    Write-Host "FATAL: 'go' not found on PATH. Run setup-go@v5 (CI) or install Go locally." -ForegroundColor Red
+    exit 1
+}
+$GoBin = $goCmd.Source
 
 # ── Globals ──────────────────────────────────────────────────────────
 
@@ -49,7 +57,6 @@ $DataDir     = Join-Path $TestRoot "data"
 $ConfigPath  = Join-Path $DataDir  "config.yaml"
 $StateDB     = Join-Path $DataDir  "state.db"
 $LogFile     = Join-Path $DataDir  "sla.log"
-$GoBin       = "$GoPath\go.exe"
 $SmirrorPkg  = "./cmd/smirror/"
 $SmirrorProc = $null
 $Results     = @()
