@@ -234,7 +234,7 @@ rclone stores its configuration at `%APPDATA%\rclone\rclone.conf` on Windows. Th
 
 ## Option A: MSI Installer (Recommended)
 
-1. Download `SelectiveMirror.msi` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
+1. Download [`SelectiveMirror.msi`](https://github.com/qraveh/SelectiveMirror/releases/latest/download/SelectiveMirror.msi) (always the latest release) — or browse all versions on the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
 2. Double-click the MSI file
 3. Follow the installation wizard
 4. The installer places `smirror.exe` in `C:\Program Files\SelectiveMirror\` and adds it to the system PATH
@@ -254,7 +254,7 @@ smirror 1.0.0
 
 ## Option B: Portable Installation (ZIP)
 
-1. Download `SelectiveMirror_<version>_windows_amd64.zip` from the [Releases page](https://github.com/qraveh/SelectiveMirror/releases)
+1. Download [`SelectiveMirror_windows_amd64.zip`](https://github.com/qraveh/SelectiveMirror/releases/latest/download/SelectiveMirror_windows_amd64.zip) (latest release; the URL is stable across versions)
 2. Extract the ZIP to a directory of your choice (e.g., `C:\Tools\SelectiveMirror\`)
 3. Add that directory to your system PATH (same procedure as described in Section 3, Option D)
 4. Create the configuration directory manually:

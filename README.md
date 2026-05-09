@@ -38,7 +38,7 @@ The MSI is the recommended path on Windows. The ZIP is for portable use; both ar
 
 ### MSI installer (recommended)
 
-Download `SelectiveMirror.msi` from [Releases](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to the system PATH and registers an uninstaller entry. perMachine install (`%ProgramFiles%\SelectiveMirror\`) — admin elevation required. Background registration is **not** automatic; pick the privilege model after install with `smirror task install` (per-user, no admin) or `smirror service install` (LocalSystem, admin + admin-owned config). **If you're not sure, use `smirror task install`** — per-user mode covers the typical single-developer case without elevation. See [SECURITY.md](SECURITY.md#scope) for the trust model.
+Download [`SelectiveMirror.msi`](https://github.com/qraveh/SelectiveMirror/releases/latest/download/SelectiveMirror.msi) (always the latest release) or browse all versions on the [Releases page](https://github.com/qraveh/SelectiveMirror/releases). The installer adds `smirror` to the system PATH and registers an uninstaller entry. Per-machine install (`%ProgramFiles%\SelectiveMirror\`) — admin elevation required. Background registration is **not** automatic; pick the privilege model after install with `smirror task install` (per-user, no admin) or `smirror service install` (LocalSystem, admin + admin-owned config). **If you're not sure, use `smirror task install`** — per-user mode covers the typical single-developer case without elevation. See [SECURITY.md](SECURITY.md#scope) for the trust model.
 
 **SmartScreen on first install**
 
@@ -64,7 +64,7 @@ This confirms the MSI was built by this repository's CI on the tagged commit —
 
 ### Portable ZIP (no install)
 
-Download `SelectiveMirror_<version>_windows_amd64.zip` from [Releases](https://github.com/qraveh/SelectiveMirror/releases) for portable use. Extract anywhere, run `smirror.exe` directly, manage your own PATH and uninstall path. The ZIP carries the same `smirror.exe` byte-for-byte as the MSI (CI builds once and feeds the binary into both artifacts).
+Download [`SelectiveMirror_windows_amd64.zip`](https://github.com/qraveh/SelectiveMirror/releases/latest/download/SelectiveMirror_windows_amd64.zip) for portable use — that URL always resolves to the latest release. Extract anywhere, run `smirror.exe` directly, manage your own PATH and uninstall path. The ZIP carries the same `smirror.exe` byte-for-byte as the MSI (CI builds once and feeds the binary into both artifacts). Run `smirror version` to see which release you have.
 
 ### Compatibility and rollback
 

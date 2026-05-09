@@ -34,6 +34,15 @@ builds:
 
 archives:
   - formats: ['zip']
+    # Stable filename — drop the version from the archive name so
+    # `https://github.com/<owner>/<repo>/releases/latest/download/
+    # SelectiveMirror_windows_amd64.zip` works as a permanent URL
+    # across releases. The version is still in `smirror version` and
+    # in the GitHub Release page metadata; embedding it in the
+    # filename forces every doc / link to be edited per release.
+    # Matches the MSI which has always been version-free
+    # (`SelectiveMirror.msi`).
+    name_template: '{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}'
     files:
       - README.md
       - LICENSE

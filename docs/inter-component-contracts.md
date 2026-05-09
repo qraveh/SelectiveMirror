@@ -549,7 +549,7 @@ Each subcommand reads its config + state DB independently. Lock conflicts (when 
 
 ### Contract terms
 
-Returns a JSON object with `tag_name`, `name`, `body`, `assets[]`. Asset names follow the release-tagging convention: `SelectiveMirror.msi`, `SelectiveMirror_<version>_windows_amd64.zip`, `checksums.txt`.
+Returns a JSON object with `tag_name`, `name`, `body`, `assets[]`. Asset names are version-free for stable URLs: `SelectiveMirror.msi`, `SelectiveMirror_windows_amd64.zip`, `checksums.txt`. (v1.0.0 used `SelectiveMirror_1.0.0_windows_amd64.zip`; v1.0.1+ drops the version from the ZIP filename. Selfupdate's asset matcher uses substring `windows_amd64.zip` and works across both forms.)
 
 ### Consumer assumptions
 

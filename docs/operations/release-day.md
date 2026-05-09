@@ -52,7 +52,7 @@ Where to look:
 
 What you're checking:
 - Body looks right. Known-issues section visible to readers. Compatibility/rollback note present (surfaces via the README link).
-- Both assets are attached: `SelectiveMirror.msi` and `SelectiveMirror_<version>_windows_amd64.zip`.
+- Both assets are attached: `SelectiveMirror.msi` and `SelectiveMirror_windows_amd64.zip`.
 - Build-provenance attestations are visible (`gh attestation list <artifact>`).
 
 If everything is right: click **Publish release** (the workflow leaves it as draft on purpose; this is the human go/no-go).
