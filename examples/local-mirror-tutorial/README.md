@@ -48,18 +48,23 @@ cd %USERPROFILE%\smirror-tutorial
 mkdir remote
 ```
 
-Copy the source-template directory from the SelectiveMirror repo into your
-workspace as `source`. Substitute `<smirror-repo>` with wherever you have
-the source checked out (e.g. `C:\Source\SelectiveMirror`):
+Copy the source-template directory into your workspace as `source`. Pick
+the line that matches how you got smirror:
 
 ```cmd
+:: If you installed via the MSI (recommended path):
+xcopy /E /I "%ProgramFiles%\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
+
+:: ...or, if you have the SelectiveMirror source repo checked out:
 xcopy /E /I "<smirror-repo>\examples\local-mirror-tutorial\source-template" source
 ```
 
-> **Don't have the source checked out?** Either clone it
-> (`git clone https://github.com/qraveh/SelectiveMirror.git`), or create the
-> files yourself — they're listed below in the [reference](#source-template-reference)
-> section. The contents are trivial; what matters is the filenames.
+> **Have only the portable ZIP and no source?** The portable ZIP carries
+> `smirror.exe` but not the tutorial fixture. Either clone the source repo
+> (`git clone https://github.com/qraveh/SelectiveMirror.git`) and use the
+> second line above, or create the files yourself — they're listed in the
+> [Source-template reference](#source-template-reference) section below.
+> The contents are trivial; what matters is the filenames.
 
 Your workspace now looks like:
 

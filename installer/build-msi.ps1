@@ -191,7 +191,14 @@ $required = @(
     (Join-Path $root "THIRD-PARTY-LICENSES.txt"),
     (Join-Path $root "config.example.yaml"),
     (Join-Path $installerDir "install-rclone.ps1"),
-    (Join-Path $installerDir "Resources\license.rtf")
+    (Join-Path $installerDir "Resources\license.rtf"),
+    # Tutorial assets (SM-221). Sentinel files — if these are present, the
+    # rest of the tutorial fixture is expected to be too (12 files total
+    # under examples/local-mirror-tutorial/, declared individually in
+    # Package.wxs). Catches "examples/ dir is missing from the build
+    # context" early with a clear error rather than deep inside WiX.
+    (Join-Path $root "examples\local-mirror-tutorial\README.md"),
+    (Join-Path $root "examples\local-mirror-tutorial\source-template\.syncignore")
 )
 
 $missing = @()

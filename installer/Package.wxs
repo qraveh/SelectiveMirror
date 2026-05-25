@@ -62,7 +62,23 @@
          (admin-only write access, SEC-C2 fix). ProgramFiles64Folder is the
          64-bit Program Files on x64 Windows. -->
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="$(var.InstallFolder)" />
+      <Directory Id="INSTALLFOLDER" Name="$(var.InstallFolder)">
+        <!-- Tutorial subtree (SM-221). The MSI ships the hands-on
+             local-mirror tutorial alongside the binary so MSI-only users
+             (no source checkout) can run it directly out of
+             %ProgramFiles%\SelectiveMirror\examples\local-mirror-tutorial\.
+             The tutorial's Step 1 xcopy pulls fixtures FROM here INTO the
+             user's workspace; nothing here is modified in place, so the
+             admin-only write tier on %ProgramFiles% is not a problem. -->
+        <Directory Id="ExamplesDir" Name="examples">
+          <Directory Id="TutorialDir" Name="local-mirror-tutorial">
+            <Directory Id="TutorialSourceTemplate" Name="source-template">
+              <Directory Id="TutorialMirrorThisDir" Name="mirror_this_dir" />
+              <Directory Id="TutorialDontMirrorThisDir" Name="dont_mirror_this_dir" />
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
     </StandardDirectory>
 
     <!-- Main component group.
@@ -114,6 +130,66 @@
       </Component>
     </ComponentGroup>
 
+    <!-- Tutorial subtree (SM-221). Twelve fixture files + the tutorial
+         README, installed alongside the binary so MSI-only users can run
+         the tutorial without a source checkout. RemoveFolder elements on
+         the README component clean up the subdirectories at uninstall —
+         the auto-generated GUIDs handle file uninstall on their own. -->
+    <ComponentGroup Id="TutorialComponents">
+
+      <Component Id="TutorialReadme" Directory="TutorialDir" Bitness="always64" Guid="*">
+        <File Id="tutorial_README.md" Source="..\examples\local-mirror-tutorial\README.md" KeyPath="yes" />
+        <!-- Sweep nested directories at uninstall. The files themselves
+             go away via their own components; these cleanups remove the
+             now-empty directories so %ProgramFiles%\SelectiveMirror is
+             clean after uninstall. -->
+        <RemoveFolder Id="RemoveTutorialMirrorThisDir" Directory="TutorialMirrorThisDir" On="uninstall" />
+        <RemoveFolder Id="RemoveTutorialDontMirrorThisDir" Directory="TutorialDontMirrorThisDir" On="uninstall" />
+        <RemoveFolder Id="RemoveTutorialSourceTemplate" Directory="TutorialSourceTemplate" On="uninstall" />
+        <RemoveFolder Id="RemoveTutorialDir" Directory="TutorialDir" On="uninstall" />
+        <RemoveFolder Id="RemoveExamplesDir" Directory="ExamplesDir" On="uninstall" />
+      </Component>
+
+      <!-- Fixture files in source-template/ -->
+      <Component Id="TutorialFixtureSyncignore" Directory="TutorialSourceTemplate" Bitness="always64" Guid="*">
+        <File Id="tutorial_syncignore" Name=".syncignore" Source="..\examples\local-mirror-tutorial\source-template\.syncignore" KeyPath="yes" />
+      </Component>
+      <Component Id="TutorialFixtureHidden" Directory="TutorialSourceTemplate" Bitness="always64" Guid="*">
+        <File Id="tutorial_dont_mirror_hidden.txt" Name=".dont_mirror_hidden.txt" Source="..\examples\local-mirror-tutorial\source-template\.dont_mirror_hidden.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="TutorialFixtureLog" Directory="TutorialSourceTemplate" Bitness="always64" Guid="*">
+        <File Id="tutorial_dont_mirror_me.log" Source="..\examples\local-mirror-tutorial\source-template\dont_mirror_me.log" KeyPath="yes" />
+      </Component>
+      <Component Id="TutorialFixtureTmp" Directory="TutorialSourceTemplate" Bitness="always64" Guid="*">
+        <File Id="tutorial_dont_mirror_me.tmp" Source="..\examples\local-mirror-tutorial\source-template\dont_mirror_me.tmp" KeyPath="yes" />
+      </Component>
+      <Component Id="TutorialFixtureFileA" Directory="TutorialSourceTemplate" Bitness="always64" Guid="*">
+        <File Id="tutorial_file_a.txt" Source="..\examples\local-mirror-tutorial\source-template\file_a.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="TutorialFixtureFileB" Directory="TutorialSourceTemplate" Bitness="always64" Guid="*">
+        <File Id="tutorial_file_b.txt" Source="..\examples\local-mirror-tutorial\source-template\file_b.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="TutorialFixtureMirrorMe1" Directory="TutorialSourceTemplate" Bitness="always64" Guid="*">
+        <File Id="tutorial_mirror_me_1.txt" Source="..\examples\local-mirror-tutorial\source-template\mirror_me_1.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="TutorialFixtureMirrorMe2" Directory="TutorialSourceTemplate" Bitness="always64" Guid="*">
+        <File Id="tutorial_mirror_me_2.txt" Source="..\examples\local-mirror-tutorial\source-template\mirror_me_2.txt" KeyPath="yes" />
+      </Component>
+
+      <!-- Files in source-template/mirror_this_dir/ -->
+      <Component Id="TutorialFixtureNested1" Directory="TutorialMirrorThisDir" Bitness="always64" Guid="*">
+        <File Id="tutorial_nested_1.txt" Source="..\examples\local-mirror-tutorial\source-template\mirror_this_dir\nested_1.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="TutorialFixtureNested2" Directory="TutorialMirrorThisDir" Bitness="always64" Guid="*">
+        <File Id="tutorial_nested_2.txt" Source="..\examples\local-mirror-tutorial\source-template\mirror_this_dir\nested_2.txt" KeyPath="yes" />
+      </Component>
+
+      <!-- Files in source-template/dont_mirror_this_dir/ -->
+      <Component Id="TutorialFixtureStuff" Directory="TutorialDontMirrorThisDir" Bitness="always64" Guid="*">
+        <File Id="tutorial_stuff.txt" Source="..\examples\local-mirror-tutorial\source-template\dont_mirror_this_dir\stuff.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
     <!-- Custom action: install rclone after files are placed.
          Runs deferred, impersonated, as the installing user so rclone lands
          in their winget/chocolatey/scoop scope rather than SYSTEM's. -->
@@ -146,6 +222,10 @@
            which smirror reads on first run to seed state DB metadata.
            See installer/TelemetryConsent.wxi for property definition. -->
       <ComponentGroupRef Id="TelemetryConsentComponents" />
+      <!-- Hands-on tutorial files (SM-221). Ships with the binary so
+           MSI-only users (no source checkout) can run the tutorial
+           directly. ~12 small files, <20KB total. -->
+      <ComponentGroupRef Id="TutorialComponents" />
     </Feature>
 
   </Package>

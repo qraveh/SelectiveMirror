@@ -117,6 +117,8 @@ smirror start
 
 A self-contained walkthrough lives at [`examples/local-mirror-tutorial/`](examples/local-mirror-tutorial/). It exercises the core commands (`dry-run`, `sync-now`, `explain`, `verify`, `task install`) end-to-end using rclone's local-filesystem backend as a stand-in for a real cloud remote — no cloud account, network access, or credentials needed. **Part 1 is ~5 minutes**; Part 2 covers diagnostics, deletes, drift, and background mode in another ~15.
 
+The MSI installs the tutorial alongside the binary at `%ProgramFiles%\SelectiveMirror\examples\local-mirror-tutorial\` — open the README.md there with any text editor to read it offline. (Source-cloners can read it from `examples/local-mirror-tutorial/` in the repo.)
+
 ## Commands
 
 | Command | Description |
