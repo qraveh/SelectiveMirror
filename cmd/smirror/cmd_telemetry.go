@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/qraveh/SelectiveMirror/internal/config"
+	"github.com/qraveh/SelectiveMirror/internal/rclone"
 	"github.com/qraveh/SelectiveMirror/internal/state"
 	"github.com/qraveh/SelectiveMirror/internal/telemetry"
 )
@@ -671,23 +672,11 @@ func computeInspectDaysSinceFirstSeenBucket(st *state.Store) string {
 // remain here because they need cmd-level imports.
 // ---------------------------------------------------------------------------
 
-func detectBackgroundMode() string {
-	// Placeholder: the production logic checks SCM service state and
-	// scheduled-task presence. Inspect + first_seen submit deliberately
-	// don't load those (avoid side effects + cross-package imports);
-	// production telemetry today reports "unknown" for this dimension.
-	// Real detection logic is deferred — when it lands it will move to
-	// internal/telemetry/buckets.go for both inspect and submit to use.
-	return "unknown"
-}
-
-func detectInstallMethod() string {
-	// Placeholder: production logic inspects parent process / install
-	// path / registry. Inspect + first_seen submit return "unknown" so
-	// the field is present and ENUM-valid without triggering side
-	// effects. Real detection deferred.
-	return "unknown"
-}
+// detectInstallMethod and detectBackgroundMode are defined per-platform
+// in detect_windows.go (real detection) and detect_other.go (returns
+// "unknown" — Windows-first project; non-Windows builds exist only
+// for dev tests). SM-220 (2026-05-22) replaced the "unknown" placeholders
+// that previously lived here.
 
 func anyMirrorHasHook(cfg *config.Global) bool {
 	for _, p := range cfg.Projects {
@@ -708,10 +697,26 @@ func anyMirrorHasFilter(cfg *config.Global) bool {
 	return len(cfg.GlobalExcludes) > 0
 }
 
-func bestEffortRcloneVersion(_ *config.Global) string {
-	// Placeholder: production logic should call `rclone version` once
-	// at startup and cache. Inspect avoids the subprocess for speed;
-	// first_seen submit currently does the same. When the rclone
-	// detection caching lands, both consumers benefit.
-	return "(would be detected at submit time)"
+// bestEffortRcloneVersion resolves and parses the rclone binary's
+// version. SM-220 (2026-05-22) replaced the prior placeholder string
+// "(would be detected at submit time)" — which silently leaked into
+// actual submitted payloads — with a real call to rclone.Detect.
+//
+// Failure modes (rclone not installed, parse error, unreachable
+// binary) collapse to the ENUM-valid sentinel "unknown" rather than
+// a placeholder. The Worker's schema accepts "unknown"; it does not
+// accept "(would be detected...)" style placeholders.
+//
+// Subprocess cost is ~50ms per call. Called once per inspect, once
+// per daemon-startup first_seen attempt — not in a hot loop.
+func bestEffortRcloneVersion(cfg *config.Global) string {
+	rclonePath := ""
+	if cfg != nil {
+		rclonePath = cfg.RclonePath
+	}
+	info, err := rclone.Detect(rclonePath)
+	if err != nil || info == nil {
+		return "unknown"
+	}
+	return info.Version.String()
 }

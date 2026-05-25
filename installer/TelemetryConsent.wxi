@@ -105,9 +105,8 @@
          actually a prior tier to preserve. The Condition syntax in
          WiX 4+/6 uses the Property comparison form. -->
     <SetProperty
-        Id="InstallTelemetryTierFromExisting"
+        Id="INSTALL_TELEMETRY_TIER"
         Action="InstallTelemetryTierFromExisting"
-        Property="INSTALL_TELEMETRY_TIER"
         Value="[EXISTING_TELEMETRY_TIER]"
         After="AppSearch"
         Sequence="both"
@@ -249,11 +248,11 @@
 
         <!-- DEFAULT (visually first, selected on dialog open). -->
         <RadioButton Value="none" X="0" Y="0" Width="330" Height="40"
-                     Text="&amp;Don't share anything (default) — Nothing leaves your machine. No version checks, no usage data, no bug counts. You can change this later via &quot;smirror telemetry&quot;." />
+                     Text="&amp;Don't share anything — Nothing leaves your machine. No version checks, no usage data, no bug counts. You can change this later via &quot;smirror telemetry&quot;." />
 
         <!-- AFFIRMATIVE (opt in to install census + bug-report counts). -->
         <RadioButton Value="standard" X="0" Y="50" Width="330" Height="40"
-                     Text="&amp;Share anonymous bug + version counts — Helps the maintainer prioritize fixes. We never collect: file names, paths, contents, your name / email / IP, narratives, or hardware fingerprints." />
+                     Text="&amp;Help the maintainer fix bugs and count installed versions. We never collect file names, paths, contents, your name, email, IP address, narratives, or hardware fingerprints." />
 
       </RadioButtonGroup>
 
