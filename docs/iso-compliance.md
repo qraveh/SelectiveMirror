@@ -80,7 +80,7 @@ Per independent-reviewer feedback: a passing reference, a parenthetical, or a si
 | 29148:2018 | ⚠️ **Partial** | 11 / 19 | 3 | 5 | unchanged |
 | 25010:2023 | ⚠️ **Partial** — engineering caught up to documentation | 7 of 9 top-level characteristics | 0 | 1 (Usability schema mismatch) | NFR-AU-01..03 / NFR-RS-01..03 / NFR-PR-01..03 stubs landed in SRS §4.6.5 / .6 / .7 with implementation cites (commit `4f119fa`). Faultlessness substantive evidence (rclone stall detection in liveness.go) and Analysability extension (new anomaly kinds Sync:Stalled / Sync:LsJsonSlow) carry forward. Full ISO/IEC 25023 §5.2 measurement-function elaboration is R-18 v1.1. |
 | 25023:2016 | ⚠️ **Partial** | 6 functions defined / ~24 quantitative NFRs | many | most "Not Measured" | unchanged — but liveness.go thresholds (60s transfer flat-grace, 240s metadata) are *new* measurement targets that should be captured |
-| 29119 family | ⚠️ **Partial** | Test Plan, test design, techniques | Reports, naming convention | Org Test Strategy ❌; **Test Monitoring & Control improved ⚠️→✅ via release.yml hardening** | release.yml runs `go vet` + `go test ./internal/... ./cmd/...` before GoReleaser; race detector now covers internal/sync + internal/state |
+| 29119 family | ⚠️ **Partial** | Test Plan, test design, techniques, **Org Test Strategy ✅ (v1.0.1, R-16)** | Reports, naming convention | **A-29119-01 closed v1.0.1** via `docs/test-strategy.md` (organizational Test Strategy, 29119-1 §6/§7); **Test Monitoring & Control improved ⚠️→✅ via release.yml hardening** | release.yml runs `go vet` + `go test ./internal/... ./cmd/...` before GoReleaser; race detector now covers internal/sync + internal/state |
 
 ### 3.2 Why "Partial" not "Mostly compliant" (revised v0.2)
 
@@ -361,7 +361,7 @@ A 25023 successor edition may be published; verification deferred. **Action `M-2
 
 | 29119-3 document | Required | Present | Status |
 |---|---|---|---|
-| **Organizational Test Strategy** | Required for non-trivial projects | A personal-discipline skill memory file in `~/.claude/skills/qh-sw-developer/` is **not** a project-level Strategy. Not under project version control, not approved by stakeholders, not tied to this product's risk profile. | ❌ — `A-29119-01` (P0) |
+| **Organizational Test Strategy** | Required for non-trivial projects | `docs/test-strategy.md` (v1.0 baseline, authored 2026-05-03) — single-page project-level Test Strategy per 29119-1 §6 / §7. Risk profile + tier mapping + distributed-strategy pointer table to VV-Plan / SRS / CI workflows / CHANGELOG / SECURITY.md. Closes A-29119-01. | ✅ — `A-29119-01` **closed v1.0.1 (R-16)** |
 | **Project Test Plan** | Required | `VV-Plan.md` | ✅ |
 | **Master Test Plan vs Level Test Plan** distinction | Required for multi-level | Not enumerated separately | ⚠️ — `A-29119-08` |
 | **Test Sub-Plans** (per test level) | Optional | Test tables per FR-* in `VV-Plan.md` §6 | ✅ |
@@ -382,7 +382,7 @@ A 25023 successor edition may be published; verification deferred. **Action `M-2
 
 | Process | Required | Evidence | Status |
 |---|---|---|---|
-| Organizational Test Process (sec 6) | Required | `qh-sw-developer` skill memory + this audit — *insufficient as Org Process per 29119-1 §6* | ❌ — `A-29119-01` |
+| Organizational Test Process (sec 6) | Required | `docs/test-strategy.md` + `docs/VV-Plan.md` together satisfy 29119-1 §6. The Strategy doc is the project's single-page integration point; VV-Plan is the Test Plan that the Strategy points to. | ✅ — `A-29119-01` **closed v1.0.1 (R-16)** |
 | Test Planning | Required | `VV-Plan.md` §1, §10 | ✅ |
 | Test Monitoring & Control | Required | CI gates (`ci.yml`) **plus release.yml runs `go vet` + `go test` before GoReleaser** (added 2026-04-27, commit f264a3e); race detector covers all critical packages including internal/sync + internal/state. Per-release Test Status Report still missing. | ⚠️ — `A-29119-03` (Status Report only; CI gates compliant) |
 | Test Completion | Required | One validation report; not per-release ritual | ❌ — `A-29119-03` |
@@ -520,7 +520,7 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-29119-01 | Author `docs/test-strategy.md` (project-level Organizational Test Strategy). **NOT waivable while claiming 29119 compliance.** | Requirements + Implementation | P0 | 2026-Q3 (TBD) | Open |
+| A-29119-01 | Author `docs/test-strategy.md` (project-level Organizational Test Strategy). **NOT waivable while claiming 29119 compliance.** | Requirements + Implementation | P0 | v1.0.1 (R-16) | **Closed 2026-05-25** — `docs/test-strategy.md` v1.0 baseline (authored 2026-05-03, declared in v1.0.1 cycle via R-16). |
 | A-29119-02 | Decide whether per-test Test Case Specification is needed beyond Go test files. **Acceptance**: documented decision + rationale | Implementation | P3 | v1.1 | Open |
 | A-29119-03 | Adopt per-release ritual: Test Status Report + Test Item Transmittal + Test Completion Report — minimal templates in `docs/test-reports/`. **Split-able into 3 sub-actions if convenient** | Implementation | P1 | 2026-Q3 (TBD) | Open |
 | A-29119-04 | Migrate Go test names to `TestFR_XXX_YY_Scenario` (joint A-29148-08) | Implementation | P1 | 2026-Q2 (TBD) | Open |
@@ -548,7 +548,7 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 
 | Priority | Count | Notes |
 |---|---|---|
-| **P0** | 17 | A-29148-01, -05; A-25010-02; A-25023-02a..k (11); A-29119-01; X-04; (was 2 in v0.1) |
+| **P0** | 16 | A-29148-01, -05; A-25010-02; A-25023-02a..k (11); ~~A-29119-01~~ (closed v1.0.1, R-16); X-04; (was 2 in v0.1, was 17 v0.2, now 16 v1.0.1) |
 | **P1** | 21 | including A-GOV-01, -02, -04 |
 | **P2** | 13 | |
 | **P3** | 12 | |
@@ -572,7 +572,7 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 
 **v1.0 release-gate**:
 - All A-25023-02a..k (measurement execution)
-- A-29119-01 (Test Strategy)
+- ~~A-29119-01 (Test Strategy)~~ — **closed v1.0.1 (R-16); `docs/test-strategy.md`**
 - A-29119-03 (Test Reports ritual)
 - A-25023-01, A-25023-04 (measurement-function table)
 - A-29148-01, A-29148-05, A-29148-12, A-29148-17 (29148 P0/P1 attributes)

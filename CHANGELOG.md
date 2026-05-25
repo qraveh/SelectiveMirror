@@ -94,6 +94,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `<SetProperty Id=<target> Action=<action>`; no per-push CI workflow
   builds the MSI so the regression went undetected for 12 days.
 
+- **R-16 closed — `docs/test-strategy.md` Organizational Test Strategy.**
+  v1.0.0 CHANGELOG promised "closes A-29119-01; promotes the
+  ISO/IEC/IEEE 29119 compliance row to ✅" for v1.0.1. The
+  Test Strategy doc itself already existed (`docs/test-strategy.md`,
+  v1.0 baseline, authored 2026-05-03 — single-page,
+  references `docs/VV-Plan.md` and `docs/SRS.md` as the actual
+  Test Plan and Requirements baseline per 29119-1 §6/§7). The
+  R-16 work was the corresponding audit-doc closure in
+  `docs/iso-compliance.md`: §3.1 row for "29119 family" updates
+  Org Test Strategy from ❌ → ✅; §7.1 row for "Organizational
+  Test Strategy" updates ❌ → ✅; §7.2 row for "Organizational
+  Test Process (sec 6)" updates ❌ → ✅; §9.4 actions table
+  marks A-29119-01 Closed; §9.6 P0 count drops 17 → 16; §9.7
+  sequencing crosses A-29119-01 off the v1.0 release-gate list.
+
 - **R-15 closed — `internal/fsutil` direct unit tests.** v1.0.0
   CHANGELOG promised "removes the `internal/fsutil` waiver" for
   v1.0.1. Done: two new test files
