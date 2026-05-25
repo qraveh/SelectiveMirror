@@ -94,6 +94,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `<SetProperty Id=<target> Action=<action>`; no per-push CI workflow
   builds the MSI so the regression went undetected for 12 days.
 
+- **Open Medium closed: Symlink-handling asymmetry between foreground
+  and service mode.** v1.0.0 shipped with a documented asymmetry:
+  service mode rejected symlinks in watched directories (SEC-H5 /
+  PF-A3 hardening), but foreground mode followed them. A symlink
+  planted in a watched directory could exfiltrate arbitrary readable
+  files (e.g. `C:\Windows\System32\config\SAM`) to the configured
+  remote — a real exfiltration vector in foreground.
+
+  v1.0.1 aligns foreground with service mode's default-reject. New
+  `allow_symlinks: bool` top-level config field (default `false` →
+  reject). Foreground startup at `cmd/smirror/main.go:725` now
+  sets `syncEngine.RejectSymlinkedFiles = !cfg.AllowSymlinks`;
+  service mode keeps its unconditional `= true` (SEC-H5 invariant
+  preserved). Users who genuinely need symlink-following (rare;
+  typically only when migrating a folder layout that historically
+  used symlinks) can opt back in via `allow_symlinks: true`.
+
+  `config.example.yaml` adds the field with rationale comments.
+  Regression ratchet:
+  `system-validation/symlink_asymmetry_test.go` (3 source-property
+  tests guarding the cmd/smirror startup line, the Global struct
+  declaration, and the example-config documentation). A behavioral
+  test that plants a symlink at runtime and asserts foreground
+  rejects it is deferred to v1.0.x — the structural tests catch
+  the regression class that caused the Medium.
+
+  v1.0.x follow-up: a per-mirror `allow_symlinks` field on
+  Project (rather than this global) is on the backlog. The
+  v1.0.1 global default-reject + global opt-in is the minimum
+  viable closure that aligns both modes' default behavior on the
+  hardened side.
+
 - **Open Medium closed: File-mode hardening on fresh `addmirror`
   config** (with a corrected understanding of what "hardening" means
   on Windows). v1.0.0 shipped with a known-Medium that

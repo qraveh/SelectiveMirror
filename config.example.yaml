@@ -92,6 +92,16 @@ global_excludes:
 # Anomaly detection (ghost leaks, circuit breaker trips, panics, stale reconciliation, etc.)
 # anomaly_detection_enabled: true   # Record anomalies to ~/.selectivemirror/anomalies/ (default: true)
 
+# Symlink handling. Default false → smirror REJECTS symlinks in watched
+# directories (foreground AND service mode aligned on this since v1.0.1).
+# Rationale: a symlink planted under a watched directory could exfiltrate
+# arbitrary readable files to the configured remote. Service mode has
+# rejected since SEC-H5 hardening; v1.0.1 closes the Open Medium by
+# aligning foreground mode.
+# Set to true only if you genuinely need symlink-following (rare; usually
+# only when migrating a folder layout that historically used symlinks).
+# allow_symlinks: false
+
 # Pre/post-sync hooks — shell commands run before/after each file sync (see SECURITY.md).
 # When any hook is configured AND smirror runs as a Windows Service, the config file
 # must be owned by Administrators or LocalSystem (SEC-C5). Shell metacharacters in

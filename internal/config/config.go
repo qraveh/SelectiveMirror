@@ -110,6 +110,30 @@ type Global struct {
 	PostSyncHook               string       `yaml:"post_sync_hook"`                 // global default post-sync hook (empty = none)
 	AlertWebhookURL            string       `yaml:"alert_webhook_url"`              // HTTP endpoint for anomaly alerts (empty = disabled)
 	AlertMinSeverity           string       `yaml:"alert_min_severity"`             // minimum severity to alert: info, warning, error, critical (default: error)
+
+	// AllowSymlinks, when true, makes smirror follow symlinks in watched
+	// directories instead of rejecting them. Default false → reject (aligns
+	// foreground mode with the service-mode SEC-H5 / PF-A3 behavior).
+	//
+	// Background: pre-v1.0.1 the foreground daemon followed symlinks while
+	// service mode rejected them (asymmetric default — service hard-coded
+	// reject; foreground hard-coded follow). A symlink planted in a watched
+	// directory could exfiltrate arbitrary readable files to the configured
+	// remote. Service mode closed this in v0.9.x via SEC-H5; v1.0.1 aligns
+	// the foreground default.
+	//
+	// Set to true (in config.yaml: `allow_symlinks: true`) only when you
+	// actually need symlink-following behavior (rare; usually only when
+	// migrating a folder layout that historically used symlinks for
+	// project organization). The default remains reject because that
+	// matches what most users actually want and what the hardened
+	// service-mode path already enforces.
+	//
+	// v1.0.x follow-up: a per-mirror `allow_symlinks` field on Project
+	// (rather than this global) is on the backlog. For v1.0.1 the
+	// global default-reject + global opt-in is the minimum viable
+	// closure of the v1.0.0 Open Medium "Symlink-handling asymmetry."
+	AllowSymlinks              bool         `yaml:"allow_symlinks"`
 }
 
 // IsAnomalyDetectionEnabled returns whether anomaly detection is enabled (default true).
