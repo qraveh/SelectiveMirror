@@ -3,21 +3,51 @@
 # Install WiX: dotnet tool install --global wix
 #               wix extension add WixToolset.UI.wixext/6.0.2
 #
-# -Version:      MSI ProductVersion (x.y.z, no -dev suffix). Defaults to
-#                the version from cmd/smirror/main.go with -dev stripped.
-#                CI (release.yml) overrides this with the git tag's version.
-# -SkipGoBuild:  PR-R3 (panel review pre-release 2026-04-28). Skip the
-#                `go build` step and consume an existing bin/smirror.exe.
-#                Used by release.yml to feed the GoReleaser-built binary
-#                straight into the MSI, so the binary inside the MSI is
-#                byte-equal to the one inside the published ZIP. The script
-#                still verifies the binary is present and reports the
-#                expected version before building the MSI.
+# -Version:           MSI ProductVersion (x.y.z, no -dev suffix). Defaults to
+#                     the version from cmd/smirror/main.go with -dev stripped.
+#                     CI (release.yml) overrides this with the git tag's version.
+# -SkipGoBuild:       PR-R3 (panel review pre-release 2026-04-28). Skip the
+#                     `go build` step and consume an existing bin/smirror.exe.
+#                     Used by release.yml to feed the GoReleaser-built binary
+#                     straight into the MSI, so the binary inside the MSI is
+#                     byte-equal to the one inside the published ZIP. The
+#                     script still verifies the binary is present and reports
+#                     the expected version before building the MSI.
+# -WithTelemetryKey:  Opt in to a production-equivalent build that includes
+#                     the per-version derived HMAC key for the live telemetry
+#                     pipeline. Requires $env:TELEMETRY_MASTER_KEY (or
+#                     $env:SMIRROR_TELEMETRY_MASTER_KEY) in the shell — usually
+#                     `source ~/.smirror-deploy.env` first.
+#
+#                     Default (flag absent) produces a buildKey=none binary
+#                     that the Cloudflare Worker rejects — the safe posture
+#                     for UI iteration and quick local smoke (no production
+#                     rollup-table pollution). Use -WithTelemetryKey only
+#                     when deliberately exercising the live pipeline (e.g.,
+#                     verifying a non-CI build can land a first_seen event
+#                     before a tag). Mutually exclusive with -SkipGoBuild
+#                     (the consumed binary already carries whatever key it
+#                     was linked with — this script cannot re-link a key
+#                     into a pre-built binary).
+#
+#                     CI release.yml / release-dryrun.yml have their own
+#                     key plumbing through GoReleaser; do NOT pass this
+#                     flag from CI workflows.
 
 param(
     [string]$Version = "",
-    [switch]$SkipGoBuild
+    [switch]$SkipGoBuild,
+    [switch]$WithTelemetryKey
 )
+
+if ($WithTelemetryKey -and $SkipGoBuild) {
+    Write-Host "ERROR: -SkipGoBuild and -WithTelemetryKey are mutually exclusive." -ForegroundColor Red
+    Write-Host "  With -SkipGoBuild, this script consumes a pre-built binary; it cannot re-link" -ForegroundColor Red
+    Write-Host "  a telemetry HMAC key into it. If you need a valid-HMAC binary, drop -SkipGoBuild" -ForegroundColor Red
+    Write-Host "  and let this script rebuild it. If you have a CI-built binary that already" -ForegroundColor Red
+    Write-Host "  carries a real key, drop -WithTelemetryKey." -ForegroundColor Red
+    exit 1
+}
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path $PSScriptRoot -Parent
@@ -86,6 +116,51 @@ if ($SkipGoBuild) {
     Write-Host "[1/3] Building smirror.exe..." -NoNewline
     $ldflags = "-s -w -X main.version=$Version"
 
+    # -WithTelemetryKey: derive the per-version HMAC key from
+    # $env:TELEMETRY_MASTER_KEY and embed it via -ldflags so the resulting
+    # binary's BuildKeyFingerprint() reports a real fingerprint (not "none")
+    # and the Cloudflare Worker accepts its payloads. Mirrors the derivation
+    # in .github/workflows/release.yml lines 201-231.
+    if ($WithTelemetryKey) {
+        $masterHex = $env:TELEMETRY_MASTER_KEY
+        if (-not $masterHex) { $masterHex = $env:SMIRROR_TELEMETRY_MASTER_KEY }
+        if (-not $masterHex) {
+            Write-Host " FAILED" -ForegroundColor Red
+            Write-Host "  -WithTelemetryKey requires `$env:TELEMETRY_MASTER_KEY (or `$env:SMIRROR_TELEMETRY_MASTER_KEY)." -ForegroundColor Red
+            Write-Host "  Source ~/.smirror-deploy.env first, or drop -WithTelemetryKey for a no-key dev build." -ForegroundColor Red
+            exit 1
+        }
+        if ($masterHex.Length -ne 64) {
+            Write-Host " FAILED" -ForegroundColor Red
+            Write-Host "  Master key length is $($masterHex.Length); expected 64 hex chars." -ForegroundColor Red
+            exit 1
+        }
+        try {
+            $masterBytes = New-Object byte[] ($masterHex.Length / 2)
+            for ($i = 0; $i -lt $masterBytes.Length; $i++) {
+                $masterBytes[$i] = [Convert]::ToByte($masterHex.Substring($i * 2, 2), 16)
+            }
+        } catch {
+            Write-Host " FAILED" -ForegroundColor Red
+            Write-Host "  Master key is not valid hex: $_" -ForegroundColor Red
+            exit 1
+        }
+        $hmac = [System.Security.Cryptography.HMACSHA256]::new()
+        try {
+            $hmac.Key = $masterBytes
+            $hash = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Version))
+        } finally {
+            $hmac.Dispose()
+        }
+        $derived = -join ($hash | ForEach-Object { $_.ToString('x2') })
+        if ($derived.Length -ne 64) {
+            Write-Host " FAILED" -ForegroundColor Red
+            Write-Host "  Derived key has unexpected length: $($derived.Length) (expected 64)." -ForegroundColor Red
+            exit 1
+        }
+        $ldflags += " -X github.com/qraveh/SelectiveMirror/internal/telemetry.buildKey=$derived"
+    }
+
     Push-Location $root
     try {
         # CGo required (mattn/go-sqlite3). Ensure a C compiler is on PATH.
@@ -96,7 +171,11 @@ if ($SkipGoBuild) {
             exit 1
         }
         $size = (Get-Item $exe).Length / 1MB
-        Write-Host (" OK ({0:N1} MB)" -f $size) -ForegroundColor Green
+        if ($WithTelemetryKey) {
+            Write-Host (" OK ({0:N1} MB; valid-HMAC build, telemetry submission enabled)" -f $size) -ForegroundColor Green
+        } else {
+            Write-Host (" OK ({0:N1} MB)" -f $size) -ForegroundColor Green
+        }
     } finally {
         Pop-Location
     }
