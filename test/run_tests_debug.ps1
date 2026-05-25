@@ -21,7 +21,7 @@ $env:Path = "$GoPath;$env:Path"
 # ── Globals ──────────────────────────────────────────────────────────
 
 # Use project dir instead of TEMP to avoid Application Control policies blocking exe from TEMP
-$TestRoot    = Join-Path "C:\SelectiveMirror" "_testrun_$(Get-Random)"
+$TestRoot    = Join-Path "C:\mine\SelectiveMirror" "_testrun_$(Get-Random)"
 $SrcDir      = Join-Path $TestRoot "source"
 $DstDir      = Join-Path $TestRoot "destination"
 $DataDir     = Join-Path $TestRoot "data"
@@ -77,7 +77,7 @@ function Invoke-Smirror {
     $oldPref = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     $oldDir = Get-Location
-    Set-Location C:\SelectiveMirror
+    Set-Location C:\mine\SelectiveMirror
     try {
         $output = & $GoBin run $SmirrorPkg @args 2>&1 | Out-String
     } catch {
@@ -91,7 +91,7 @@ function Invoke-Smirror {
 function Start-Smirror {
     Write-Host "  Starting smirror..." -ForegroundColor Yellow
     $script:SmirrorProc = Start-Process -FilePath $GoBin -ArgumentList "run",$SmirrorPkg,"start","--config",$ConfigPath `
-        -WindowStyle Hidden -PassThru -WorkingDirectory "C:\SelectiveMirror"
+        -WindowStyle Hidden -PassThru -WorkingDirectory "C:\mine\SelectiveMirror"
     Start-Sleep 8  # go run needs compile time on first launch
     if ($SmirrorProc.HasExited) {
         throw "smirror exited immediately (exit code $($SmirrorProc.ExitCode))"
@@ -116,7 +116,7 @@ function Cleanup {
     rclone config delete testlocal *>$null | Out-Null
     # Clean up test directory
     if (Test-Path $TestRoot) {
-        Copy-Item (Join-Path $DataDir "test.log") "C:/SelectiveMirror/_debug_test.log" -ErrorAction SilentlyContinue; Remove-Item -Path $TestRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Copy-Item (Join-Path $DataDir "test.log") "C:/mine/SelectiveMirror/_debug_test.log" -ErrorAction SilentlyContinue; Remove-Item -Path $TestRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -795,7 +795,7 @@ try {
 
     # Verify build compiles (go run will compile on first use)
     Write-Host "Verifying build..." -ForegroundColor Yellow
-    Push-Location C:\SelectiveMirror
+    Push-Location C:\mine\SelectiveMirror
     & $GoBin build ./cmd/smirror/
     if ($LASTEXITCODE -ne 0) { throw "Build failed" }
     Pop-Location
@@ -805,7 +805,7 @@ try {
 
     # Unit tests (run before smirror starts to avoid lock contention)
     Write-Host "`nRunning unit tests..." -ForegroundColor Yellow
-    Push-Location C:\SelectiveMirror
+    Push-Location C:\mine\SelectiveMirror
     $unitOutput = ""
     try {
         $proc = Start-Process -FilePath "$GoPath\go.exe" -ArgumentList "test","./internal/..." `

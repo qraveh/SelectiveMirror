@@ -45,7 +45,7 @@ $GoBin = $goCmd.Source
 
 # RepoRoot resolves to the parent of test/ (where this script lives),
 # so the script works regardless of where the repo is checked out
-# (C:\SelectiveMirror locally, D:\a\SelectiveMirror\SelectiveMirror
+# (C:\mine\SelectiveMirror locally, D:\a\SelectiveMirror\SelectiveMirror
 # on GitHub-hosted windows runners, etc.).
 $RepoRoot    = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 # Test workspace under $env:TEMP so we don't pollute the repo with

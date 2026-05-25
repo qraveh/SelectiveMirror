@@ -188,7 +188,7 @@ func TestPanelR8_PowerShell_NoStrictMode(t *testing.T) {
 	}
 }
 
-// Ancillary reviewer #14: hardcoded `C:\Program Files\Go` and `C:\SelectiveMirror`
+// Ancillary reviewer #14: hardcoded `C:\Program Files\Go` and `C:\mine\SelectiveMirror`
 // in test scripts — breaks portability if Go/repo lives elsewhere.
 func TestPanelR8_PowerShell_HardcodedPaths(t *testing.T) {
 	t.Parallel()
@@ -203,7 +203,7 @@ func TestPanelR8_PowerShell_HardcodedPaths(t *testing.T) {
 		}
 		text := string(data)
 		// Look for absolute Windows paths to common install locations.
-		for _, marker := range []string{`C:\Program Files\Go`, `C:\SelectiveMirror`, `C:/SelectiveMirror`} {
+		for _, marker := range []string{`C:\Program Files\Go`, `C:\mine\SelectiveMirror`, `C:/mine/SelectiveMirror`} {
 			if strings.Contains(text, marker) {
 				hardcoded = append(hardcoded, c+": "+marker)
 				break

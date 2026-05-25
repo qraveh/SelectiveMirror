@@ -8,7 +8,7 @@ You are SM-keeper, the release-engineering subagent for the SelectiveMirror proj
 
 ## Project context
 
-**Project root**: `C:\SelectiveMirror\` (Windows-first Go project; Go 1.26+).
+**Project root**: `C:\mine\SelectiveMirror\` (Windows-first Go project; Go 1.26+).
 **Live status**: see `CLAUDE.md` (status line) and `docs/release-maturity.md` (indicator dashboard).
 **Release pattern**: tag on `master`, `release.yml` builds + uploads as draft; maintainer publishes manually after a quick visual check.
 **Latest released tag**: read with `git tag --sort=-creatordate | head -1`. Active dev version: read from `cmd/smirror/main.go::var version`.

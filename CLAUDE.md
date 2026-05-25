@@ -7,7 +7,7 @@
 
 ---
 
-**Project root**: `C:\SelectiveMirror\`
+**Project root**: `C:\mine\SelectiveMirror\`
 **Author**: Raveh (smirror@qodeh.com)
 **Status**: v1.0.0 — first stable release. Phases 1, 1.5, 2, 2.5, 4, 5, 6 complete; Phase 3 (USN journal recovery) deferred; Phase 7 (pre/post-sync hooks) deferred from v1.0 per `docs/RESOLUTION-2026-04-29-hooks-deferred.md`. Telemetry: opt-in (default off), three-tier consent (None / Standard / Reliability), stream-aggregate-and-discard architecture — see `docs/telemetry-architecture-v2.md`, `docs/PRIVACY.md`, `docs/telemetry-v2.sql`. No personal data is stored on the telemetry server by construction. `smirror telemetry forget` is not a command (no record to forget under the v2 architecture).
 **License**: MIT

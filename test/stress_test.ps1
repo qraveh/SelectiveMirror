@@ -18,7 +18,7 @@ $env:Path = "$GoPath;$env:Path"
 
 # ── Config ──────────────────────────────────────────────────────────
 
-$TestRoot    = Join-Path "C:\SelectiveMirror" "_stresstest_$(Get-Random)"
+$TestRoot    = Join-Path "C:\mine\SelectiveMirror" "_stresstest_$(Get-Random)"
 $SrcDir1     = Join-Path $TestRoot "mirror-alpha"
 $SrcDir2     = Join-Path $TestRoot "mirror-beta"
 $SrcDir3     = Join-Path $TestRoot "mirror-gamma"
@@ -30,7 +30,7 @@ $ConfigPath  = Join-Path $DataDir  "config.yaml"
 $StateDB     = Join-Path $DataDir  "state.db"
 $LogFile     = Join-Path $DataDir  "stress.log"
 $GoBin       = "$GoPath\go.exe"
-$SmirrorExe  = "C:\SelectiveMirror\bin\smirror.exe"
+$SmirrorExe  = "C:\mine\SelectiveMirror\bin\smirror.exe"
 $SmirrorPkg  = "./cmd/smirror/"
 $Passed      = 0
 $Failed      = 0

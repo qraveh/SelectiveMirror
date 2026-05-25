@@ -10,10 +10,10 @@
 **Accountable owner**: maintainer (project lead). All actions in §9 are owned by the maintainer; the *role-context* column names the discipline framing adopted when executing the action.
 **Audit method**: internal multi-role review process — Requirements (29148), Architecture/Quality (25010 / 25023), Documentation (document attributes), Implementation (29119 process implementation). Independent reviewer + edge-case hunter passes were applied to draft v0.1 (2026-04-27); this v0.2 incorporates their findings.
 **Source documents audited** (refreshed 2026-04-29 evening for v1.0 baseline):
-- `C:\SelectiveMirror\docs\SRS.md` (v1.1, refreshed through the v0.6 remediation pass; NFR-AU/RS/PR stubs landed in §4.6.5/.6/.7)
-- `C:\SelectiveMirror\docs\VV-Plan.md` (post-remediation re-measurement; §5.1 carries 66.0% aggregate / 650+ unit tests against 0.9.53-dev baseline; §1.1 V&V table corrected)
-- `C:\SelectiveMirror\docs\release-maturity.md` (system-validation row 🟡)
-- `C:\SelectiveMirror\docs\RESOLUTION-2026-04-29-hooks-deferred.md` (Phase 7 deferral record)
+- `C:\mine\SelectiveMirror\docs\SRS.md` (v1.1, refreshed through the v0.6 remediation pass; NFR-AU/RS/PR stubs landed in §4.6.5/.6/.7)
+- `C:\mine\SelectiveMirror\docs\VV-Plan.md` (post-remediation re-measurement; §5.1 carries 66.0% aggregate / 650+ unit tests against 0.9.53-dev baseline; §1.1 V&V table corrected)
+- `C:\mine\SelectiveMirror\docs\release-maturity.md` (system-validation row 🟡)
+- `C:\mine\SelectiveMirror\docs\RESOLUTION-2026-04-29-hooks-deferred.md` (Phase 7 deferral record)
 - An external audit report and the audit's pre-tag action list (kept with the maintainer; not part of the public tracked set)
 - Supporting: `CLAUDE.md`, `CHANGELOG.md` `[1.0.0]`, `.github/workflows/ci.yml` (per-package floor 50% + waivers), `docs/security-audit-2026-04-18.md`
 
@@ -613,7 +613,7 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 
 | Field | Value |
 |---|---|
-| Document path | `C:\SelectiveMirror\docs\iso-compliance.md` |
+| Document path | `C:\mine\SelectiveMirror\docs\iso-compliance.md` |
 | Linked from | `SRS.md` §1.4 ✅ (added v0.2) ; `VV-Plan.md` §2 ✅ (added v0.2) |
 | Status field | **SELF-ASSESSMENT** (see §1) |
 | Change log | Maintained inline below |

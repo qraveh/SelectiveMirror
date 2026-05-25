@@ -19,7 +19,7 @@ import (
 var (
 	smirrorBin string // absolute path to built smirror.exe
 	rcloneBin  string // absolute path to rclone (empty if not present)
-	repoRoot   string // C:\SelectiveMirror
+	repoRoot   string // C:\mine\SelectiveMirror
 )
 
 // requireRclone skips the test if rclone wasn't detected on PATH at

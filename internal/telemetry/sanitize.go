@@ -1,7 +1,7 @@
 // Shared report sanitization for the report-bug and crash-report paths.
 //
 // The validation contract (docs/PRIVACY.md + the system-validation
-// suite at C:\SelectiveMirror\system-validation) requires that bug
+// suite at C:\mine\SelectiveMirror\system-validation) requires that bug
 // reports and crash reports — both the on-disk save and the version
 // posted to GitHub via --browser — strip:
 //
