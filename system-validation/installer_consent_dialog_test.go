@@ -97,9 +97,15 @@ func TestInstallerConsentDialog_PreservesExistingTierOnUpgrade(t *testing.T) {
 	// The SetProperty must target INSTALL_TELEMETRY_TIER and source
 	// from EXISTING_TELEMETRY_TIER. Use a multi-substring match so we
 	// don't depend on attribute ordering.
-	setPropRe := regexp.MustCompile(`(?s)<SetProperty\b[^>]*?Property="INSTALL_TELEMETRY_TIER"[^>]*?Value="\[EXISTING_TELEMETRY_TIER\]"`)
+	//
+	// SM-218 close-out: WiX v6 changed the attribute layout from
+	// v5's `Property="<target>"` to v6's `Id="<target>"`. The regex
+	// below matches the v6 form (which is what the WiX v6 build
+	// requires). If we ever go back to a WiX-v5 schema, this regex
+	// must be updated to match `Property="..."` instead.
+	setPropRe := regexp.MustCompile(`(?s)<SetProperty\b[^>]*?Id="INSTALL_TELEMETRY_TIER"[^>]*?Value="\[EXISTING_TELEMETRY_TIER\]"`)
 	if !setPropRe.MatchString(wxi) {
-		t.Errorf("SetProperty does not propagate EXISTING_TELEMETRY_TIER → INSTALL_TELEMETRY_TIER. Without that propagation, an upgrade install with a prior Reliability choice would silently downgrade to the dialog's default (none) when the registry component fires.")
+		t.Errorf("SetProperty does not propagate EXISTING_TELEMETRY_TIER → INSTALL_TELEMETRY_TIER (expected WiX-v6 form `Id=\"INSTALL_TELEMETRY_TIER\"` post-SM-218). Without that propagation, an upgrade install with a prior Reliability choice would silently downgrade to the dialog's default (none) when the registry component fires.")
 	}
 
 	// (c) Conditional Publish: LicenseAgreementDlg.Next routes to
