@@ -1,0 +1,13 @@
+# Filter rules for the tutorial source directory.
+# Anything matching a pattern below is NOT mirrored to the remote.
+# Syntax is the same as .gitignore.
+
+# By extension
+*.tmp
+*.log
+
+# A specific hidden (dotfile) file
+.dont_mirror_hidden.txt
+
+# A specific directory and everything in it
+/dont_mirror_this_dir/

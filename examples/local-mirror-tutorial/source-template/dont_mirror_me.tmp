@@ -1,0 +1,1 @@
+content of dont_mirror_me.tmp -- excluded by `*.tmp` in .syncignore

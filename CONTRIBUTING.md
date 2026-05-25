@@ -2,6 +2,12 @@
 
 Thank you for your interest in contributing to SelectiveMirror.
 
+> **New to the tool?** Run the hands-on tutorial at
+> [`examples/local-mirror-tutorial/`](examples/local-mirror-tutorial/) first
+> — five minutes for the happy path, twenty for the deep dive. Understanding
+> how `smirror` looks from the user's side is the fastest way to orient
+> before touching the code.
+
 ## Prerequisites
 
 - **Go 1.26+** -- `winget install GoLang.Go`

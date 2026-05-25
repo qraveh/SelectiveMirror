@@ -1,0 +1,1 @@
+content of dont_mirror_this_dir/stuff.txt -- entire dir excluded by `/dont_mirror_this_dir/` in .syncignore

@@ -27,6 +27,10 @@ vendor/
 
 # Logs
 *.log
+# Tutorial fixture: the dont_mirror_me.log file is a deliberate test
+# fixture exercising the .syncignore filter. Override the global *.log
+# rule for it (and any other *.log fixtures placed alongside it).
+!examples/local-mirror-tutorial/source-template/*.log
 
 # User config
 config.yaml

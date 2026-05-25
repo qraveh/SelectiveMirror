@@ -1,0 +1,1 @@
+content of dont_mirror_me.log -- excluded by `*.log` in .syncignore

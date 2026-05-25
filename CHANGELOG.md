@@ -47,6 +47,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   detected values are ENUM-valid; structural guard that the per-platform
   `detect_*.go` files exist).
 
+- **Hands-on local-mirror tutorial at `examples/local-mirror-tutorial/`**
+  (**SM-221**). Self-contained walkthrough that uses rclone's
+  local-filesystem backend as a stand-in for a real cloud remote, so users
+  can exercise `smirror` end-to-end without any cloud account, network
+  access, or credentials. Part 1 (≈5 minutes) covers `addmirror`,
+  `dry-run`, `sync-now`, and live-edit propagation; Part 2 (≈15 minutes)
+  covers `explain`, quarantine on delete, `verify` drift detection, live
+  stats, `task install` for background mode, and graduation to a real
+  cloud backend. The fixture directory uses deliberately self-describing
+  filenames (`mirror_me_*`, `dont_mirror_*`) so the filter's behavior is
+  visible at a glance, with neutral-named files (`file_a`, `file_b`)
+  reserved for a toggle exercise. Linked from the main README's Quick
+  Start section and from CONTRIBUTING.md as the recommended entry point
+  for new users. Also shipped via MSI install at
+  `%ProgramFiles%\SelectiveMirror\examples\local-mirror-tutorial\` so
+  MSI-only users can run the tutorial without a source checkout.
+
 ### Changed
 
 - **MSI installer telemetry consent dialog reduced from three choices to two**
