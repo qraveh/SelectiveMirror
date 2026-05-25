@@ -271,7 +271,18 @@ BEGIN
     END IF;
 
     -- Derive per-version key.
-    derived_key := hmac(claimed_version::BYTEA, master_key::BYTEA, 'sha256');
+    --
+    -- SM-219 (2026-05-21): master_key is the HEX REPRESENTATION of a
+    -- 32-byte random secret. It MUST be hex-decoded before use as an
+    -- HMAC key, to match the binary's derivation in
+    -- .github/workflows/release.yml (`bytes.fromhex(master)`) and
+    -- scripts/telemetry-v2-smoke-test.py (`bytes.fromhex(master_key)`).
+    -- The pre-SM-219 form `master_key::BYTEA` cast the UTF-8 bytes of
+    -- the hex string itself, which produced a different derived key
+    -- than the binary computed — every CI-built smirror.exe was being
+    -- silently rejected because its HMAC never matched the server's
+    -- expectation. See BugTracker SM-219.
+    derived_key := hmac(claimed_version::BYTEA, decode(master_key, 'hex'), 'sha256');
 
     -- Compute expected HMAC over the canonical payload bytes.
     expected_hmac := hmac(canonical_payload, derived_key, 'sha256');

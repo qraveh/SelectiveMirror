@@ -104,9 +104,19 @@ def canonical_json(obj: Any) -> str:
 
 
 def derive_version_key(master_key: str, version: str) -> bytes:
-    """Match docs/telemetry-rls.sql verify_versioned_hmac key derivation."""
+    """Match docs/telemetry-v2.sql verify_versioned_hmac key derivation.
+
+    SM-219 (2026-05-21): master_key is the HEX REPRESENTATION of a 32-byte
+    secret. Hex-decode before HMAC; the prior `master_key.encode("utf-8")`
+    form hashed the literal hex digits, which didn't match the binary's
+    derivation in release.yml. The smoke test was the only thing the
+    pre-SM-219 broken pipeline accepted — CI-built smirror binaries were
+    silently rejected. After SM-219, both the SQL and this script
+    hex-decode the master key, matching release.yml + smirror's
+    internal/telemetry derivation.
+    """
     return hmac.new(
-        master_key.encode("utf-8"),
+        bytes.fromhex(master_key),
         version.encode("utf-8"),
         hashlib.sha256,
     ).digest()
