@@ -94,6 +94,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `<SetProperty Id=<target> Action=<action>`; no per-push CI workflow
   builds the MSI so the regression went undetected for 12 days.
 
+- **R-15 closed — `internal/fsutil` direct unit tests.** v1.0.0
+  CHANGELOG promised "removes the `internal/fsutil` waiver" for
+  v1.0.1. Done: two new test files
+  (`internal/fsutil/reparse_windows_test.go` covering 5 cases —
+  regular file, directory, NTFS junction, nonexistent path,
+  null-byte-in-path — and `internal/fsutil/reparse_other_test.go`
+  for the trivial POSIX stub). Coverage went 0.0% → 88.9% — well
+  above the 50% per-package floor. Waiver line in `.github/
+  workflows/ci.yml` is removed (commented out with the R-15
+  closure marker).
+
 - **Open Medium closed: Symlink-handling asymmetry between foreground
   and service mode.** v1.0.0 shipped with a documented asymmetry:
   service mode rejected symlinks in watched directories (SEC-H5 /

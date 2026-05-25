@@ -121,7 +121,9 @@ jobs:
           # unit-tested (legacy integration-only code, trivial transitively-
           # tested helpers, blocked-on-refactor like rclone).
           $waivers = @{
-            'internal/fsutil'  = 'Trivial path helpers tested transitively via internal/sync; no direct caller path; v1.0.x no-op fix.';
+            # 'internal/fsutil' — closed in v1.0.1 (R-15). Direct unit
+            # tests for IsReparsePoint in internal/fsutil/reparse_windows_test.go
+            # + reparse_other_test.go; coverage 0.0% → 88.9%.
             'internal/service' = 'Windows SCM integration; integration-tested in test/run_tests.ps1, not unit-testable from a non-service host.';
             'internal/rclone'  = 'Detect() needs interface mocks for proper unit coverage; X-04 follow-up; v1.0.1.';
           }
