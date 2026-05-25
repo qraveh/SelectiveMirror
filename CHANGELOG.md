@@ -94,6 +94,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `<SetProperty Id=<target> Action=<action>`; no per-push CI workflow
   builds the MSI so the regression went undetected for 12 days.
 
+- **R-12 — NFR-PR-01 first ratio-of-record across the v1.0.0 → v1.0.1
+  window** (closes the v1.0.0 "Deferred to v1.0.1" commitment, per
+  A-25023-02). The privacy contract in `docs/SRS.md §4.6.7` requires
+  `count(records WHERE consent_tier='none') / count(distinct install_id
+  WHERE consent_tier='none')` across each release window to be `0.000`.
+
+  For v1.0.0 → v1.0.1: the measurement is `0 / 0` (vacuously satisfied).
+  Reason: from v1.0.0's tag (2026-05-04) through 2026-05-21 the
+  telemetry pipeline was broken end-to-end by SM-219 (see below) — zero
+  contributions were possible regardless of tier choice. SM-219's
+  migration deployed to the live Supabase project on 2026-05-21
+  restored the pipeline. The post-fix window (2026-05-21 onward) saw
+  no real-user `first_seen` or `upgrade` events; the maintainer-side
+  validation events used for SM-219 / SM-220 verification have been
+  removed from the rollup table (cleaned 2026-05-25 after verification
+  was complete). Net: 0 production records of any tier, 0 of which
+  are None-tier — ratio `0/0` is technically vacuous but satisfies
+  the contract.
+
+  The first quantified non-vacuous ratio will appear in the v1.0.1 →
+  v1.0.2 window release notes, once real-user installs of v1.0.1 (the
+  first telemetry-functional release) accumulate. Until then the
+  pipeline is exercised but unmeasured-at-scale.
+
 - **SM-219 — Telemetry HMAC master-key derivation mismatch** (**Critical**;
   fixed in the v1.0.1 cycle, was a silent v1.0.0 defect).
   `docs/telemetry-v2.sql::verify_versioned_hmac` cast the TEXT master key
