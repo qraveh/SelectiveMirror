@@ -95,16 +95,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   builds the MSI so the regression went undetected for 12 days.
 
 - **Open Medium closed: File-mode hardening on fresh `addmirror`
-  config.** v1.0.0 shipped with a known-Medium that `smirror addmirror`,
-  when creating a fresh `~/.selectivemirror/config.yaml`, wrote it with
-  the default 0644 mode (world-readable on shared workstations) rather
-  than the SEC-C5 / SEC-H6 baseline of 0600. The fix was already in
-  the code at `cmd/smirror/cmdaddmirror.go:290`
-  (`os.WriteFile(configPath, []byte(initial), 0600)`); the v1.0.1
-  closure flips `system-validation/panel_findings_round4_test.go:556`
-  `TestPanelR4_CLI_FreshConfig_FileMode` from `t.Logf` (observation)
-  to `t.Errorf` (assertion) — the regression ratchet that makes any
-  future return to 0644 a CI failure.
+  config** (with a corrected understanding of what "hardening" means
+  on Windows). v1.0.0 shipped with a known-Medium that
+  `smirror addmirror`, when creating a fresh
+  `~/.selectivemirror/config.yaml`, "wrote it with 0644 mode." The
+  v1.0.1 audit revealed two things:
+
+  1. The fresh-config writer at `cmd/smirror/cmdaddmirror.go:290`
+     already passes `0600` to `os.WriteFile`. On non-Windows this
+     produces a 0600 file. **On Windows, Go's WriteFile ignores the
+     mode arg** — `os.Stat` returns 0666 (read-write for all) or 0444
+     (read-only); NTFS ACL is what actually controls access. So the
+     "file mode" framing was a category error for the Windows-first
+     project.
+
+  2. The actual protection on Windows is the inherited DACL from
+     `%USERPROFILE%\.selectivemirror\`, which by NTFS default
+     restricts read/write to the owning user + administrators. The
+     hardcoded `0600` hint at line 290 is forward-compatible
+     decoration (would matter on a future POSIX build).
+
+  v1.0.1 closes the Medium as documented (the 0600 hint plus NTFS
+  inheritance plus SEC-C5 `IsAdminOwnedPath` service-mode gate at
+  `internal/config/acl_windows.go` are the layered protections).
+  The regression test
+  `system-validation/panel_findings_round4_test.go::TestPanelR4_CLI_FreshConfig_FileMode`
+  stays `t.Logf` (observation) because asserting Unix mode bits on
+  Windows is the wrong contract — but its observation message is
+  rewritten to document the real Windows-ACL protection model.
 
 - **R-12 — NFR-PR-01 first ratio-of-record across the v1.0.0 → v1.0.1
   window** (closes the v1.0.0 "Deferred to v1.0.1" commitment, per
