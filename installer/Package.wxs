@@ -35,6 +35,18 @@
     <!-- UI -->
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="Resources\license.rtf" />
+
+    <!-- Branded installer artwork. Replaces the WiX-default CD-ROM-on-red
+         bitmaps with the SelectiveMirror folders+arrow logo on white.
+         Both BMPs are 24-bit, generated from Resources\sm_icon.png by the
+         PIL snippet in Resources\README.md; regenerate any time the
+         source PNG changes.
+
+           WixUIDialogBmp (493x312): Welcome and Exit dialogs left graphic.
+           WixUIBannerBmp (493x58):  inner-dialog top banner (License /
+                                     InstallDir / Tier / Progress / etc.). -->
+    <WixVariable Id="WixUIDialogBmp" Value="Resources\WelcomeDlgBmp.bmp" />
+    <WixVariable Id="WixUIBannerBmp" Value="Resources\BannerBmp.bmp" />
     <!-- PR-S2 (panel review pre-release 2026-04-28): pull in the
          telemetry-tier selection dialog defined in
          installer/TelemetryConsent.wxi. The UI element there contains
