@@ -553,10 +553,17 @@ func TestPanelR4_CLI_FreshConfig_FileMode(t *testing.T) {
 		t.Fatalf("config not created: %v", err)
 	}
 	mode := info.Mode().Perm()
+	// v1.0.1 close-out of the Medium: SEC-H6 fix is at
+	// cmd/smirror/cmdaddmirror.go:290 (fresh-config writer uses 0600).
+	// Test flipped from t.Logf (observation) to t.Errorf (assertion)
+	// to ratchet against regression. SECURITY.md baseline requires
+	// 0600 because config.yaml may carry rclone remote URIs,
+	// alert_webhook URLs, and pre/post-sync hook commands.
 	if mode != 0600 {
-		t.Logf("PANEL OBS: fresh config.yaml created with mode %o (expected 0600 per SEC-C5). "+
-			"SECURITY.md baseline says config should be 0600 because it may carry remote names + "+
-			"webhook URLs. The 0644 mode (world-readable) is unsafe on shared workstations.",
+		t.Errorf("fresh config.yaml created with mode %o (expected 0600 per SEC-C5/SEC-H6). "+
+			"SECURITY.md baseline says config must be 0600 because it may carry remote names + "+
+			"webhook URLs + hook commands. The 0644 mode (world-readable) is unsafe on shared "+
+			"workstations and reopens the v1.0.0 Open Medium that was closed in v1.0.1.",
 			mode)
 	}
 }

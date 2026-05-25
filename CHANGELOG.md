@@ -94,6 +94,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   `<SetProperty Id=<target> Action=<action>`; no per-push CI workflow
   builds the MSI so the regression went undetected for 12 days.
 
+- **Open Medium closed: File-mode hardening on fresh `addmirror`
+  config.** v1.0.0 shipped with a known-Medium that `smirror addmirror`,
+  when creating a fresh `~/.selectivemirror/config.yaml`, wrote it with
+  the default 0644 mode (world-readable on shared workstations) rather
+  than the SEC-C5 / SEC-H6 baseline of 0600. The fix was already in
+  the code at `cmd/smirror/cmdaddmirror.go:290`
+  (`os.WriteFile(configPath, []byte(initial), 0600)`); the v1.0.1
+  closure flips `system-validation/panel_findings_round4_test.go:556`
+  `TestPanelR4_CLI_FreshConfig_FileMode` from `t.Logf` (observation)
+  to `t.Errorf` (assertion) — the regression ratchet that makes any
+  future return to 0644 a CI failure.
+
 - **R-12 — NFR-PR-01 first ratio-of-record across the v1.0.0 → v1.0.1
   window** (closes the v1.0.0 "Deferred to v1.0.1" commitment, per
   A-25023-02). The privacy contract in `docs/SRS.md §4.6.7` requires
