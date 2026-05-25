@@ -121,11 +121,14 @@ The output should include `local-tutorial:`.
 
 ### Step 3 — Register the mirror and preview the plan
 
-Tell smirror to mirror the `source` folder to `local-tutorial:` at the
-absolute path of the `remote\source` folder you created:
+Tell smirror to mirror the `source` folder. The `-dest` is the **parent**
+folder on the remote where the mirror lands — smirror creates a
+subdirectory named after the mirror (`source`) inside it. So pass
+`local-tutorial:%CD%\remote` (not `\remote\source`) and your files will
+end up at `remote\source\…`:
 
 ```cmd
-smirror addmirror %CD%\source -dest local-tutorial:%CD%\remote\source
+smirror addmirror %CD%\source -dest local-tutorial:%CD%\remote
 ```
 
 This writes a mirror entry into your `~/.selectivemirror/config.yaml`
@@ -144,13 +147,19 @@ path by default.)
 You should see something like:
 
 ```
-Mirror: source
-  WOULD COPY: file_a.txt
-  WOULD COPY: file_b.txt
-  WOULD COPY: mirror_me_1.txt
-  WOULD COPY: mirror_me_2.txt
-  WOULD COPY: mirror_this_dir/nested_1.txt
-  WOULD COPY: mirror_this_dir/nested_2.txt
+=== Dry run: source ===
+Source: ...\source
+Destination: local-tutorial:...\remote\source
+Running: rclone copy ... --filter-from ... --dry-run ...
+
+NOTICE: file_a.txt: Skipped copy as --dry-run is set
+NOTICE: file_b.txt: Skipped copy as --dry-run is set
+NOTICE: mirror_me_1.txt: Skipped copy as --dry-run is set
+NOTICE: mirror_me_2.txt: Skipped copy as --dry-run is set
+NOTICE: mirror_this_dir/nested_1.txt: Skipped copy as --dry-run is set
+NOTICE: mirror_this_dir/nested_2.txt: Skipped copy as --dry-run is set
+
+Transferred:    6 / 6, 100%
 ```
 
 What's *not* in that list is what the filter excluded — the
@@ -257,8 +266,12 @@ smirror sync-now source
 dir remote\source\.quarantine
 ```
 
-`mirror_me_2.txt` is now in `.quarantine/` rather than gone. If the delete
-was a mistake, `move` it back.
+The remote copy is now in `.quarantine/` rather than gone. The filename
+includes a timestamp suffix so multiple quarantines of the same path
+don't collide — something like
+`mirror_me_2.txt.20260525T231826Z.597108600`. If the delete was a
+mistake, `move` the file back to `remote\source\` (drop the timestamp
+suffix from the destination name).
 
 If you do want strict 1:1 deletion mirroring, set `delete_policy: delete`
 in your config. See [docs/](../../docs/) for the full options and tradeoffs.
