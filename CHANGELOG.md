@@ -5,21 +5,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/msi-uninstall.ps1`** — stable-UpgradeCode MSI uninstaller.
+  Reads the UpgradeCode from `installer/Variables.wxi` at runtime, looks
+  up the currently-installed ProductCode via `WindowsInstaller.Installer.
+  RelatedProducts()`, runs `msiexec /x`. Survives every per-build
+  ProductCode change. Refuses to run non-admin (clear remediation
+  message). Captures msiexec `/L*V` log on failure for post-mortem.
+  Replaces the two-non-stable patterns (`msiexec /x <path-to-msi>` —
+  breaks when the source MSI is overwritten by the next build;
+  `msiexec /x {ProductCode}` — breaks every build since ProductCode is
+  WiX `Guid="*"`).
+
+- **`installer/build-msi.ps1 -WithTelemetryKey`** opt-in flag — derives
+  the per-version HMAC key from `$env:TELEMETRY_MASTER_KEY` and embeds
+  it via `-ldflags`, producing a binary that submits to the live
+  telemetry pipeline. Default (flag absent) remains a buildKey-empty
+  build the Worker rejects — the safe iteration loop with no production-
+  rollup-table pollution. Use only when deliberately exercising the
+  live pipeline (e.g., verifying a non-CI build can land a `first_seen`
+  event before tag). Mutually exclusive with `-SkipGoBuild`.
+
+- **SM-219 / SM-220 regression test ratchets** — three new test files:
+  `internal/telemetry/hmac_derivation_parity_test.go` (Go/Python/SQL
+  derivation parity test vector + source-property checks on the Python
+  and SQL files), `internal/telemetry/install_event_dimensions_test.go`
+  (ENUM-valid dimensions + no parenthesized-placeholder leak in built
+  payloads), `cmd/smirror/detect_test.go` (submit-path helpers must
+  not contain parenthesized placeholder returns; functional check that
+  detected values are ENUM-valid; structural guard that the per-platform
+  `detect_*.go` files exist).
+
 ### Changed
 
 - **MSI installer telemetry consent dialog reduced from three choices to two**
-  (**SM-217**) ("Don't share anything" — default — and "Share anonymous bug +
-  version counts"). The v1.0.0 dialog exposed all three CLI tiers (None /
-  Standard / Reliability) as fresh radio options; that surface produced six
-  independent UX-psychology failure modes (middle-option-default effect,
-  "more is better" anchoring, decision paralysis, scale-label confusion,
-  asymmetric privacy cost, and a v1.0.0-specific empty distinction since
-  reliability_snapshot is not yet implemented). The v1.0.1+ dialog presents
-  the binary the architecture actually expresses. The CLI three-tier surface
-  is unchanged (`smirror telemetry reliability` still works); silent
+  (**SM-217**) ("Don't share anything" — default — and "Help the maintainer
+  fix bugs and count installed versions"). The v1.0.0 dialog exposed all three
+  CLI tiers (None / Standard / Reliability) as fresh radio options; that
+  surface produced six independent UX-psychology failure modes (middle-option-
+  default effect, "more is better" anchoring, decision paralysis, scale-label
+  confusion, asymmetric privacy cost, and a v1.0.0-specific empty distinction
+  since reliability_snapshot is not yet implemented). The v1.0.1+ dialog
+  presents the binary the architecture actually expresses. The CLI three-tier
+  surface is unchanged (`smirror telemetry reliability` still works); silent
   installs continue to accept `INSTALL_TELEMETRY_TIER=reliability`. See
   [docs/PROPOSAL-2026-05-03-msi-binary-consent.md](docs/PROPOSAL-2026-05-03-msi-binary-consent.md)
-  for the full design memo and `C:/BugTracker/projects/SelectiveMirror/SM-217.md`
+  for the full design memo and `C:/mine/BugTracker/projects/SelectiveMirror/SM-217.md`
   for the canonical bug record.
 
 - **Upgrade installs preserve the user's prior tier choice.** The new
@@ -28,6 +60,67 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   consent dialog is skipped entirely and the tier is preserved across the
   upgrade. v1.0.0 users who chose Reliability keep Reliability without
   re-prompt.
+
+- **MSI setup-wizard artwork branded.** Welcome/Exit dialog graphic
+  (`installer/Resources/WelcomeDlgBmp.bmp`, 493×312) and inner-dialog top
+  banner (`installer/Resources/BannerBmp.bmp`, 493×58) now display the
+  SelectiveMirror folders+arrow logo on white, replacing the WiX-default
+  CD-ROM-on-red bitmaps. Generated from `installer/Resources/sm_icon.png`
+  via PIL; regeneration recipe in `installer/Resources/README.md`.
+
+- **SM-220 — install_method / background_mode / rclone_version dimensions
+  now report real detected values.** Pre-SM-220, the three helpers in
+  `cmd/smirror/cmd_telemetry.go` returned hardcoded placeholders:
+  `detectInstallMethod()` → `"unknown"`, `detectBackgroundMode()` →
+  `"unknown"`, `bestEffortRcloneVersion()` → `"(would be detected at
+  submit time)"`. The third one was particularly bad — it was a
+  parenthesized literal string that leaked unfiltered into actual
+  submitted rollup rows. New `cmd/smirror/detect_windows.go` implements
+  real detection: HKLM `ExePath` registry compare for install_method,
+  `service.IsWindowsService()` for background_mode; `bestEffortRcloneVersion`
+  now calls `internal/rclone.Detect(cfg.RclonePath)` returning a real
+  version or the ENUM-valid sentinel `"unknown"`. Task-mode detection
+  remains deferred to v1.0.x (would require an env-marker contract with
+  `internal/task`). Non-Windows builds (dev `go test ./...` only) keep
+  the "unknown" fallback via `detect_other.go`.
+
+### Fixed
+
+- **SM-218 — WiX v6 schema regression unblocked.** `installer/TelemetryConsent.wxi`
+  used the deprecated v5 `<SetProperty Id=<action> Property=<target>` form
+  which WiX v6 rejects with `error WIX0004: The SetProperty element
+  contains an unexpected attribute 'Property'`. MSI builds have been broken
+  since 2026-05-08. Replaced with the v6 form
+  `<SetProperty Id=<target> Action=<action>`; no per-push CI workflow
+  builds the MSI so the regression went undetected for 12 days.
+
+- **SM-219 — Telemetry HMAC master-key derivation mismatch** (**Critical**;
+  fixed in the v1.0.1 cycle, was a silent v1.0.0 defect).
+  `docs/telemetry-v2.sql::verify_versioned_hmac` cast the TEXT master key
+  to BYTEA (UTF-8 bytes of the hex string) while
+  `.github/workflows/release.yml` + every CI-built smirror binary
+  hex-decoded the same key into 32 raw bytes. The two interpretations
+  produced different derived keys, so every CI-built binary's
+  `first_seen` and `upgrade` event was silently rejected with
+  `{"ok": false, "error": "rejected"}`. Telemetry rollup tables stayed
+  at zero rows through the entire v1.0.0 release cycle as a consequence
+  — the "audience too small" framing in the maturity dashboard was
+  masking this defect. The smoke test happened to align with the SQL
+  side (UTF-8) and always passed, hiding the binary-side breakage.
+  Fix: SQL function now uses `decode(master_key, 'hex')` to align with
+  the binary; smoke-test script aligned with `bytes.fromhex(master_key)`.
+  SQL migration deployed to the live Supabase project 2026-05-21.
+  Regression ratchet: `internal/telemetry/hmac_derivation_parity_test.go`.
+  See `C:/mine/BugTracker/projects/SelectiveMirror/SM-219.md`.
+
+- **MSI installer consent dialog text microcopy.** Removed the redundant
+  "(default)" suffix from the "Don't share anything" radio (the radio
+  button's selected state already indicates default). Rewrote the
+  affirmative radio label from "Share anonymous bug + version counts —
+  Helps the maintainer prioritize fixes" to "Help the maintainer fix
+  bugs and count installed versions" — clearer action verb, fewer em-
+  dashes, identical privacy enumeration.
+
 
 ## [1.0.0] — 2026-05-05
 
