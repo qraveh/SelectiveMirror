@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ### Added
 
+- **`scripts/msi-info.ps1`** — read MSI metadata (ProductName /
+  ProductVersion / ProductCode / UpgradeCode / Manufacturer +
+  file size + SHA-256) without installing the package. Uses the
+  `WindowsInstaller.Installer` COM API in read-only mode; no admin
+  required. Useful for confirming a freshly-built MSI's
+  ProductVersion before publishing, asserting the built MSI's
+  version matches the git tag in CI, and verifying upgrade-path
+  integrity (same UpgradeCode + bumped ProductVersion). Supports
+  `-Property <name>` for pipeline use and `-Json` for CI tooling.
+
 - **`scripts/msi-uninstall.ps1`** — stable-UpgradeCode MSI uninstaller.
   Reads the UpgradeCode from `installer/Variables.wxi` at runtime, looks
   up the currently-installed ProductCode via `WindowsInstaller.Installer.
