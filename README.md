@@ -12,7 +12,9 @@
 
 ## What does it do?
 
-You register folders ("mirrors"). Each mirror watches a local path and pushes changes to a remote location:
+SelectiveMirror mirrors directories — **selectively** (per-folder `.syncignore`, gitignore syntax), **automatically** (on every file change, within seconds), **efficiently** (bandwidth-aware, API-quota-aware, no per-save spam), and **to any cloud** (Google Drive, S3, Dropbox, OneDrive, SFTP — 70+ rclone backends).
+
+A typical setup:
 
 ```
 C:\Projects\my-app    →  gdrive:Backup\my-app
@@ -20,9 +22,7 @@ C:\Documents          →  onedrive:Documents
 C:\notes              →  s3:my-bucket\notes
 ```
 
-Per-folder `.syncignore` files (gitignore syntax) keep `node_modules/`, build artifacts, temp files, and other noise out of the cloud. Each mirror runs independently — work on `my-app` doesn't trigger reconciliation of `notes`.
-
-File changes propagate within seconds. Files must be **stable** (size and modified-time unchanged for 200 ms, and not locked by another process) before they sync — this handles Office save-locks and editor save-storms without burning API quota.
+Per-folder `.syncignore` files keep `node_modules/`, build artifacts, temp files, and other noise out of the cloud. Each mirror runs independently — work on `my-app` doesn't trigger reconciliation of `notes`. Files must be **stable** (size and modified-time unchanged for 200 ms, not locked by another process) before they sync — handles Office save-locks and editor save-storms without burning API quota.
 
 ## How is this different from `rclone sync` on a cron?
 
