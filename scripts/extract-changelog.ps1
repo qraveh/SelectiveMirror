@@ -106,11 +106,39 @@ while ($section.Count -gt 0 -and [string]::IsNullOrWhiteSpace($section[-1])) {
     $section = $section[0..($section.Count - 2)]
 }
 
-# Compose the release-notes body. Lead with a one-line provenance note
-# so readers can tell whether this came from a promoted version section
-# or the [Unreleased] fallback.
-$header = @(
+# Compose the release-notes body.
+#
+# Lead with a Downloads block so the assets are visible-at-load on the
+# release page (GitHub's native Assets section sits at the bottom; this
+# duplicates the links at the top for one-click access). The URLs use
+# the stable per-tag form `releases/download/v$Version/<filename>` —
+# the filenames are version-free by `.goreleaser.yaml` design so this
+# template is portable across releases. The hardcoded `qraveh/
+# SelectiveMirror` owner/repo lives next to `repoOwner`/`repoName` in
+# `cmd/smirror/main.go`; update both together on a repo move.
+#
+# After the Downloads block, a one-line provenance note tells readers
+# whether the section came from a promoted version block or the
+# [Unreleased] fallback (-AllowMissing path, dryrun preview only).
+$tagUrl = "https://github.com/qraveh/SelectiveMirror/releases/download/v$Version"
+$downloads = @(
+    "## Downloads"
     ""
+    "- **[SelectiveMirror.msi]($tagUrl/SelectiveMirror.msi)** — Windows installer (MSI, recommended)"
+    "- **[SelectiveMirror_windows_amd64.zip]($tagUrl/SelectiveMirror_windows_amd64.zip)** — portable ZIP (no installer)"
+    "- **[checksums.txt]($tagUrl/checksums.txt)** — SHA-256 hashes for all artifacts"
+    ""
+    "Verify build provenance (independent of Authenticode signing):"
+    ""
+    '```bash'
+    "gh attestation verify SelectiveMirror.msi --owner qraveh"
+    '```'
+    ""
+    "---"
+    ""
+)
+
+$header = $downloads + @(
     "_Release notes extracted from CHANGELOG.md $source._"
     ""
 )
