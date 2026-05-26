@@ -238,7 +238,9 @@ smirror sync-now source
 type remote\source\mirror_me_1.txt
 ```
 
-The remote copy has your edit.
+The `type` output should now show two lines — the original
+`content of mirror_me_1.txt` plus your appended `additional line`.
+Smirror picked up your local edit and propagated it to the remote.
 
 In real use, you'd run `smirror start` and the watcher would pick up edits
 automatically — for the tutorial we're driving it manually with `sync-now`
