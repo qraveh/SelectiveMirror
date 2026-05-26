@@ -244,21 +244,11 @@ The `dont_mirror_*` files and `dont_mirror_this_dir/` are absent, exactly
 as the dry-run predicted.
 
 Now edit one of the synced files. `echo … >>` parses differently in
-cmd and PowerShell, so use the line that matches your shell:
-
-**PowerShell:**
-```
-Add-Content source\mirror_me_1.txt "additional line"
-```
-
-**cmd.exe:**
-```
-echo additional line>> source\mirror_me_1.txt
-```
-
-Then propagate the edit and read the remote copy (both shells):
+cmd and PowerShell on its own; wrapping in `cmd /c "…"` runs the
+redirect through cmd's parser and works the same in both shells:
 
 ```
+cmd /c "echo additional line>> source\mirror_me_1.txt"
 smirror sync-now source
 type remote\source\mirror_me_1.txt
 ```
@@ -299,20 +289,11 @@ This is the canonical "why isn't my file syncing?" tool.
 
 #### Try toggling a filter
 
-`file_a.txt` is currently included. Add it to `.syncignore`:
+`file_a.txt` is currently included. Add it to `.syncignore` (same
+`cmd /c "…"` wrapper as Step 4 — works in both shells):
 
-**PowerShell:**
 ```
-Add-Content source\.syncignore "file_a.txt"
-```
-
-**cmd.exe:**
-```
-echo file_a.txt>> source\.syncignore
-```
-
-Then ask smirror what changed:
-```
+cmd /c "echo file_a.txt>> source\.syncignore"
 smirror explain source file_a.txt
 ```
 
@@ -352,21 +333,10 @@ What if something *other* than smirror has touched the remote? Maybe
 another tool wrote a file there, or a previous run left orphans behind.
 `verify` reports drift in both directions.
 
-Add a "ghost" file directly to the remote. Same cmd-vs-PowerShell
-split as Step 4/5:
+Add a "ghost" file directly to the remote (same `cmd /c "…"` wrapper):
 
-**PowerShell:**
 ```
-Set-Content remote\source\ghost_file.txt "this came from somewhere else"
-```
-
-**cmd.exe:**
-```
-echo this came from somewhere else > remote\source\ghost_file.txt
-```
-
-Then ask smirror to check drift:
-```
+cmd /c "echo this came from somewhere else > remote\source\ghost_file.txt"
 smirror verify source
 ```
 
