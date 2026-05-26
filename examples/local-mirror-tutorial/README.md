@@ -430,12 +430,14 @@ needed. Everything you learned in this tutorial transfers directly.
 
 These commands undo everything the tutorial created, in the order
 things were added. If you skipped Step 9, the first command (task
-uninstall) is a harmless no-op. The last command uses `cmd /c "…"`
-so the `rmdir` runs through cmd's parser in both shells.
+uninstall) is a harmless no-op. `smirror unmirror` is interactive by
+default — `--yes` skips the `[y/N]` prompt so the block runs straight
+through. The last command uses `cmd /c "…"` so the `rmdir` runs
+through cmd's parser in both shells.
 
 ```
 smirror task uninstall
-smirror unmirror C:\smirror-tutorial\source
+smirror unmirror --yes C:\smirror-tutorial\source
 rclone config delete local-tutorial
 cd C:\
 cmd /c "rmdir /S /Q C:\smirror-tutorial"
