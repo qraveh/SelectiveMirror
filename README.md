@@ -8,8 +8,6 @@
 
 > 👉 **Try it in 5 minutes.** The [hands-on tutorial](examples/local-mirror-tutorial/) walks through setup, filtering, edits, deletes, and drift detection end-to-end. **No cloud account needed** — it uses rclone's local-filesystem backend as a stand-in. Part 1 is the 5-minute happy path; Part 2 adds 15 minutes of deeper features.
 
-**Privacy.** Opt-in telemetry, default off. No startup pings, no version checks, no traffic of any kind unless you explicitly opt in. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
-
 ---
 
 ## What does it do?
@@ -189,6 +187,10 @@ smirror clean --self
 ```
 
 The first start after a downgrade re-syncs known files via checksum comparison; bandwidth is bounded by your rclone backend's pacer.
+
+## Privacy
+
+Opt-in telemetry, default off. No startup pings, no version checks, no traffic of any kind unless you explicitly opt in via `smirror telemetry standard` or `smirror telemetry reliability`. Opted-in payloads carry anonymous categorical-bucket counts only — no file names, paths, or credentials. See [`docs/PRIVACY.md`](docs/PRIVACY.md) for the full architecture and contract.
 
 ## Status
 
