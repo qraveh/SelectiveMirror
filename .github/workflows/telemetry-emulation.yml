@@ -94,7 +94,7 @@ jobs:
           );
           INSERT INTO vault.decrypted_secrets (name, decrypted_secret)
           VALUES ('telemetry_master_key',
-                  'CIDEVKEY_DO_NOT_USE_IN_PRODUCTION_2026'
+                  '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
           ) ON CONFLICT (name) DO NOTHING;
           -- Stub the service_role + anon roles since we don't have
           -- Supabase's auth machinery locally.
@@ -153,7 +153,7 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
           # Local-only dev key. Matches the vault stub above so HMAC
           # verification succeeds for known-good test payloads.
-          TELEMETRY_MASTER_KEY: CIDEVKEY_DO_NOT_USE_IN_PRODUCTION_2026
+          TELEMETRY_MASTER_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           # The smoke test calls Supabase's PostgREST RPC by default;
           # under local Postgres there's no PostgREST, so we point at
           # a stub URL and use --skip-rollup to avoid the worker path.
@@ -189,7 +189,7 @@ jobs:
           assert out == want, f'canonical_json drift: got {out!r}, want {want!r}'
           # Sanity: build a payload, sign it, verify shape.
           payload = m.make_first_seen_payload('0.0.0-ci')
-          sig = m.sign_payload(payload, 'CIDEVKEY_DO_NOT_USE_IN_PRODUCTION_2026', '0.0.0-ci')
+          sig = m.sign_payload(payload, '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef', '0.0.0-ci')
           assert len(sig) == 64, f'expected 64-hex HMAC, got {len(sig)}'
           print('smoke harness sanity OK')
           "
