@@ -116,7 +116,8 @@ rclone version
 ```
 
 You should see something like `rclone v1.73.2`. If you see "rclone is
-not recognized" or similar, install it via winget:
+not recognized" or want to upgrade rclone to a newer version, install
+it via winget:
 
 ```
 winget install Rclone.Rclone
