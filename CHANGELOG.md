@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.0.59] — 2026-05-26
+
 ### Added
 
 - **`scripts/msi-info.ps1`** — read MSI metadata (ProductName /
@@ -73,7 +75,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   surface produced six independent UX-psychology failure modes (middle-option-
   default effect, "more is better" anchoring, decision paralysis, scale-label
   confusion, asymmetric privacy cost, and a v1.0.0-specific empty distinction
-  since reliability_snapshot is not yet implemented). The v1.0.37+ dialog
+  since reliability_snapshot is not yet implemented). The v1.0.59+ dialog
   presents the binary the architecture actually expresses. The CLI three-tier
   surface is unchanged (`smirror telemetry reliability` still works); silent
   installs continue to accept `INSTALL_TELEMETRY_TIER=reliability`. See
@@ -123,7 +125,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 - **R-16 closed — `docs/test-strategy.md` Organizational Test Strategy.**
   v1.0.0 CHANGELOG promised "closes A-29119-01; promotes the
-  ISO/IEC/IEEE 29119 compliance row to ✅" for v1.0.37. The
+  ISO/IEC/IEEE 29119 compliance row to ✅" for v1.0.59. The
   Test Strategy doc itself already existed (`docs/test-strategy.md`,
   v1.0 baseline, authored 2026-05-03 — single-page,
   references `docs/VV-Plan.md` and `docs/SRS.md` as the actual
@@ -138,7 +140,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 - **R-15 closed — `internal/fsutil` direct unit tests.** v1.0.0
   CHANGELOG promised "removes the `internal/fsutil` waiver" for
-  v1.0.37. Done: two new test files
+  v1.0.59. Done: two new test files
   (`internal/fsutil/reparse_windows_test.go` covering 5 cases —
   regular file, directory, NTFS junction, nonexistent path,
   null-byte-in-path — and `internal/fsutil/reparse_other_test.go`
@@ -155,7 +157,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   files (e.g. `C:\Windows\System32\config\SAM`) to the configured
   remote — a real exfiltration vector in foreground.
 
-  v1.0.37 aligns foreground with service mode's default-reject. New
+  v1.0.59 aligns foreground with service mode's default-reject. New
   `allow_symlinks: bool` top-level config field (default `false` →
   reject). Foreground startup at `cmd/smirror/main.go:725` now
   sets `syncEngine.RejectSymlinkedFiles = !cfg.AllowSymlinks`;
@@ -175,7 +177,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
   v1.0.x follow-up: a per-mirror `allow_symlinks` field on
   Project (rather than this global) is on the backlog. The
-  v1.0.37 global default-reject + global opt-in is the minimum
+  v1.0.59 global default-reject + global opt-in is the minimum
   viable closure that aligns both modes' default behavior on the
   hardened side.
 
@@ -184,7 +186,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   on Windows). v1.0.0 shipped with a known-Medium that
   `smirror addmirror`, when creating a fresh
   `~/.selectivemirror/config.yaml`, "wrote it with 0644 mode." The
-  v1.0.37 audit revealed two things:
+  v1.0.59 audit revealed two things:
 
   1. The fresh-config writer at `cmd/smirror/cmdaddmirror.go:290`
      already passes `0600` to `os.WriteFile`. On non-Windows this
@@ -200,7 +202,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
      hardcoded `0600` hint at line 290 is forward-compatible
      decoration (would matter on a future POSIX build).
 
-  v1.0.37 closes the Medium as documented (the 0600 hint plus NTFS
+  v1.0.59 closes the Medium as documented (the 0600 hint plus NTFS
   inheritance plus SEC-C5 `IsAdminOwnedPath` service-mode gate at
   `internal/config/acl_windows.go` are the layered protections).
   The regression test
@@ -209,13 +211,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   Windows is the wrong contract — but its observation message is
   rewritten to document the real Windows-ACL protection model.
 
-- **R-12 — NFR-PR-01 first ratio-of-record across the v1.0.0 → v1.0.37
-  window** (closes the v1.0.0 "Deferred to v1.0.37" commitment, per
+- **R-12 — NFR-PR-01 first ratio-of-record across the v1.0.0 → v1.0.59
+  window** (closes the v1.0.0 "Deferred to v1.0.59" commitment, per
   A-25023-02). The privacy contract in `docs/SRS.md §4.6.7` requires
   `count(records WHERE consent_tier='none') / count(distinct install_id
   WHERE consent_tier='none')` across each release window to be `0.000`.
 
-  For v1.0.0 → v1.0.37: the measurement is `0 / 0` (vacuously satisfied).
+  For v1.0.0 → v1.0.59: the measurement is `0 / 0` (vacuously satisfied).
   Reason: from v1.0.0's tag (2026-05-04) through 2026-05-21 the
   telemetry pipeline was broken end-to-end by SM-219 (see below) — zero
   contributions were possible regardless of tier choice. SM-219's
@@ -228,13 +230,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   are None-tier — ratio `0/0` is technically vacuous but satisfies
   the contract.
 
-  The first quantified non-vacuous ratio will appear in the v1.0.37 →
-  next release window release notes, once real-user installs of v1.0.37 (the
+  The first quantified non-vacuous ratio will appear in the v1.0.59 →
+  next release window release notes, once real-user installs of v1.0.59 (the
   first telemetry-functional release) accumulate. Until then the
   pipeline is exercised but unmeasured-at-scale.
 
 - **SM-219 — Telemetry HMAC master-key derivation mismatch** (**Critical**;
-  fixed in the v1.0.37 cycle, was a silent v1.0.0 defect).
+  fixed in the v1.0.59 cycle, was a silent v1.0.0 defect).
   `docs/telemetry-v2.sql::verify_versioned_hmac` cast the TEXT master key
   to BYTEA (UTF-8 bytes of the hex string) while
   `.github/workflows/release.yml` + every CI-built smirror binary
