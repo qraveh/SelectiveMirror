@@ -191,7 +191,8 @@ smirror dry-run source
 (`source` is the mirror name — smirror takes the last segment of the local
 path by default.)
 
-You should see something like:
+On a **fresh** workspace (nothing synced yet) you should see something
+like:
 
 ```
 === Dry run: source ===
@@ -210,9 +211,16 @@ Transferred:    6 / 6, 100%
 
 ```
 
-What's *not* in that list is what the filter excluded — the
-`dont_mirror_*` files and the `dont_mirror_this_dir/` folder. The filter
-worked without smirror ever touching a byte on the remote.
+If you've already run `sync-now` once (or the `remote\source\` folder
+still has files from an earlier walk-through), the output instead
+shows `Checks: 6 / 6, 100%` plus `INFO : There was nothing to
+transfer` — same meaning, just no work needed because rclone's
+checksum match found the destination already up to date.
+
+What's *not* in either output is the `dont_mirror_*` files and the
+`dont_mirror_this_dir/` folder — they were excluded by the filter, so
+smirror never even asked rclone about them. The filter worked without
+touching a byte on the remote.
 
 > **This is smirror's main differentiator from a naive `rclone sync`:** it
 > tells you exactly what it will and will not do, before it does anything.
