@@ -73,7 +73,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   surface produced six independent UX-psychology failure modes (middle-option-
   default effect, "more is better" anchoring, decision paralysis, scale-label
   confusion, asymmetric privacy cost, and a v1.0.0-specific empty distinction
-  since reliability_snapshot is not yet implemented). The v1.0.1+ dialog
+  since reliability_snapshot is not yet implemented). The v1.0.37+ dialog
   presents the binary the architecture actually expresses. The CLI three-tier
   surface is unchanged (`smirror telemetry reliability` still works); silent
   installs continue to accept `INSTALL_TELEMETRY_TIER=reliability`. See
@@ -123,7 +123,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 - **R-16 closed — `docs/test-strategy.md` Organizational Test Strategy.**
   v1.0.0 CHANGELOG promised "closes A-29119-01; promotes the
-  ISO/IEC/IEEE 29119 compliance row to ✅" for v1.0.1. The
+  ISO/IEC/IEEE 29119 compliance row to ✅" for v1.0.37. The
   Test Strategy doc itself already existed (`docs/test-strategy.md`,
   v1.0 baseline, authored 2026-05-03 — single-page,
   references `docs/VV-Plan.md` and `docs/SRS.md` as the actual
@@ -138,7 +138,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 - **R-15 closed — `internal/fsutil` direct unit tests.** v1.0.0
   CHANGELOG promised "removes the `internal/fsutil` waiver" for
-  v1.0.1. Done: two new test files
+  v1.0.37. Done: two new test files
   (`internal/fsutil/reparse_windows_test.go` covering 5 cases —
   regular file, directory, NTFS junction, nonexistent path,
   null-byte-in-path — and `internal/fsutil/reparse_other_test.go`
@@ -155,7 +155,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   files (e.g. `C:\Windows\System32\config\SAM`) to the configured
   remote — a real exfiltration vector in foreground.
 
-  v1.0.1 aligns foreground with service mode's default-reject. New
+  v1.0.37 aligns foreground with service mode's default-reject. New
   `allow_symlinks: bool` top-level config field (default `false` →
   reject). Foreground startup at `cmd/smirror/main.go:725` now
   sets `syncEngine.RejectSymlinkedFiles = !cfg.AllowSymlinks`;
@@ -175,7 +175,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
   v1.0.x follow-up: a per-mirror `allow_symlinks` field on
   Project (rather than this global) is on the backlog. The
-  v1.0.1 global default-reject + global opt-in is the minimum
+  v1.0.37 global default-reject + global opt-in is the minimum
   viable closure that aligns both modes' default behavior on the
   hardened side.
 
@@ -184,7 +184,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   on Windows). v1.0.0 shipped with a known-Medium that
   `smirror addmirror`, when creating a fresh
   `~/.selectivemirror/config.yaml`, "wrote it with 0644 mode." The
-  v1.0.1 audit revealed two things:
+  v1.0.37 audit revealed two things:
 
   1. The fresh-config writer at `cmd/smirror/cmdaddmirror.go:290`
      already passes `0600` to `os.WriteFile`. On non-Windows this
@@ -200,7 +200,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
      hardcoded `0600` hint at line 290 is forward-compatible
      decoration (would matter on a future POSIX build).
 
-  v1.0.1 closes the Medium as documented (the 0600 hint plus NTFS
+  v1.0.37 closes the Medium as documented (the 0600 hint plus NTFS
   inheritance plus SEC-C5 `IsAdminOwnedPath` service-mode gate at
   `internal/config/acl_windows.go` are the layered protections).
   The regression test
@@ -209,13 +209,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   Windows is the wrong contract — but its observation message is
   rewritten to document the real Windows-ACL protection model.
 
-- **R-12 — NFR-PR-01 first ratio-of-record across the v1.0.0 → v1.0.1
-  window** (closes the v1.0.0 "Deferred to v1.0.1" commitment, per
+- **R-12 — NFR-PR-01 first ratio-of-record across the v1.0.0 → v1.0.37
+  window** (closes the v1.0.0 "Deferred to v1.0.37" commitment, per
   A-25023-02). The privacy contract in `docs/SRS.md §4.6.7` requires
   `count(records WHERE consent_tier='none') / count(distinct install_id
   WHERE consent_tier='none')` across each release window to be `0.000`.
 
-  For v1.0.0 → v1.0.1: the measurement is `0 / 0` (vacuously satisfied).
+  For v1.0.0 → v1.0.37: the measurement is `0 / 0` (vacuously satisfied).
   Reason: from v1.0.0's tag (2026-05-04) through 2026-05-21 the
   telemetry pipeline was broken end-to-end by SM-219 (see below) — zero
   contributions were possible regardless of tier choice. SM-219's
@@ -228,13 +228,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   are None-tier — ratio `0/0` is technically vacuous but satisfies
   the contract.
 
-  The first quantified non-vacuous ratio will appear in the v1.0.1 →
-  v1.0.2 window release notes, once real-user installs of v1.0.1 (the
+  The first quantified non-vacuous ratio will appear in the v1.0.37 →
+  next release window release notes, once real-user installs of v1.0.37 (the
   first telemetry-functional release) accumulate. Until then the
   pipeline is exercised but unmeasured-at-scale.
 
 - **SM-219 — Telemetry HMAC master-key derivation mismatch** (**Critical**;
-  fixed in the v1.0.1 cycle, was a silent v1.0.0 defect).
+  fixed in the v1.0.37 cycle, was a silent v1.0.0 defect).
   `docs/telemetry-v2.sql::verify_versioned_hmac` cast the TEXT master key
   to BYTEA (UTF-8 bytes of the hex string) while
   `.github/workflows/release.yml` + every CI-built smirror binary
@@ -286,26 +286,26 @@ Telemetry v2 is wired and deployed in this release. What "wired and deployed" me
 - Live-Worker fingerprint probe: cf-ray + SM Worker custom header verified daily and per-tag.
 - **CLAIMS-MAP validation gate** (`system-validation/CLAIMS-MAP.md`) at **25/28 GREEN** (89.3% total, 96.2% non-deferred). Two RED in active deferral: A-01 HMAC timing benchmark (perf-harness session, v1.0.x), A-03 pg_stat_statements smoke (live-Supabase fixture, v1.0.x). The CLAIMS-MAP table is the project's per-claim test-coverage record for the telemetry feature.
 
-ISO posture delta: NFR-PR-01 (Privacy) moved from "Met (declared, deferred measurement R-12)" to **"Met (measurement infrastructure live; first ratio-of-record at v1.0.1 cut)"** — the Cloudflare Worker proxy + cf-ray fingerprint probe + schema-validated daily emulation are real and CI-gated. The actual `count(records where consent_tier=None) / count(distinct install_ids with consent_tier=None)` ratio across the v1.0.0 → v1.0.1 release window is computed at v1.0.1 cut and reported in v1.0.1 release notes per A-25023-02. The pipeline is wired and deployed; the first quantified ratio-of-record lands at v1.0.1 cut.
+ISO posture delta: NFR-PR-01 (Privacy) moved from "Met (declared, deferred measurement R-12)" to **"Met (measurement infrastructure live; first ratio-of-record at v1.0.37 cut)"** — the Cloudflare Worker proxy + cf-ray fingerprint probe + schema-validated daily emulation are real and CI-gated. The actual `count(records where consent_tier=None) / count(distinct install_ids with consent_tier=None)` ratio across the v1.0.0 → v1.0.37 release window is computed at v1.0.37 cut and reported in v1.0.37 release notes per A-25023-02. The pipeline is wired and deployed; the first quantified ratio-of-record lands at v1.0.37 cut.
 
 ### Compliance reading (customer-facing, ISO/IEC 25010:2023 lens)
 
 For customers doing vendor due-diligence or reading the v1.0.0 release with a compliance lens:
 
-- **Privacy** (infrastructure live; first ratio-of-record at v1.0.1): three-tier consent, opt-out by default (None tier with no startup pings); the zero-traffic-at-None contract (NFR-PR-01 in `docs/SRS.md` §4.6.7, ratio target = 0.000) has its measurement infrastructure live — Cloudflare Worker proxy, cf-ray + SM-Worker-fingerprint daily probe, schema-validated emulation harness — and the actual ratio across the v1.0.0 → v1.0.1 window will be computed and reported at v1.0.1 cut per A-25023-02. `report-bug --submit` pipeline ships with end-to-end consent enforcement (categorical bucket only — no narrative columns ever stored server-side; narratives stay on GitHub Issues per CLAIMS-MAP C-15 / A-08).
+- **Privacy** (infrastructure live; first ratio-of-record at v1.0.37): three-tier consent, opt-out by default (None tier with no startup pings); the zero-traffic-at-None contract (NFR-PR-01 in `docs/SRS.md` §4.6.7, ratio target = 0.000) has its measurement infrastructure live — Cloudflare Worker proxy, cf-ray + SM-Worker-fingerprint daily probe, schema-validated emulation harness — and the actual ratio across the v1.0.0 → v1.0.37 window will be computed and reported at v1.0.37 cut per A-25023-02. `report-bug --submit` pipeline ships with end-to-end consent enforcement (categorical bucket only — no narrative columns ever stored server-side; narratives stay on GitHub Issues per CLAIMS-MAP C-15 / A-08).
 - **Authenticity**: TOCTOU-defended (single-resolution at `internal/sync/sync.go:446` per SM-085); NTFS reparse-points + symlinks rejected in service mode (SEC-H5); state-DB symlink rejected on Open (SEC-H7 at `internal/state/state.go:137`); `report-bug --submit` payload signed with daily-rotating HMAC; telemetry uplink defended by `cf-ray` + SM Worker custom-header fingerprint probe.
 - **Resistance**: 30+ SEC-* findings closed in the v0.9.x cycle (full cross-reference: `docs/security-audit-2026-04-18.md` + per-bug closure notes in the maintainer-side ledger); CLAIMS-MAP validation gate at **25/28 GREEN** (89.3% total / 96.2% non-deferred); full enumeration of any non-GREEN claim with deferral rationale in the "Bugs known at tag" subsection below.
 
-### Deferred to v1.0.1
+### Deferred to v1.0.37
 
-- **R-12 — NFR-PR-01 measurement-function elaboration**: Cloudflare Worker access-log analysis; ratio of None-tier records over None-tier installs across the v1.0.0 release window; target = 0.000. First measurement at v1.0.1 cut, included in v1.0.1 release notes.
+- **R-12 — NFR-PR-01 measurement-function elaboration**: Cloudflare Worker access-log analysis; ratio of None-tier records over None-tier installs across the v1.0.0 release window; target = 0.000. First measurement at v1.0.37 cut, included in v1.0.37 release notes.
 - **R-13 — `internal/lock::isProcessAlive` multi-process test harness**: stale-PID detection currently at 0% function coverage drags the package average to 54.8% (above the new 50% per-package floor; tracked as risk in CI). Multi-process harness raises coverage above 60%.
 - **R-14 — `internal/rclone::Detect` interface extraction + mocks**: removes the `internal/rclone` waiver from `ci.yml`; coverage rises above 50%.
 - **R-15 — `internal/fsutil` direct unit tests**: removes the `internal/fsutil` waiver; coverage > 50%.
 - **R-16 — `docs/test-strategy.md` single-page consolidation**: closes A-29119-01; promotes the ISO/IEC/IEEE 29119 compliance row to ✅ in `docs/iso-compliance.md` §3.1.
 - **R-17 — `docs/security-audit-2026-04-18.md` finding-closure cross-reference**: enumeration of every SEC-C / SEC-H / SEC-M / SEC-L finding closed in the v1.0.0 cycle; closes A-GOV-04.
 - **R-23 — SignPath Foundation code signing**: applying to https://signpath.org/apply concurrent with v1.0.0 release (the foundation's application gate is "released in the form to be signed", which v1.0.0 satisfies). Foundation review has no published SLA. The first **signed** release ships once the SignPath project is provisioned and the GitHub Action's API token + signing-policy slugs are wired into `release.yml` (insertion-point comments already in place). Verified publisher on signed releases will read **"SignPath Foundation"** (the cert issuer, not the project author) — see `README.md` "SmartScreen on first install" for the user-facing explanation. Two-pass signing order matters: smirror.exe is signed first, then embedded into the MSI, then the MSI is signed (signing the exe after MSI embedding would break the MSI's internal hash).
-- **R-24 — Embed PE version-info in `smirror.exe`** (`cmd/smirror/versioninfo.json` + `goversioninfo` go-generate directive): adds CompanyName="Raveh Neeman", ProductName="SelectiveMirror", FileDescription, LegalCopyright, OriginalFilename, ProductVersion=1.0.0.0 to the binary so right-click → Properties → Details shows author attribution. After SignPath signing replaces the SmartScreen Publisher with "SignPath Foundation", the PE metadata fields are the only place "Raveh Neeman" appears in user-visible Windows dialogs. Deferred to v1.0.1 (lands together with the first signed release for a single user-facing publisher transition).
+- **R-24 — Embed PE version-info in `smirror.exe`** (`cmd/smirror/versioninfo.json` + `goversioninfo` go-generate directive): adds CompanyName="Raveh Neeman", ProductName="SelectiveMirror", FileDescription, LegalCopyright, OriginalFilename, ProductVersion=1.0.0.0 to the binary so right-click → Properties → Details shows author attribution. After SignPath signing replaces the SmartScreen Publisher with "SignPath Foundation", the PE metadata fields are the only place "Raveh Neeman" appears in user-visible Windows dialogs. Deferred to v1.0.37 (lands together with the first signed release for a single user-facing publisher transition).
 
 ### Deferred to v1.1
 
@@ -319,10 +319,10 @@ For customers doing vendor due-diligence or reading the v1.0.0 release with a co
 
 The following findings are open against this version. Each carries a target version and a remediation pointer. Where a regression test exists, the release pipeline (`.github/workflows/release.yml`) tolerates the named tests in its allowlist; everything else blocks.
 
-**Open from prior review backlog** (Mediums; both targeted for v1.0.1):
+**Open from prior review backlog** (Mediums; both targeted for v1.0.37):
 
-- **File-mode hardening (Medium)** — File-mode hardening for the fresh-config path created by `smirror addmirror`. Tracked in the maintainer ledger; regression test exists in `system-validation/`. **Target: v1.0.1.**
-- **Symlink-handling asymmetry (Medium)** — Symlink-handling asymmetry between foreground and service mode (service mode rejects since SEC-H5; foreground does not yet). Fix: align foreground on default-reject with an explicit opt-in flag. Mitigation in the meantime: prefer `task install` or `service install` on multi-user systems. **Target: v1.0.1.**
+- **File-mode hardening (Medium)** — File-mode hardening for the fresh-config path created by `smirror addmirror`. Tracked in the maintainer ledger; regression test exists in `system-validation/`. **Target: v1.0.37.**
+- **Symlink-handling asymmetry (Medium)** — Symlink-handling asymmetry between foreground and service mode (service mode rejects since SEC-H5; foreground does not yet). Fix: align foreground on default-reject with an explicit opt-in flag. Mitigation in the meantime: prefer `task install` or `service install` on multi-user systems. **Target: v1.0.37.**
 
 **CLAIMS-MAP non-GREEN** (telemetry validation gate, both pre-deferred per `system-validation/CLAIMS-MAP.md`):
 
@@ -342,7 +342,7 @@ The following findings are open against this version. Each carries a target vers
 
 **Quality regressions to track**:
 
-- **State coverage regression** — `internal/state` dropped from 70.0% → 64.1% (5 metadata-write paths at 0% function coverage: `VacuumIfStale`, `PruneOrphanedProjects`, `MarkRemoteVerificationStale`, `ClearStaleExitCodes`, `IncrementMetaCounter`). All five are state-DB hygiene paths exercised by long-running daemons but not by unit tests. **Above the 50% per-package floor and 60% aggregate gate**, so not tag-blocking. **Target: v1.0.1.** (Likely from telemetry-related state.go growth without proportional tests.)
+- **State coverage regression** — `internal/state` dropped from 70.0% → 64.1% (5 metadata-write paths at 0% function coverage: `VacuumIfStale`, `PruneOrphanedProjects`, `MarkRemoteVerificationStale`, `ClearStaleExitCodes`, `IncrementMetaCounter`). All five are state-DB hygiene paths exercised by long-running daemons but not by unit tests. **Above the 50% per-package floor and 60% aggregate gate**, so not tag-blocking. **Target: v1.0.37.** (Likely from telemetry-related state.go growth without proportional tests.)
 
 A maintainer-readable view (severity, owner, planned remediation, target version) is in [docs/release-maturity.md](docs/release-maturity.md). Tests in this section are also tagged in CHANGELOG fix commits when closed.
 
@@ -579,7 +579,7 @@ For transfer verbs, `--stats=15s --stats-one-line` is auto-injected so rclone pr
 - **`docs/iso-compliance.md` baseline added** (v0.3). Single source of truth for compliance status against ISO/IEC/IEEE 29148:2018, ISO/IEC 25010:2023, ISO/IEC 25023:2016, and ISO/IEC/IEEE 29119 family (Parts 1-4). 63 action items registered with priority and owner. SELF-ASSESSMENT label retained; external independent review status reassessed in the v1.0.0 release per A-GOV-01 (see top of `[1.0.0]` block).
 - **`docs/SRS.md` revised to v1.1**. Added §4.0 schema-deviation note (NFR section uses 25010:2011 layout; 25010:2023 mapping documented). Added ISO/IEC/IEEE 29119:2023 to §1.4 Applicable Standards (was missing — see SM-154). Cross-link added to `docs/iso-compliance.md`.
 - **NFR target revisions (SM-153)**: NFR-TB-01 detection latency 50ms p99 → 100ms p99 (target loosened with rationale). NFR-TB-02 sync latency 3s p95 → 5s p95. NFR-RU-03 idle CPU 0.5% → 1%. NFR-RU-01 idle memory: target 25 MB retained but Status changed from "Met (at 30 MB)" to **Not Met** (target stays as v1.1 optimization goal). The "Met at [looser value]" standards-gaming framing is eliminated from the SRS.
-- **NFR-TE-01 status updated** to disclose `internal/watcher/` coverage gap (16.6% statement; 15 of 20 functions at 0%). Refactor for testability (X-04) deferred to v1.0.1.
+- **NFR-TE-01 status updated** to disclose `internal/watcher/` coverage gap (16.6% statement; 15 of 20 functions at 0%). Refactor for testability (X-04) deferred to v1.0.37.
 - **`docs/VV-Plan.md` cross-link** to `docs/iso-compliance.md` added (§2). Pre-existing V&V conflation in §1.1 (integration tests mis-categorized under Validation) filed as SM-152 — fix pending.
 - BugTracker entries: SM-152 (V&V conflation, open), SM-153 (NFR Status standards-gaming, fixed in this commit), SM-154 (SRS §1.4 missing 29119 reference, fixed in this commit).
 

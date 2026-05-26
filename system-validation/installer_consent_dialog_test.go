@@ -1,4 +1,4 @@
-// Structural tests for installer/TelemetryConsent.wxi — the v1.0.1+
+// Structural tests for installer/TelemetryConsent.wxi — the v1.0.37+
 // binary-consent dialog (PROPOSAL-2026-05-03-msi-binary-consent.md).
 //
 // These tests are STRUCTURAL — they read the WiX source as text and

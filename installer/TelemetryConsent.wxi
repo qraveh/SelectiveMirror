@@ -3,7 +3,7 @@
   TelemetryConsent.wxi — telemetry-tier consent dialog for the
   SelectiveMirror MSI installer.
 
-  v1.0.1+ (PROPOSAL-2026-05-03-msi-binary-consent.md): the dialog
+  v1.0.37+ (PROPOSAL-2026-05-03-msi-binary-consent.md): the dialog
   presents TWO choices, not three. Background: the v1.0.0 dialog
   exposed all three CLI tiers (None / Standard / Reliability) as
   radio options. Six independent UX-psychology failure modes
@@ -11,7 +11,7 @@
   effect, "more is better" anchoring, decision paralysis, scale-
   label confusion, asymmetric privacy cost, plus the v1.0.0-
   specific empty distinction since reliability_snapshot is not
-  yet implemented). v1.0.1+ presents the binary the architecture
+  yet implemented). v1.0.37+ presents the binary the architecture
   actually expresses: share anonymous bug + version counts, or
   don't. Reliability remains a power-user opt-up via the CLI
   (`smirror telemetry reliability`); the registry surface
@@ -25,7 +25,7 @@
     Registry:  HKLM\Software\SelectiveMirror\TelemetryTier (REG_SZ)
 
   The registry value is what `smirror` reads at first run; the CLI's
-  three-tier surface is unchanged. v1.0.1's only delta is what the
+  three-tier surface is unchanged. v1.0.37's only delta is what the
   interactive dialog OFFERS as a fresh choice — "reliability" stays
   available via:
     msiexec /i SelectiveMirror.msi INSTALL_TELEMETRY_TIER=reliability
@@ -39,7 +39,7 @@
   See docs/PRIVACY.md (user-facing contract),
   docs/cli-telemetry-command.md (runtime CLI), and
   docs/PROPOSAL-2026-05-03-msi-binary-consent.md (the design memo
-  that scoped this v1.0.1 change).
+  that scoped this v1.0.37 change).
 
   Migration story for upgrade installs:
 
@@ -82,7 +82,7 @@
          (when integrated) or `msiexec INSTALL_TELEMETRY_TIER=...`. -->
     <Property Id="INSTALL_TELEMETRY_TIER" Value="none" Secure="yes" />
 
-    <!-- v1.0.1+ migration property. RegistrySearch reads any existing
+    <!-- v1.0.37+ migration property. RegistrySearch reads any existing
          tier value the user already chose in a prior install. Empty
          when there's no prior install or the registry was tampered
          clean. Used below to:
@@ -143,7 +143,7 @@
   </Fragment>
 
   <!-- =====================================================================
-       v1.0.1+ binary-consent dialog (PROPOSAL-2026-05-03-msi-binary-consent.md).
+       v1.0.37+ binary-consent dialog (PROPOSAL-2026-05-03-msi-binary-consent.md).
        Two radios. Lives in a separate Fragment so the Property +
        ComponentGroup above stay reusable independently of the UI.
 

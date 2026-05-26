@@ -174,7 +174,7 @@ func TestInstallerHandoffSeam_RegressionTestPresent(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("install_events_test.go is missing the SM-216 / DEFECT-1 regression test. Looked for any of: %v. Without it, a future change that re-introduces the silent-skip branch in install_events.go (see TestInstallerHandoffSeam_RecoveryCodeExists) would compile and pass unit tests — silently regressing the v1.0.1+ fix that closed the v1.0.0 bug.",
+		t.Errorf("install_events_test.go is missing the SM-216 / DEFECT-1 regression test. Looked for any of: %v. Without it, a future change that re-introduces the silent-skip branch in install_events.go (see TestInstallerHandoffSeam_RecoveryCodeExists) would compile and pass unit tests — silently regressing the v1.0.37+ fix that closed the v1.0.0 bug.",
 			candidates)
 	}
 
