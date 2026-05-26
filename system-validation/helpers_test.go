@@ -842,7 +842,7 @@ var coverage = &coverageTracker{
 		"telemetry_v2_worker_rate_limit_linkability": {Description: "Telemetry v2: rateLimitKey same-IP-day linkability + cross-day unlinkability (C-14)", Required: 1},
 		"telemetry_v2_worker_retired_paths":          {Description: "Telemetry v2: legacy + forget paths return 410 Gone (CLAIMS-MAP C-16)", Required: 1},
 
-		// PROPOSAL-2026-05-03 (v1.0.37+) — MSI consent dialog reduced
+		// PROPOSAL-2026-05-03 (post-SM-217) — MSI consent dialog reduced
 		// from 3 to 2 radios + preserve-existing-tier on upgrade.
 		"installer_consent_dialog_binary":           {Description: "MSI installer: TelemetryConsent dialog presents 2 radios (None / Standard); Reliability is CLI-only", Required: 1},
 		"installer_consent_preserves_existing_tier": {Description: "MSI installer: upgrade install preserves the user's prior tier choice; consent dialog is skipped when EXISTING_TELEMETRY_TIER is set", Required: 1},

@@ -115,11 +115,11 @@ type Global struct {
 	// directories instead of rejecting them. Default false → reject (aligns
 	// foreground mode with the service-mode SEC-H5 / PF-A3 behavior).
 	//
-	// Background: pre-v1.0.37 the foreground daemon followed symlinks while
+	// Background: pre-close-out the foreground daemon followed symlinks while
 	// service mode rejected them (asymmetric default — service hard-coded
 	// reject; foreground hard-coded follow). A symlink planted in a watched
 	// directory could exfiltrate arbitrary readable files to the configured
-	// remote. Service mode closed this in v0.9.x via SEC-H5; v1.0.37 aligns
+	// remote. Service mode closed this in v0.9.x via SEC-H5; aligns
 	// the foreground default.
 	//
 	// Set to true (in config.yaml: `allow_symlinks: true`) only when you
@@ -130,7 +130,7 @@ type Global struct {
 	// service-mode path already enforces.
 	//
 	// v1.0.x follow-up: a per-mirror `allow_symlinks` field on Project
-	// (rather than this global) is on the backlog. For v1.0.37 the
+	// (rather than this global) is on the backlog. For now the
 	// global default-reject + global opt-in is the minimum viable
 	// closure of the v1.0.0 Open Medium "Symlink-handling asymmetry."
 	AllowSymlinks              bool         `yaml:"allow_symlinks"`

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// R-15: direct unit tests for internal/fsutil. Pre-v1.0.37 the package
+// R-15: direct unit tests for internal/fsutil. Pre-close-out the package
 // was tested only transitively (via internal/sync's WalkDir paths) which
 // produced 0.0% direct line coverage and tripped the per-package floor
 // in ci.yml. The waiver line in ci.yml was:

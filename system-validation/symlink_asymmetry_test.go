@@ -1,9 +1,9 @@
-// SM Symlink-asymmetry Medium close-out (v1.0.37).
+// SM Symlink-asymmetry Medium close-out.
 //
-// Background: pre-v1.0.37, foreground mode followed symlinks while
+// Background: pre-close-out, foreground mode followed symlinks while
 // service mode rejected them. A symlink planted in a watched directory
 // could exfiltrate arbitrary readable files to the configured remote.
-// Service mode closed this in v0.9.x via SEC-H5; v1.0.37 aligns
+// Service mode closed this in v0.9.x via SEC-H5; aligns
 // foreground.
 //
 // This file ratchets the foreground-rejects-by-default contract at
@@ -32,7 +32,7 @@ import (
 	"testing"
 )
 
-// TestSymlinkAsymmetry_ForegroundDefaultsToReject is the v1.0.37 close-
+// TestSymlinkAsymmetry_ForegroundDefaultsToReject is the close-
 // out ratchet for the v1.0.0 Open Medium. Asserts the source-property
 // shape that aligns foreground-mode default with the service-mode
 // default-reject.
@@ -53,9 +53,9 @@ func TestSymlinkAsymmetry_ForegroundDefaultsToReject(t *testing.T) {
 	if !wantFG.Match(src) {
 		t.Errorf("cmd/smirror/main.go MUST set "+
 			"`syncEngine.RejectSymlinkedFiles = !cfg.AllowSymlinks` "+
-			"in the foreground startup path (the v1.0.37 close-out of "+
+			"in the foreground startup path (the close-out of "+
 			"the Symlink-asymmetry Medium). Without this, foreground "+
-			"mode reopens the pre-v1.0.37 default-follow behavior "+
+			"mode reopens the pre-close-out default-follow behavior "+
 			"that asymmetrically diverged from service-mode's "+
 			"SEC-H5 default-reject.")
 	}
@@ -92,7 +92,7 @@ func TestSymlinkAsymmetry_ConfigFieldExists(t *testing.T) {
 	if !want.Match(src) {
 		t.Errorf("internal/config/config.go::Global MUST declare " +
 			"`AllowSymlinks bool `yaml:\"allow_symlinks\"`` for the " +
-			"v1.0.37 Symlink-asymmetry close-out to compile and to " +
+			"Symlink-asymmetry close-out to compile and to " +
 			"accept the documented config-file key. Did this get " +
 			"renamed or removed?")
 	}

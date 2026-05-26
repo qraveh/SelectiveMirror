@@ -553,7 +553,7 @@ func TestPanelR4_CLI_FreshConfig_FileMode(t *testing.T) {
 		t.Fatalf("config not created: %v", err)
 	}
 	mode := info.Mode().Perm()
-	// v1.0.37 close-out of the Medium (corrected reading): on Windows,
+	// close-out of the Medium (corrected reading): on Windows,
 	// os.Stat returns Unix mode bits 0666/0444 regardless of the
 	// `os.WriteFile(..., 0600)` hint at cmdaddmirror.go:290 — Go's
 	// Windows wrapper doesn't translate mode arg into NTFS ACL. The

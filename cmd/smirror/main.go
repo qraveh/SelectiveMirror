@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "1.0.38-dev"
+var version = "1.0.39-dev"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -720,9 +720,9 @@ Press Ctrl+C to stop.`) {
 	// Create sync engine (with metrics, anomaly recorder, and hooks)
 	syncEngine := msync.NewEngine(cfg, st, filters, m)
 	syncEngine.Anomaly = anomalyRecorder
-	// v1.0.37 Symlink-asymmetry close-out: foreground mode now aligns
+	// Symlink-asymmetry close-out: foreground mode now aligns
 	// with service mode's SEC-H5 / PF-A3 default-reject behavior. Pre-
-	// v1.0.37 foreground followed symlinks (RejectSymlinkedFiles default
+	// foreground followed symlinks (RejectSymlinkedFiles default
 	// false); now defaults to reject unless cfg.AllowSymlinks=true.
 	syncEngine.RejectSymlinkedFiles = !cfg.AllowSymlinks
 	if cfg.PreSyncHook != "" || cfg.PostSyncHook != "" || hasProjectHooks(cfg) {
