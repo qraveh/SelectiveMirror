@@ -25,14 +25,19 @@ You need:
 
 - `smirror.exe` on your PATH — verify with `smirror version`
 - `rclone.exe` on your PATH (v1.73+) — verify with `rclone version`
-- A terminal — `cmd.exe` works fine; the commands below use cmd syntax
+- A terminal — `cmd.exe` or Windows PowerShell, both work the same
 
 The tutorial does not need administrator privileges, network access, or any
 cloud account.
 
-> The commands below are written for `cmd.exe`. If you use PowerShell,
-> `%CD%` becomes `$PWD`, `dir /S` becomes `Get-ChildItem -Recurse`, etc.
-> The smirror and rclone commands themselves are identical in either shell.
+> The commands below work as-is in both `cmd.exe` and Windows PowerShell
+> (5 and 7). We use absolute paths (e.g., `C:\smirror-tutorial\…`) instead
+> of environment variables — `%USERPROFILE%` doesn't expand in PowerShell
+> and `$HOME` doesn't expand in cmd, so we sidestep the difference by
+> hardcoding a path. If `C:\smirror-tutorial` collides with something on
+> your system, pick a different absolute path and substitute it throughout.
+> The cleanup step at the end has one cmd-vs-PowerShell line called out
+> explicitly; everything else is identical.
 
 ---
 
@@ -40,23 +45,25 @@ cloud account.
 
 ### Step 1 — Create the workspace
 
-Pick a location for the tutorial workspace. Anywhere will do:
+The tutorial uses `C:\smirror-tutorial` as the workspace path
+throughout. Pick a different absolute path if this collides with
+something on your system; just substitute it everywhere below.
 
-```cmd
-mkdir %USERPROFILE%\smirror-tutorial
-cd %USERPROFILE%\smirror-tutorial
+```
+mkdir C:\smirror-tutorial
+cd C:\smirror-tutorial
 mkdir remote
 ```
 
 Copy the source-template directory into your workspace as `source`. Pick
 the line that matches how you got smirror:
 
-```cmd
+```
 :: If you installed via the MSI (recommended path):
-xcopy /E /I "%ProgramFiles%\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
+xcopy /E /I "C:\Program Files\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
 
-:: ...or, if you have the SelectiveMirror source repo checked out:
-xcopy /E /I "<smirror-repo>\examples\local-mirror-tutorial\source-template" source
+:: ...or, if you have the SelectiveMirror source repo checked out (substitute the actual path):
+xcopy /E /I "C:\path\to\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
 ```
 
 > **Have only the portable ZIP and no source?** The portable ZIP carries
@@ -69,7 +76,7 @@ xcopy /E /I "<smirror-repo>\examples\local-mirror-tutorial\source-template" sour
 Your workspace now looks like:
 
 ```
-%USERPROFILE%\smirror-tutorial\
+C:\smirror-tutorial\
 ├── source\
 │   ├── .syncignore
 │   ├── .dont_mirror_hidden.txt
@@ -124,11 +131,11 @@ The output should include `local-tutorial:`.
 Tell smirror to mirror the `source` folder. The `-dest` is the **parent**
 folder on the remote where the mirror lands — smirror creates a
 subdirectory named after the mirror (`source`) inside it. So pass
-`local-tutorial:%CD%\remote` (not `\remote\source`) and your files will
-end up at `remote\source\…`:
+`local-tutorial:C:\smirror-tutorial\remote` (the workspace's `remote\`
+folder) and your files will end up at `remote\source\…`:
 
-```cmd
-smirror addmirror %CD%\source -dest local-tutorial:%CD%\remote
+```
+smirror addmirror C:\smirror-tutorial\source -dest local-tutorial:C:\smirror-tutorial\remote
 ```
 
 This writes a mirror entry into your `~/.selectivemirror/config.yaml`
@@ -177,21 +184,27 @@ Run the actual sync:
 smirror sync-now source
 ```
 
-Look at the remote:
+Look at the remote (the `tree` utility works in both cmd and
+PowerShell; `dir remote\source` works too if you'd rather see a flat
+list):
 
-```cmd
-dir /S /B remote
+```
+tree /F remote
 ```
 
 You should see:
 
 ```
-remote\source\file_a.txt
-remote\source\file_b.txt
-remote\source\mirror_me_1.txt
-remote\source\mirror_me_2.txt
-remote\source\mirror_this_dir\nested_1.txt
-remote\source\mirror_this_dir\nested_2.txt
+remote
+└─source
+    │  file_a.txt
+    │  file_b.txt
+    │  mirror_me_1.txt
+    │  mirror_me_2.txt
+    │
+    └─mirror_this_dir
+            nested_1.txt
+            nested_2.txt
 ```
 
 The `dont_mirror_*` files and `dont_mirror_this_dir/` are absent, exactly
@@ -329,15 +342,15 @@ right choice.
 Once you've seen smirror work on a local-fs remote, the move to a real
 cloud backend is two commands:
 
-```cmd
+```
 :: 1. Create a new rclone remote pointing at your cloud backend
 rclone config
 ::    e.g. choose Google Drive, S3, Dropbox, OneDrive, etc.
 ::    rclone walks you through the auth flow.
 
 :: 2. Swap the destination on your existing mirror
-smirror unmirror %CD%\source
-smirror addmirror %CD%\source -dest <your-real-remote>:Backup/source
+smirror unmirror C:\smirror-tutorial\source
+smirror addmirror C:\smirror-tutorial\source -dest <your-real-remote>:Backup/source
 smirror sync-now source
 ```
 
@@ -350,19 +363,20 @@ needed. Everything you learned in this tutorial transfers directly.
 
 These commands undo everything the tutorial created:
 
-```cmd
+```
 :: If you ran Step 9 (background mode)
 smirror task uninstall
 
 :: Remove the mirror entry from your smirror config
-smirror unmirror %CD%\source
+smirror unmirror C:\smirror-tutorial\source
 
 :: Remove the rclone remote
 rclone config delete local-tutorial
 
-:: Delete the workspace folder
-cd %USERPROFILE%
-rmdir /S /Q %USERPROFILE%\smirror-tutorial
+:: Delete the workspace folder — pick the line for your shell:
+cd C:\
+rmdir /S /Q C:\smirror-tutorial                              :: cmd.exe
+Remove-Item -Recurse -Force C:\smirror-tutorial              :: PowerShell
 ```
 
 That's everything. Your `~/.selectivemirror/config.yaml` and rclone config
