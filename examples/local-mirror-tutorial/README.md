@@ -116,10 +116,23 @@ not recognized" or similar, install it via winget:
 winget install Rclone.Rclone
 ```
 
-**Then close this terminal and open a new one** — the new PATH entry
-isn't visible to the current shell session. Re-`cd C:\smirror-tutorial`
-and re-run `rclone version` to confirm. You should now see the version
-line.
+winget adds the new rclone folder to your **user PATH** in the
+registry, but the current shell session won't see it until PATH is
+refreshed. Two ways:
+
+**PowerShell** — refresh PATH inline without restarting:
+```
+$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+```
+
+**cmd.exe** — `exit` and open a fresh `cmd.exe` window (cmd has no
+built-in PATH refresh; new cmd reads PATH from registry on startup).
+
+Either way, `cd C:\smirror-tutorial` again and re-run `rclone version`
+to confirm. You should now see the version line.
+
+(Only PATH needs refreshing for rclone — it doesn't touch COM
+registrations, file associations, services, or other env vars.)
 
 Now create the local-filesystem remote:
 
