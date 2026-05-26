@@ -1,4 +1,18 @@
-# WDSI false-positive submission — v1.0.59
+# WDSI false-positive submission — v1.0.59 (HISTORICAL)
+
+> **Status (2026-05-26)**: v1.0.59 was **withdrawn before public release** —
+> Defender flagged the MSI as `Trojan:Win32/Wacatac.B!ml` on first
+> download, the draft was deleted from GitHub Releases, and v1.0.60
+> shipped instead (with R-24 + R-25 mitigations). This template is
+> retained as historical reference. For actual WDSI submissions against
+> the currently-shipped MSI, use `wdsi-fp-submission-v1.0.60.md`.
+>
+> Note: the original template below mentions "Azure Trusted Signing"
+> as the procurement direction — that was corrected on 2026-05-26 after
+> learning Azure Trusted Signing is not available for Israeli individual
+> subscribers. See `memory/signing_provider_update_2026-05-26.md` for
+> the revised provider matrix (SSL.com OV primary, Sectigo / Certum
+> alternatives, OSSign + reapply-SignPath as free long-tail).
 
 **Purpose.** Microsoft Defender flagged the v1.0.59 MSI as
 `Trojan:Win32/Wacatac.B!ml` on first download. The `!ml` suffix marks
