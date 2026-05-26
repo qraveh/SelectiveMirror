@@ -39,6 +39,13 @@ cloud account.
 > The cleanup step at the end has one cmd-vs-PowerShell line called out
 > explicitly; everything else is identical.
 
+> **Paste note.** Code blocks include a trailing blank line so that after
+> a paste the last command auto-executes. But GitHub's copy button and
+> some terminals (notably PowerShell with PSReadLine) sometimes strip
+> the trailing newline anyway. If after pasting you see the last command
+> sitting on the prompt without running, just **press Enter once** — the
+> earlier commands in the block already ran.
+
 ---
 
 ## Part 1 — The 5-minute walkthrough
