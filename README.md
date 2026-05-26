@@ -4,15 +4,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/go-1.26%2B-00ADD8.svg)](go.mod)
 
-**Real-time, selective file mirroring for Windows.** Point it at a local folder; file changes are pushed to your cloud backend within seconds — not on a 15-minute cron. Built on [rclone](https://rclone.org/), which handles the transport to Google Drive, S3, Dropbox, OneDrive, SFTP, and [70+ other backends](https://rclone.org/overview/).
+SelectiveMirror mirrors directories on Windows — **selectively** (per-folder `.syncignore`, gitignore syntax), **automatically** (on every file change, within seconds), **efficiently** (bandwidth-aware, API-quota-aware, no per-save spam), and **to any cloud** (Google Drive, S3, Dropbox, OneDrive, SFTP — 70+ [rclone](https://rclone.org/) backends).
 
 > 👉 **Try it in 5 minutes.** The [hands-on tutorial](examples/local-mirror-tutorial/) walks through setup, filtering, edits, deletes, and drift detection end-to-end. **No cloud account needed** — it uses rclone's local-filesystem backend as a stand-in. Part 1 is the 5-minute happy path; Part 2 adds 15 minutes of deeper features.
 
 ---
 
-## What does it do?
-
-SelectiveMirror mirrors directories — **selectively** (per-folder `.syncignore`, gitignore syntax), **automatically** (on every file change, within seconds), **efficiently** (bandwidth-aware, API-quota-aware, no per-save spam), and **to any cloud** (Google Drive, S3, Dropbox, OneDrive, SFTP — 70+ rclone backends).
+## What it looks like
 
 A typical setup:
 
