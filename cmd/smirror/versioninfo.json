@@ -1,0 +1,67 @@
+{
+    "_comment_": [
+        "PE VERSIONINFO resource embedded in smirror.exe (R-24).",
+        "",
+        "Why: Microsoft Defender's ML classifier flagged the unsigned",
+        "smirror.exe v1.0.59 binary as Trojan:Win32/Wacatac.B!ml. One of",
+        "the strongest ML signals against us was 'binary has no PE",
+        "VERSIONINFO' — anonymous Go builds look like packed/obfuscated",
+        "malware. Embedding CompanyName / ProductName / FileVersion /",
+        "OriginalFilename in the PE header neutralizes that signal.",
+        "",
+        "How: edit this file when bumping the version, then regenerate",
+        "resource_windows.syso:",
+        "",
+        "    go install github.com/josephspurrier/goversioninfo/cmd/goversioninfo@latest",
+        "    cd cmd/smirror/",
+        "    goversioninfo -o resource_windows.syso versioninfo.json",
+        "",
+        "Go automatically picks up the .syso file on Windows builds and",
+        "links the resource into smirror.exe. Verify via:",
+        "    smirror.exe → Properties → Details",
+        "",
+        "Reference: docs/release-maturity.md (R-24);",
+        "           docs/operations/wdsi-fp-submission-v1.0.59.md."
+    ],
+    "FixedFileInfo": {
+        "FileVersion": {
+            "Major": 1,
+            "Minor": 0,
+            "Patch": 60,
+            "Build": 0
+        },
+        "ProductVersion": {
+            "Major": 1,
+            "Minor": 0,
+            "Patch": 60,
+            "Build": 0
+        },
+        "FileFlagsMask": "3f",
+        "FileFlags ": "00",
+        "FileOS": "040004",
+        "FileType": "01",
+        "FileSubType": "00"
+    },
+    "StringFileInfo": {
+        "Comments": "Selective near-real-time file mirror for Windows. https://github.com/qraveh/SelectiveMirror",
+        "CompanyName": "Raveh Neeman",
+        "FileDescription": "SelectiveMirror — selective file-mirror service",
+        "FileVersion": "1.0.60.0",
+        "InternalName": "smirror",
+        "LegalCopyright": "Copyright (c) 2026 Raveh Neeman. MIT License.",
+        "LegalTrademarks": "",
+        "OriginalFilename": "smirror.exe",
+        "PrivateBuild": "",
+        "ProductName": "SelectiveMirror",
+        "ProductVersion": "1.0.60.0",
+        "SpecialBuild": ""
+    },
+    "VarFileInfo": {
+        "Translation": {
+            "LangID": "0409",
+            "CharsetID": "04B0"
+        }
+    },
+    "IconPath": "",
+    "ManifestPath": ""
+}

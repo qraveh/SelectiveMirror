@@ -5,28 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-## [1.0.59] — 2026-05-26
+## [1.0.60] — 2026-05-26
 
-### Known issues at tag
+### Recovery from the withdrawn v1.0.59 draft
 
-- **`SelectiveMirror.msi` triggers Microsoft Defender's `Trojan:Win32/Wacatac.B!ml`
-  machine-learning heuristic on first download.** This is a false positive — the
-  `!ml` suffix marks the detection as ML-heuristic (not signature), `Wacatac` is
-  a generic family used by Defender for unsigned PE binaries, and no other AV
-  engine flags the file. Build-provenance attestation is intact
-  (`gh attestation verify SelectiveMirror.msi --owner qraveh` exits 0). The root
-  cause is that v1.0.59 binaries are unsigned — Authenticode signing is pending
-  (SignPath Foundation rejected the application, commercial cert being
-  procured). FP submission template at
-  [`docs/operations/wdsi-fp-submission-v1.0.59.md`](docs/operations/wdsi-fp-submission-v1.0.59.md).
-  Workaround for users until Microsoft reclassifies (typical turnaround 24-72h
-  after submission): verify the SHA-256 against `checksums.txt`
-  (`certutil -hashfile SelectiveMirror.msi SHA256`), run `gh attestation verify`
-  to confirm the binary came from this repository's CI on the tagged commit,
-  then add a Defender exclusion for the file. Long-term fix: the next patch
-  release will ship signed.
+v1.0.59 was prepared and built but never publicly released. Microsoft Defender's
+ML classifier flagged the v1.0.59 MSI as `Trojan:Win32/Wacatac.B!ml` on first
+download — a false positive (the `!ml` suffix is ML-heuristic, not signature;
+`Wacatac` is Defender's generic family for unsigned PE binaries; no other AV
+engine flagged the file; build-provenance attestation was intact).
+
+v1.0.60 ships the same prep work as v1.0.59 (SM-217 / SM-218 / SM-219 /
+SM-220 / SM-221 plus R-12 / R-15 / R-16 closures) **plus** two PE-shape
+mitigations that defeat the Wacatac ML signal without requiring an Authenticode
+certificate (which remains the longer-term fix). The v1.0.59 draft has been
+deleted from GitHub Releases. The WDSI false-positive submission template at
+[`docs/operations/wdsi-fp-submission-v1.0.59.md`](docs/operations/wdsi-fp-submission-v1.0.59.md)
+remains valid — Microsoft reclassification of the v1.0.59 SHA still helps the
+ML model "learn" SelectiveMirror is not malware for future builds.
 
 ### Added
+
+- **R-24 — PE VERSIONINFO resource embedded in `smirror.exe`.** New
+  `cmd/smirror/versioninfo.json` + `cmd/smirror/resource_windows.syso`
+  (generated via `goversioninfo v1.7.0`). `smirror.exe → Properties →
+  Details` now shows `CompanyName=Raveh Neeman`,
+  `ProductName=SelectiveMirror`, `FileVersion=1.0.60.0`,
+  `OriginalFilename=smirror.exe`, plus copyright and a project-URL
+  comment. Defender's ML classifier weights "binary has no PE
+  VERSIONINFO" heavily as a malware signal — anonymous Go builds
+  look statistically like packed/obfuscated malware. Local-Defender
+  scan of the v1.0.60 build confirms `Scanning ... found no threats`
+  (vs `Trojan:Win32/Wacatac.B!ml` on v1.0.59). Regeneration recipe
+  inside `cmd/smirror/versioninfo_windows.go`; bump
+  `versioninfo.json` and re-run `go generate ./cmd/smirror/` on each
+  version bump.
+
+
 
 - **`scripts/msi-info.ps1`** — read MSI metadata (ProductName /
   ProductVersion / ProductCode / UpgradeCode / Manufacturer +
@@ -86,6 +101,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   MSI-only users can run the tutorial without a source checkout.
 
 ### Changed
+
+- **R-25 — Go release binaries no longer stripped (`-s -w` removed from
+  `.goreleaser.yaml` and `installer/build-msi.ps1`).** Stripped Go binaries
+  look statistically like packed/obfuscated malware to ML classifiers — one
+  of the ML signals that contributed to the v1.0.59 Wacatac.B!ml
+  classification. Keeping the symbol table makes the binary look like an
+  ordinary Go program. Trade-off: `smirror.exe` grows from ~10 MB to ~23 MB;
+  MSI grows from ~4.2 MB to ~8.7 MB (cab still compresses the symbol table).
+  Bonus benefit: panic stack traces from user bug reports are now
+  human-readable. Source-of-truth comment in `.goreleaser.yaml` documents
+  the trade-off rationale for future maintainers.
 
 - **MSI installer telemetry consent dialog reduced from three choices to two**
   (**SM-217**) ("Don't share anything" — default — and "Help the maintainer
@@ -249,10 +275,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
   are None-tier — ratio `0/0` is technically vacuous but satisfies
   the contract.
 
-  The first quantified non-vacuous ratio will appear in the v1.0.59 →
-  next release window release notes, once real-user installs of v1.0.59 (the
-  first telemetry-functional release) accumulate. Until then the
-  pipeline is exercised but unmeasured-at-scale.
+  The first quantified non-vacuous ratio will appear in the v1.0.60 →
+  next release window release notes, once real-user installs of v1.0.60 (the
+  first publicly-released telemetry-functional version — v1.0.59 was
+  withdrawn before publication due to the Wacatac.B!ml FP) accumulate.
+  Until then the pipeline is exercised but unmeasured-at-scale.
 
 - **SM-219 — Telemetry HMAC master-key derivation mismatch** (**Critical**;
   fixed in the v1.0.59 cycle, was a silent v1.0.0 defect).

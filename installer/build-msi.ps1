@@ -114,7 +114,11 @@ if ($SkipGoBuild) {
     }
 } else {
     Write-Host "[1/3] Building smirror.exe..." -NoNewline
-    $ldflags = "-s -w -X main.version=$Version"
+    # No `-s -w`: see .goreleaser.yaml comment. Stripping symbols makes the
+    # Go binary look packed/obfuscated to Defender's ML classifier
+    # (Wacatac.B!ml FP on v1.0.59). Keep symbols for both FP resistance
+    # and readable user-bug stack traces.
+    $ldflags = "-X main.version=$Version"
 
     # -WithTelemetryKey: derive the per-version HMAC key from
     # $env:TELEMETRY_MASTER_KEY and embed it via -ldflags so the resulting

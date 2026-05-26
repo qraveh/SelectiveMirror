@@ -67,7 +67,15 @@ You can also run smirror in the foreground via `smirror start` (single-instance 
 
 v1.0 binaries ship unsigned for now. On first install Windows SmartScreen will warn — click **More info → Run anyway**. Code-signing is being worked on; future patch releases will ship signed binaries.
 
-**Microsoft Defender may also flag the MSI** as `Trojan:Win32/Wacatac.B!ml` — this is a known false positive (the `!ml` suffix marks Defender's machine-learning heuristic, not a signature match; `Wacatac` is Defender's generic-trojan family used as a grab-bag for unsigned PE binaries). No other AV engine flags the file, and the build-provenance attestation is intact. The FP has been submitted to Microsoft for reclassification (typical turnaround 24-72h, after which Defender clients automatically pick up the new verdict). See [`docs/operations/wdsi-fp-submission-v1.0.59.md`](docs/operations/wdsi-fp-submission-v1.0.59.md) for the submission record. Until reclassification: verify the MSI (commands below) then add a Defender exclusion for `SelectiveMirror.msi`.
+If a Defender or third-party AV scanner flags the binary as a generic-trojan
+machine-learning heuristic (`!ml` suffix detections like `Wacatac.B!ml`), it's
+a false positive on the unsigned-Go-binary shape. The v1.0.59 build (withdrawn
+before publication) triggered exactly this; v1.0.60+ ships with PE VERSIONINFO
+embedded in `smirror.exe` and unstripped symbols specifically to defeat that
+ML signal. The build-provenance attestation (`gh attestation verify`) confirms
+the MSI was built by this repository's CI on the tagged commit — independent
+of Authenticode signing. If you do hit a flag, verify with the commands
+below and add a Defender exclusion if needed.
 
 To verify the MSI before clicking through:
 

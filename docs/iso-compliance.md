@@ -80,7 +80,7 @@ Per independent-reviewer feedback: a passing reference, a parenthetical, or a si
 | 29148:2018 | ⚠️ **Partial** | 11 / 19 | 3 | 5 | unchanged |
 | 25010:2023 | ⚠️ **Partial** — engineering caught up to documentation | 7 of 9 top-level characteristics | 0 | 1 (Usability schema mismatch) | NFR-AU-01..03 / NFR-RS-01..03 / NFR-PR-01..03 stubs landed in SRS §4.6.5 / .6 / .7 with implementation cites (commit `4f119fa`). Faultlessness substantive evidence (rclone stall detection in liveness.go) and Analysability extension (new anomaly kinds Sync:Stalled / Sync:LsJsonSlow) carry forward. Full ISO/IEC 25023 §5.2 measurement-function elaboration is R-18 v1.1. |
 | 25023:2016 | ⚠️ **Partial** | 6 functions defined / ~24 quantitative NFRs | many | most "Not Measured" | unchanged — but liveness.go thresholds (60s transfer flat-grace, 240s metadata) are *new* measurement targets that should be captured |
-| 29119 family | ⚠️ **Partial** | Test Plan, test design, techniques, **Org Test Strategy ✅ (v1.0.59, R-16)** | Reports, naming convention | **A-29119-01 closed v1.0.59** via `docs/test-strategy.md` (organizational Test Strategy, 29119-1 §6/§7); **Test Monitoring & Control improved ⚠️→✅ via release.yml hardening** | release.yml runs `go vet` + `go test ./internal/... ./cmd/...` before GoReleaser; race detector now covers internal/sync + internal/state |
+| 29119 family | ⚠️ **Partial** | Test Plan, test design, techniques, **Org Test Strategy ✅ (v1.0.60, R-16)** | Reports, naming convention | **A-29119-01 closed v1.0.60** via `docs/test-strategy.md` (organizational Test Strategy, 29119-1 §6/§7); **Test Monitoring & Control improved ⚠️→✅ via release.yml hardening** | release.yml runs `go vet` + `go test ./internal/... ./cmd/...` before GoReleaser; race detector now covers internal/sync + internal/state |
 
 ### 3.2 Why "Partial" not "Mostly compliant" (revised v0.2)
 
@@ -361,7 +361,7 @@ A 25023 successor edition may be published; verification deferred. **Action `M-2
 
 | 29119-3 document | Required | Present | Status |
 |---|---|---|---|
-| **Organizational Test Strategy** | Required for non-trivial projects | `docs/test-strategy.md` (v1.0 baseline, authored 2026-05-03) — single-page project-level Test Strategy per 29119-1 §6 / §7. Risk profile + tier mapping + distributed-strategy pointer table to VV-Plan / SRS / CI workflows / CHANGELOG / SECURITY.md. Closes A-29119-01. | ✅ — `A-29119-01` **closed v1.0.59 (R-16)** |
+| **Organizational Test Strategy** | Required for non-trivial projects | `docs/test-strategy.md` (v1.0 baseline, authored 2026-05-03) — single-page project-level Test Strategy per 29119-1 §6 / §7. Risk profile + tier mapping + distributed-strategy pointer table to VV-Plan / SRS / CI workflows / CHANGELOG / SECURITY.md. Closes A-29119-01. | ✅ — `A-29119-01` **closed v1.0.60 (R-16)** |
 | **Project Test Plan** | Required | `VV-Plan.md` | ✅ |
 | **Master Test Plan vs Level Test Plan** distinction | Required for multi-level | Not enumerated separately | ⚠️ — `A-29119-08` |
 | **Test Sub-Plans** (per test level) | Optional | Test tables per FR-* in `VV-Plan.md` §6 | ✅ |
@@ -382,7 +382,7 @@ A 25023 successor edition may be published; verification deferred. **Action `M-2
 
 | Process | Required | Evidence | Status |
 |---|---|---|---|
-| Organizational Test Process (sec 6) | Required | `docs/test-strategy.md` + `docs/VV-Plan.md` together satisfy 29119-1 §6. The Strategy doc is the project's single-page integration point; VV-Plan is the Test Plan that the Strategy points to. | ✅ — `A-29119-01` **closed v1.0.59 (R-16)** |
+| Organizational Test Process (sec 6) | Required | `docs/test-strategy.md` + `docs/VV-Plan.md` together satisfy 29119-1 §6. The Strategy doc is the project's single-page integration point; VV-Plan is the Test Plan that the Strategy points to. | ✅ — `A-29119-01` **closed v1.0.60 (R-16)** |
 | Test Planning | Required | `VV-Plan.md` §1, §10 | ✅ |
 | Test Monitoring & Control | Required | CI gates (`ci.yml`) **plus release.yml runs `go vet` + `go test` before GoReleaser** (added 2026-04-27, commit f264a3e); race detector covers all critical packages including internal/sync + internal/state. Per-release Test Status Report still missing. | ⚠️ — `A-29119-03` (Status Report only; CI gates compliant) |
 | Test Completion | Required | One validation report; not per-release ritual | ❌ — `A-29119-03` |
@@ -520,7 +520,7 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
-| A-29119-01 | Author `docs/test-strategy.md` (project-level Organizational Test Strategy). **NOT waivable while claiming 29119 compliance.** | Requirements + Implementation | P0 | v1.0.59 (R-16) | **Closed 2026-05-25** — `docs/test-strategy.md` v1.0 baseline (authored 2026-05-03, declared in v1.0.59 cycle via R-16). |
+| A-29119-01 | Author `docs/test-strategy.md` (project-level Organizational Test Strategy). **NOT waivable while claiming 29119 compliance.** | Requirements + Implementation | P0 | v1.0.60 (R-16) | **Closed 2026-05-25** — `docs/test-strategy.md` v1.0 baseline (authored 2026-05-03, declared in v1.0.60 cycle via R-16). |
 | A-29119-02 | Decide whether per-test Test Case Specification is needed beyond Go test files. **Acceptance**: documented decision + rationale | Implementation | P3 | v1.1 | Open |
 | A-29119-03 | Adopt per-release ritual: Test Status Report + Test Item Transmittal + Test Completion Report — minimal templates in `docs/test-reports/`. **Split-able into 3 sub-actions if convenient** | Implementation | P1 | 2026-Q3 (TBD) | Open |
 | A-29119-04 | Migrate Go test names to `TestFR_XXX_YY_Scenario` (joint A-29148-08) | Implementation | P1 | 2026-Q2 (TBD) | Open |
@@ -538,17 +538,17 @@ Tag prefix: **A-29119-NN**. Aggregated in §9.
 | ID | Description | Role | Priority | Target | Status |
 |---|---|---|---|---|---|
 | A-GOV-01 | **DECIDED 2026-04-29**: SELF-ASSESSMENT label retained permanently. Third-party / independent compliance review is not planned and not claimed. **v0.6 reframe (2026-04-29)**: the multi-role compliance delta review flagged that "Closed by decision" understates the structural consequence — 29148:2018 §6.5 (stakeholder validation) and §5.2.4 (peer review of requirements) become unfulfillable, not deferred. The honest classification is **deliberate non-pursuit**: the project deliberately does not pursue this clause. No pretense of compliance is made on those clauses. | maintainer | — | — | **deliberate non-pursuit (decision logged 2026-04-29; document records the deliberate non-pursuit)** |
-| A-GOV-02 | Assign target versions (or close as won't-do) to all P0 / P1 actions still showing TBD | maintainer | P1 | v1.0.59 | Open |
+| A-GOV-02 | Assign target versions (or close as won't-do) to all P0 / P1 actions still showing TBD | maintainer | P1 | v1.0.60 | Open |
 | ~~A-GOV-03~~ | ~~Reconcile SRS §11.9 and VV-Plan §11 risk registers~~ — **withdrawn 2026-04-27 v0.3**: VV-Plan has no §11 risk register; only SRS §11.9 exists. The audit doc invented a phantom reference. No action needed. | — | — | — | **Closed (invalid)** |
 | A-GOV-04 | Track closure status of every `docs/security-audit-2026-04-18.md` finding with linked issue ID and date. **v0.4 update**: 0.9.9-dev (commit a0c5b3e "P1 security/correctness fixes from adversarial review") closed multiple findings: SEC-H6 (file-mode 0600→0644 invariant + ACL DACL walk), config.SetField column-0 match, path-traversal hardening on `deleteRemote*`, allowLoopbackWebhooks unexported, report-bug CWD, state.Open meta-write idempotency, emergency crash logs to safe paths. **v0.6 update**: panel-found bugs filed as GitHub issues SM-152..159 on 2026-04-29 (see §10.6 SM-NNN traceability table). Numbering note: pre-v0.5 CHANGELOG entries informally used "SM-155" / "SM-156" as internal tracking IDs for ISO-compliance work; those references are NOT the same as the GitHub issues filed under those numbers (SM-155 = alert_min_severity typo, SM-156 = BUG-R3-1 gitignore divergence). Going forward: SM-NNN unambiguously refers to a GitHub issue. Historical CHANGELOG references for ISO-tracking work that were never filed as bugs are not renumbered — they appear in their original entries with that limitation called out. | Architecture | P1 | 2026-Q2 (in progress; SM-152..159 filed 2026-04-29) | **Partially closed; enumeration of SEC-* audit findings pending** |
-| X-04 (raised) | Watcher coverage refactor for testability. **v0.4 update**: re-measured 2026-04-27 — actual coverage is **59.3%** (not 16.6% — VV-Plan §5.2 baseline was 9 days stale, see SM-155). Total internal/ coverage measured 66.6% (above v1.0 target 60%). The X-04 priority "P0" was anchored on the stale 16.6% figure. **Re-decision**: reduced from P0 to P2; v1.0 ships at 59.3% (within 0.7 points of the 60% target). Full refactor to ~75-80% (proper `fsnotifier` interface extraction, ~1 person-day) deferred to v1.0.59. Top-up tests (`isLinkToDir` + `WatchCount`, ~2 hours) to cross 60% optional for v1.0 — recommend scheduling if any spare cycles before 2026-05-01. | Implementation | **P2** (was P0) | v1.0.59 (full) / v1.0 optional top-up | **Mostly closed** |
+| X-04 (raised) | Watcher coverage refactor for testability. **v0.4 update**: re-measured 2026-04-27 — actual coverage is **59.3%** (not 16.6% — VV-Plan §5.2 baseline was 9 days stale, see SM-155). Total internal/ coverage measured 66.6% (above v1.0 target 60%). The X-04 priority "P0" was anchored on the stale 16.6% figure. **Re-decision**: reduced from P0 to P2; v1.0 ships at 59.3% (within 0.7 points of the 60% target). Full refactor to ~75-80% (proper `fsnotifier` interface extraction, ~1 person-day) deferred to v1.0.60. Top-up tests (`isLinkToDir` + `WatchCount`, ~2 hours) to cross 60% optional for v1.0 — recommend scheduling if any spare cycles before 2026-05-01. | Implementation | **P2** (was P0) | v1.0.60 (full) / v1.0 optional top-up | **Mostly closed** |
 | A-DOC-01 | Fix self-quality issues in this document | Documentation | P2 | 2026-Q2 | **Resolved in v0.2 + v0.3** (phantom VV-Plan §11 removed; A-25010-01 closure recorded; release strategy documented) |
 
 ### 9.6 Action priority distribution (revised v0.2)
 
 | Priority | Count | Notes |
 |---|---|---|
-| **P0** | 16 | A-29148-01, -05; A-25010-02; A-25023-02a..k (11); ~~A-29119-01~~ (closed v1.0.59, R-16); X-04; (was 2 in v0.1, was 17 v0.2, now 16 v1.0.59) |
+| **P0** | 16 | A-29148-01, -05; A-25010-02; A-25023-02a..k (11); ~~A-29119-01~~ (closed v1.0.60, R-16); X-04; (was 2 in v0.1, was 17 v0.2, now 16 v1.0.60) |
 | **P1** | 21 | including A-GOV-01, -02, -04 |
 | **P2** | 13 | |
 | **P3** | 12 | |
@@ -557,7 +557,7 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 
 ### 9.7 Recommended sequencing (revised)
 
-**Decision-only, target v1.0.59**:
+**Decision-only, target v1.0.60**:
 - A-25010-01 (restructure or deviate)
 - A-25010-07 (Reusability close-out)
 - A-29119-02 (Test Case Spec decision)
@@ -572,7 +572,7 @@ Total: ~63 line items (post-split, post-additions). The compound count went from
 
 **v1.0 release-gate**:
 - All A-25023-02a..k (measurement execution)
-- ~~A-29119-01 (Test Strategy)~~ — **closed v1.0.59 (R-16); `docs/test-strategy.md`**
+- ~~A-29119-01 (Test Strategy)~~ — **closed v1.0.60 (R-16); `docs/test-strategy.md`**
 - A-29119-03 (Test Reports ritual)
 - A-25023-01, A-25023-04 (measurement-function table)
 - A-29148-01, A-29148-05, A-29148-12, A-29148-17 (29148 P0/P1 attributes)

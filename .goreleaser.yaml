@@ -18,10 +18,18 @@ builds:
   # the hex result as SMIRROR_TELEMETRY_DERIVED_KEY for embedding here.
   # Empty default means -dev / local builds get no production key and
   # cannot submit to the production endpoint.
+  #
+  # We do NOT pass `-s -w` here, even though stripping symbols would
+  # shrink the binary by ~3-5 MB. The reason: Microsoft Defender's ML
+  # classifier (Trojan:Win32/Wacatac.B!ml) flagged the v1.0.59 binary,
+  # and one of the ML signals is "stripped binary" — stripped Go builds
+  # look statistically like packed/obfuscated malware. Keeping the
+  # symbol table makes the binary look like an ordinary Go program to
+  # the classifier, and as a bonus makes panic stack traces from user
+  # bug reports human-readable. See docs/release-maturity.md (R-25).
   - main: ./cmd/smirror/
     binary: smirror
     ldflags:
-      - -s -w
       - -X main.version={{.Version}}
       - -X github.com/qraveh/SelectiveMirror/internal/telemetry.buildKey={{.Env.SMIRROR_TELEMETRY_DERIVED_KEY}}
     env:
