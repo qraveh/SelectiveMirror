@@ -103,7 +103,27 @@ should not. The `.syncignore` file is the filter that makes that happen.
 `smirror` always talks to its destination via `rclone`. For this tutorial,
 the "remote" is just the `remote\` folder you just created.
 
-```cmd
+First, verify `rclone` is installed:
+
+```
+rclone version
+```
+
+You should see something like `rclone v1.73.2`. If you see "rclone is
+not recognized" or similar, install it via winget:
+
+```
+winget install Rclone.Rclone
+```
+
+**Then close this terminal and open a new one** — the new PATH entry
+isn't visible to the current shell session. Re-`cd C:\smirror-tutorial`
+and re-run `rclone version` to confirm. You should now see the version
+line.
+
+Now create the local-filesystem remote:
+
+```
 rclone config
 ```
 
