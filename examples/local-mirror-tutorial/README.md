@@ -56,16 +56,19 @@ mkdir remote
 
 ```
 
-Copy the source-template directory into your workspace as `source`. Pick
-the line that matches how you got smirror:
+Copy the source-template directory into your workspace as `source`.
+Pick the version that matches how you got smirror.
+
+**If you installed via the MSI** (recommended path):
 
 ```
-:: If you installed via the MSI (recommended path):
 xcopy /E /I "C:\Program Files\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
+```
 
-:: ...or, if you have the SelectiveMirror source repo checked out (substitute the actual path):
+**Or if you have the SelectiveMirror source repo checked out** (substitute the actual path):
+
+```
 xcopy /E /I "C:\path\to\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
-
 ```
 
 > **Have only the portable ZIP and no source?** The portable ZIP carries
@@ -390,19 +393,23 @@ right choice.
 ### Step 10 — Graduate to a real cloud backend
 
 Once you've seen smirror work on a local-fs remote, the move to a real
-cloud backend is two commands:
+cloud backend is two phases.
+
+**1. Create a new rclone remote pointing at your cloud backend.**
+Pick Google Drive, S3, Dropbox, OneDrive, etc. when prompted; rclone
+walks you through the auth flow.
 
 ```
-:: 1. Create a new rclone remote pointing at your cloud backend
 rclone config
-::    e.g. choose Google Drive, S3, Dropbox, OneDrive, etc.
-::    rclone walks you through the auth flow.
+```
 
-:: 2. Swap the destination on your existing mirror
+**2. Swap the destination on your existing mirror** (replace
+`<your-real-remote>` with whatever name you gave it in `rclone config`):
+
+```
 smirror unmirror C:\smirror-tutorial\source
 smirror addmirror C:\smirror-tutorial\source -dest <your-real-remote>:Backup/source
 smirror sync-now source
-
 ```
 
 Your `.syncignore` file travels with the source folder — no changes
@@ -412,23 +419,17 @@ needed. Everything you learned in this tutorial transfers directly.
 
 ## Cleanup
 
-These commands undo everything the tutorial created:
+These commands undo everything the tutorial created, in the order
+things were added. If you skipped Step 9, the first command (task
+uninstall) is a harmless no-op. The last command uses `cmd /c "…"`
+so the `rmdir` runs through cmd's parser in both shells.
 
 ```
-:: If you ran Step 9 (background mode)
 smirror task uninstall
-
-:: Remove the mirror entry from your smirror config
 smirror unmirror C:\smirror-tutorial\source
-
-:: Remove the rclone remote
 rclone config delete local-tutorial
-
-:: Delete the workspace folder — pick the line for your shell:
 cd C:\
-rmdir /S /Q C:\smirror-tutorial                              :: cmd.exe
-Remove-Item -Recurse -Force C:\smirror-tutorial              :: PowerShell
-
+cmd /c "rmdir /S /Q C:\smirror-tutorial"
 ```
 
 That's everything. Your `~/.selectivemirror/config.yaml` and rclone config
