@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [1.0.59] — 2026-05-26
 
+### Known issues at tag
+
+- **`SelectiveMirror.msi` triggers Microsoft Defender's `Trojan:Win32/Wacatac.B!ml`
+  machine-learning heuristic on first download.** This is a false positive — the
+  `!ml` suffix marks the detection as ML-heuristic (not signature), `Wacatac` is
+  a generic family used by Defender for unsigned PE binaries, and no other AV
+  engine flags the file. Build-provenance attestation is intact
+  (`gh attestation verify SelectiveMirror.msi --owner qraveh` exits 0). The root
+  cause is that v1.0.59 binaries are unsigned — Authenticode signing is pending
+  (SignPath Foundation rejected the application, commercial cert being
+  procured). FP submission template at
+  [`docs/operations/wdsi-fp-submission-v1.0.59.md`](docs/operations/wdsi-fp-submission-v1.0.59.md).
+  Workaround for users until Microsoft reclassifies (typical turnaround 24-72h
+  after submission): verify the SHA-256 against `checksums.txt`
+  (`certutil -hashfile SelectiveMirror.msi SHA256`), run `gh attestation verify`
+  to confirm the binary came from this repository's CI on the tagged commit,
+  then add a Defender exclusion for the file. Long-term fix: the next patch
+  release will ship signed.
+
 ### Added
 
 - **`scripts/msi-info.ps1`** — read MSI metadata (ProductName /
