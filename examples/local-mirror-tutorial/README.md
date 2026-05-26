@@ -53,6 +53,7 @@ something on your system; just substitute it everywhere below.
 mkdir C:\smirror-tutorial
 cd C:\smirror-tutorial
 mkdir remote
+
 ```
 
 Copy the source-template directory into your workspace as `source`. Pick
@@ -64,6 +65,7 @@ xcopy /E /I "C:\Program Files\SelectiveMirror\examples\local-mirror-tutorial\sou
 
 :: ...or, if you have the SelectiveMirror source repo checked out (substitute the actual path):
 xcopy /E /I "C:\path\to\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
+
 ```
 
 > **Have only the portable ZIP and no source?** The portable ZIP carries
@@ -92,6 +94,7 @@ C:\smirror-tutorial\
 │       ├── nested_1.txt
 │       └── nested_2.txt
 └── remote\        (empty for now)
+
 ```
 
 The names tell the story: anything called `mirror_me_*` or `mirror_this_dir/*`
@@ -200,6 +203,7 @@ NOTICE: mirror_this_dir/nested_1.txt: Skipped copy as --dry-run is set
 NOTICE: mirror_this_dir/nested_2.txt: Skipped copy as --dry-run is set
 
 Transferred:    6 / 6, 100%
+
 ```
 
 What's *not* in that list is what the filter excluded — the
@@ -238,6 +242,7 @@ remote
     └─mirror_this_dir
             nested_1.txt
             nested_2.txt
+
 ```
 
 The `dont_mirror_*` files and `dont_mirror_this_dir/` are absent, exactly
@@ -251,6 +256,7 @@ redirect through cmd's parser and works the same in both shells:
 cmd /c "echo additional line>> source\mirror_me_1.txt"
 smirror sync-now source
 type remote\source\mirror_me_1.txt
+
 ```
 
 The `type` output should now show two lines — the original
@@ -277,6 +283,7 @@ why not?". It works on both included and excluded files:
 smirror explain source mirror_me_1.txt
 smirror explain source dont_mirror_me.tmp
 smirror explain source dont_mirror_this_dir\stuff.txt
+
 ```
 
 For each file, `explain` reports:
@@ -295,6 +302,7 @@ This is the canonical "why isn't my file syncing?" tool.
 ```
 cmd /c "echo file_a.txt>> source\.syncignore"
 smirror explain source file_a.txt
+
 ```
 
 You should see it now reports **excluded**, matched by the rule
@@ -315,6 +323,7 @@ editor cleanup gone wrong from nuking your backup.
 del source\mirror_me_2.txt
 smirror sync-now source
 dir remote\source\.quarantine
+
 ```
 
 The remote copy is now in `.quarantine/` rather than gone. The filename
@@ -338,6 +347,7 @@ Add a "ghost" file directly to the remote (same `cmd /c "…"` wrapper):
 ```
 cmd /c "echo this came from somewhere else > remote\source\ghost_file.txt"
 smirror verify source
+
 ```
 
 `verify` reports `ghost_file.txt` as an orphan on the remote — it has no
@@ -349,6 +359,7 @@ what to do about it.
 ```cmd
 smirror status source
 smirror project-stats source
+
 ```
 
 `status` shows live counters (files synced, queue depth, last sync time,
@@ -364,6 +375,7 @@ elevation needed:
 ```cmd
 smirror task install
 smirror task status
+
 ```
 
 The watcher is now running in the background. Stop it with
@@ -390,6 +402,7 @@ rclone config
 smirror unmirror C:\smirror-tutorial\source
 smirror addmirror C:\smirror-tutorial\source -dest <your-real-remote>:Backup/source
 smirror sync-now source
+
 ```
 
 Your `.syncignore` file travels with the source folder — no changes
@@ -415,6 +428,7 @@ rclone config delete local-tutorial
 cd C:\
 rmdir /S /Q C:\smirror-tutorial                              :: cmd.exe
 Remove-Item -Recurse -Force C:\smirror-tutorial              :: PowerShell
+
 ```
 
 That's everything. Your `~/.selectivemirror/config.yaml` and rclone config
@@ -444,6 +458,7 @@ source/
 └── mirror_this_dir\
     ├── nested_1.txt               (included)
     └── nested_2.txt               (included)
+
 ```
 
 `.syncignore` content:
@@ -458,6 +473,7 @@ source/
 
 # A specific directory and everything in it
 /dont_mirror_this_dir/
+
 ```
 
 ---
