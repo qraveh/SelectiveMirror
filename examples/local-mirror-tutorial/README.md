@@ -63,12 +63,14 @@ Pick the version that matches how you got smirror.
 
 ```
 xcopy /E /I "C:\Program Files\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
+
 ```
 
 **Or if you have the SelectiveMirror source repo checked out** (substitute the actual path):
 
 ```
 xcopy /E /I "C:\path\to\SelectiveMirror\examples\local-mirror-tutorial\source-template" source
+
 ```
 
 > **Have only the portable ZIP and no source?** The portable ZIP carries
@@ -113,6 +115,7 @@ First, verify `rclone` is installed:
 
 ```
 rclone version
+
 ```
 
 You should see something like `rclone v1.73.2`. If you see "rclone is
@@ -121,6 +124,7 @@ it via winget:
 
 ```
 winget install Rclone.Rclone
+
 ```
 
 winget adds the new rclone folder to your **user PATH** in the
@@ -130,6 +134,7 @@ refreshed. Two ways:
 **PowerShell** — refresh PATH inline without restarting:
 ```
 $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")
+
 ```
 
 **cmd.exe** — `exit` and open a fresh `cmd.exe` window (cmd has no
@@ -145,6 +150,7 @@ Now create the local-filesystem remote:
 
 ```
 rclone config
+
 ```
 
 Walk through the prompts:
@@ -162,6 +168,7 @@ Verify the remote is registered:
 
 ```cmd
 rclone listremotes
+
 ```
 
 The output should include `local-tutorial:`.
@@ -176,6 +183,7 @@ folder) and your files will end up at `remote\source\…`:
 
 ```
 smirror addmirror C:\smirror-tutorial\source -dest local-tutorial:C:\smirror-tutorial\remote
+
 ```
 
 This writes a mirror entry into your `~/.selectivemirror/config.yaml`
@@ -186,6 +194,7 @@ Now ask smirror what it *would* sync — without copying anything yet:
 
 ```cmd
 smirror dry-run source
+
 ```
 
 (`source` is the mirror name — smirror takes the last segment of the local
@@ -231,6 +240,7 @@ Run the actual sync:
 
 ```cmd
 smirror sync-now source
+
 ```
 
 Look at the remote (the `tree` utility works in both cmd and
@@ -239,6 +249,7 @@ list):
 
 ```
 tree /F remote
+
 ```
 
 You should see:
@@ -410,6 +421,7 @@ walks you through the auth flow.
 
 ```
 rclone config
+
 ```
 
 **2. Swap the destination on your existing mirror** (replace
@@ -419,6 +431,7 @@ rclone config
 smirror unmirror C:\smirror-tutorial\source
 smirror addmirror C:\smirror-tutorial\source -dest <your-real-remote>:Backup/source
 smirror sync-now source
+
 ```
 
 Your `.syncignore` file travels with the source folder — no changes
@@ -441,6 +454,7 @@ smirror unmirror --yes C:\smirror-tutorial\source
 rclone config delete local-tutorial
 cd C:\
 cmd /c "rmdir /S /Q C:\smirror-tutorial"
+
 ```
 
 That's everything. Your `~/.selectivemirror/config.yaml` and rclone config
