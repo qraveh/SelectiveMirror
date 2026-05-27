@@ -122,6 +122,22 @@ filters them through gitignore-style rules, and invokes the external
 `rclone` executable (user-provided) to copy stable files to a
 user-configured cloud backend.
 
+Network behavior: SelectiveMirror has exactly one network code path —
+an OPT-IN telemetry channel that is DEFAULT OFF. With the default
+install, the binary makes zero network requests (no startup pings,
+no update checks). If the user explicitly opts in via the MSI consent
+dialog or `smirror telemetry` CLI, the binary submits ONLY anonymous
+bucketed counts to a Cloudflare Worker: event type (first_seen or
+upgrade), product version, install_method (msi/zip/source),
+background_mode (foreground/service/scheduled-task), rclone_version,
+and consent_tier. NO file paths, NO file contents, NO watched-
+directory names, NO remote names, NO credentials, NO user identifiers
+are ever transmitted. The Worker validates the HMAC-signed payload,
+increments a daily rollup count in Supabase, and discards the per-
+event row — by architecture, no PII is ever stored on the server.
+Full specification: docs/PRIVACY.md and docs/telemetry-architecture-v2.md
+in the source repo.
+
 We believe the detection triggers on unsigned-Go-binary heuristics
 the ML model uses for the Wacatac classifier, and request that the
 file be reclassified as not-a-threat.
