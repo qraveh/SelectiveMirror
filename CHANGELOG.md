@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
+## [1.0.65] — 2026-06-01
+
+### Added
+
+- **`smirror version --verbose` / `-v`** prints supply-chain reference
+  info in addition to the version line: repo URL, license,
+  `gh attestation verify` command, current signing status, PE
+  VERSIONINFO discovery hint (right-click → Properties → Details),
+  and a pointer to the WDSI false-positive submission template if
+  Defender flags the binary. The plain `smirror version` output is
+  unchanged. Useful for users investigating SmartScreen / Defender
+  warnings or composing bug reports: all the verification levers are
+  surfaced in one place without needing to dig through SECURITY.md.
+
+### Notes (no code impact)
+
+- v1.0.60 was the first publicly-released SelectiveMirror version
+  cleared by Microsoft WDSI after the Wacatac.B!ml false positive on
+  v1.0.59. Microsoft reclassified the v1.0.60 SHA between 2026-05-27
+  (submission) and 2026-06-01 (sandbox verification) — within the
+  documented 24-72h SLA plus weekend. Verified end-to-end in a fresh
+  Windows Sandbox (no host-side Allow-on-device overrides masking the
+  cloud verdict) using the new sandbox-runner framework. See
+  `memory/wdsi_v1_0_60_cleared_2026-06-01.md` in the user's notes.
+
 ## [1.0.60] — 2026-05-26
 
 ### Recovery from the withdrawn v1.0.59 draft

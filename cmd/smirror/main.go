@@ -40,7 +40,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-var version = "1.0.65-dev"
+var version = "1.0.65"
 
 // Repository coordinates. All runtime references to the GitHub repo (issue
 // URLs, selfupdate API, duplicate search) derive from these two constants.
@@ -302,6 +302,20 @@ func cliMain() {
 		// SMIRROR_TELEMETRY_MASTER_KEY) or is a -dev/local build that
 		// cannot submit to the production endpoint. Never reveals the key.
 		fmt.Printf("telemetry build-key: %s\n", telemetry.BuildKeyFingerprint())
+		// `--verbose` / `-v`: print build/supply-chain reference info.
+		// Useful for users investigating SmartScreen/Defender warnings
+		// or filing bug reports — surfaces all the verification levers
+		// in one place. Added v1.0.65.
+		if len(cmdArgs) > 0 && (cmdArgs[0] == "--verbose" || cmdArgs[0] == "-v") {
+			fmt.Println()
+			fmt.Println("build & supply-chain info:")
+			fmt.Printf("  repo:       https://github.com/%s/%s\n", repoOwner, repoName)
+			fmt.Println("  license:    MIT")
+			fmt.Println("  attest:     gh attestation verify <artifact> --owner " + repoOwner)
+			fmt.Println("  signing:    Authenticode not yet (in procurement); see SECURITY.md")
+			fmt.Println("  PE info:    right-click smirror.exe -> Properties -> Details (R-24, since v1.0.60)")
+			fmt.Println("  Defender:   if flagged, see docs/operations/wdsi-fp-submission-*.md")
+		}
 	case "help", "--help", "-h":
 		printUsage()
 	default:
