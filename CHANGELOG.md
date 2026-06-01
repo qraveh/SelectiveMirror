@@ -5,7 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versioning follo
 
 ## [Unreleased]
 
-## [1.0.65] — 2026-06-01
+## [1.0.65] — 2026-06-01 (internal verification build; not published as a public release)
+
+> **Status:** This tag exists in the repo and a draft release on GitHub
+> with attested artifacts, but the draft is intentionally not promoted
+> to a public release. v1.0.65 was built and verified end-to-end in
+> Windows Sandbox (clean cloud-Defender behavior across plain-file and
+> Mark-of-the-Web variants) to confirm that Microsoft's WDSI
+> reclassification of v1.0.60 generalized to new SelectiveMirror SHAs.
+> See `~/.claude/projects/C--mine-SelectiveMirror/memory/wdsi_v1_0_60_cleared_2026-06-01.md`.
+> The `--verbose` feature below ships in the next publicly-released
+> version (v1.0.66+) along with whatever else accumulates by then.
 
 ### Added
 
