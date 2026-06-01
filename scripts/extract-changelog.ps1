@@ -1,4 +1,4 @@
-# scripts/extract-changelog.ps1 — Extract a single version's section
+# scripts/extract-changelog.ps1 -- Extract a single version's section
 # from CHANGELOG.md into a release-notes file.
 #
 # PR-W4 (panel review pre-release 2026-04-28). GoReleaser's auto
@@ -10,11 +10,11 @@
 #
 # PR-PRE-F3 (pre-release status panel 2026-05-03): the `[Unreleased]`
 # fallback now fires ONLY when -AllowMissing is set. Production
-# release.yml runs WITHOUT -AllowMissing — if the maintainer forgot
+# release.yml runs WITHOUT -AllowMissing -- if the maintainer forgot
 # runbook §2 (promote `[Unreleased]` → `[X.Y.Z]`), the release fails
 # loudly rather than silently shipping the dev-cycle accumulator under
 # the version's name. Dryrun (release-dryrun.yml) still uses
-# -AllowMissing for the preview — `[Unreleased]` is the natural
+# -AllowMissing for the preview -- `[Unreleased]` is the natural
 # preview source pre-promotion.
 #
 # Usage:
@@ -46,7 +46,7 @@ if (-not (Test-Path $changelogPath)) {
 $content = Get-Content $changelogPath -Raw
 $lines = $content -split "`r?`n"
 
-# Match either `## [X.Y.Z]` or `## [X.Y.Z] — date`. The Unreleased
+# Match either `## [X.Y.Z]` or `## [X.Y.Z] -- date`. The Unreleased
 # section is the fallback for dry-runs or when the maintainer forgot
 # to promote it. The first regex group is anchored to the version we
 # want; the second is the unreleased fallback.
@@ -56,7 +56,7 @@ $nextSectionPattern = '^## \['
 
 # Locate the section boundaries.
 # PR-PRE-F3: the [Unreleased] fallback fires ONLY under -AllowMissing.
-# Without that flag, a missing [X.Y.Z] section is a hard error — runbook
+# Without that flag, a missing [X.Y.Z] section is a hard error -- runbook
 # §2 (promote [Unreleased] → [X.Y.Z]) was skipped, and we will NOT
 # silently substitute the dev-cycle accumulator.
 $startIdx = -1
@@ -111,7 +111,7 @@ while ($section.Count -gt 0 -and [string]::IsNullOrWhiteSpace($section[-1])) {
 # Lead with a Downloads block so the assets are visible-at-load on the
 # release page (GitHub's native Assets section sits at the bottom; this
 # duplicates the links at the top for one-click access). The URLs use
-# the stable per-tag form `releases/download/v$Version/<filename>` —
+# the stable per-tag form `releases/download/v$Version/<filename>` --
 # the filenames are version-free by `.goreleaser.yaml` design so this
 # template is portable across releases. The hardcoded `qraveh/
 # SelectiveMirror` owner/repo lives next to `repoOwner`/`repoName` in
@@ -124,9 +124,9 @@ $tagUrl = "https://github.com/qraveh/SelectiveMirror/releases/download/v$Version
 $downloads = @(
     "## Downloads"
     ""
-    "- **[SelectiveMirror.msi]($tagUrl/SelectiveMirror.msi)** — Windows installer (MSI, recommended)"
-    "- **[SelectiveMirror_windows_amd64.zip]($tagUrl/SelectiveMirror_windows_amd64.zip)** — portable ZIP (no installer)"
-    "- **[checksums.txt]($tagUrl/checksums.txt)** — SHA-256 hashes for all artifacts"
+    "- **[SelectiveMirror.msi]($tagUrl/SelectiveMirror.msi)** -- Windows installer (MSI, recommended)"
+    "- **[SelectiveMirror_windows_amd64.zip]($tagUrl/SelectiveMirror_windows_amd64.zip)** -- portable ZIP (no installer)"
+    "- **[checksums.txt]($tagUrl/checksums.txt)** -- SHA-256 hashes for all artifacts"
     ""
     "Verify build provenance (independent of Authenticode signing):"
     ""
